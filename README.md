@@ -1,63 +1,65 @@
 # qbar
 
-`qbar` 用于读取 ADMIXTURE 产生的 Q 矩阵文件，按照预设分组对样本进行排序，并在不同的 K 值（祖先成分数量）之间进行跨 K 值的列对齐，最终绘制群体遗传结构条形图。
+[中文](README.zh.md)
 
-在 R 语言环境中通常需要使用 `pophelper` 转换格式，并依赖 `CLUMPP` 解决跨 K 值的成分匹配问题。本工具通过单条命令即可完成从矩阵读取到绘图的全流程。需要注意的是，若要合并同一 K 值的多次重复运行结果（mode merging），仍需使用 CLUMPP 软件（Jakobsson and Rosenberg 2007 *Bioinformatics* 23:1801，[10.1093/bioinformatics/btm233](https://doi.org/10.1093/bioinformatics/btm233)）。
+`qbar` reads ADMIXTURE Q matrix files, sorts samples by predefined groups, aligns columns across different K values (number of ancestry components), and plots population genetic structure bar charts.
 
-ADMIXTURE 在每次运行时会出现标签切换现象（label switching），导致同源祖先成分在矩阵中的列序发生改变。本工具采用从低 K 值到高 K 值的逐步匹配策略，利用 Pearson 相关系数识别前一轮分析中的对应列，并将新分化出的祖先成分排列于图像的最上方。关于标签切换的理论背景，可参考 Alexander, Novembre and Lange 2009 *Genome Res* 19:1655（[10.1101/gr.094052.109](https://doi.org/10.1101/gr.094052.109)）。
+In R, format conversion usually requires `pophelper`, and cross-K component matching relies on `CLUMPP`. This tool completes the entire workflow from reading matrices to plotting with a single command. Note that merging independent runs of the same K (mode merging) still requires CLUMPP (Jakobsson and Rosenberg 2007 *Bioinformatics* 23:1801, [10.1093/bioinformatics/btm233](https://doi.org/10.1093/bioinformatics/btm233)).
 
-在各群体内部若使用层次聚类（`hclust`），算法采用平均连锁（average linkage），距离度量定义为 1 减去 Pearson 相关系数。该逻辑等效于 SciPy 库中的 `linkage(method="average", metric="correlation")`（详见[文档](https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.hierarchy.linkage.html)）。
+ADMIXTURE runs are subject to label switching, which changes the column order of homologous ancestry components in the matrix. This tool uses a step-by-step matching strategy from low K to high K. It calculates Pearson correlation coefficients to identify the corresponding columns from the previous K and places newly diverged ancestry components at the top of the plot. For the theoretical background of label switching, see Alexander, Novembre and Lange 2009 *Genome Res* 19:1655 ([10.1101/gr.094052.109](https://doi.org/10.1101/gr.094052.109)).
 
-本工具依赖 Python 3、numpy 与 Pillow 库。仅当启用 `hclust` 排序时额外依赖 scipy 库。
+If hierarchical clustering (`hclust`) is used within groups, the algorithm uses average linkage. The distance metric is defined as 1 minus the Pearson correlation coefficient. This logic is equivalent to `linkage(method="average", metric="correlation")` in SciPy (see [documentation](https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.hierarchy.linkage.html)).
 
-## 怎么排
+This tool requires Python 3, numpy, and Pillow. The scipy library is only required when `hclust` sorting is enabled.
 
-可通过 `--order-file` 参数提供一份样本列表（每行包含一个个体 ID），生成的结构图将严格遵循该文件自左向右排列样本。
+## How to sort
 
-若未提供样本列表，则可通过 `--blocks` 参数以逗号分隔的形式指定群体的排列顺序。若分组表中存在未在 `--blocks` 参数中声明的群体，这些群体将按名称的字母顺序追加排列在图像末尾。若上述两个参数均未提供，全体样本将默认按群体名称的字母顺序进行排序。对于缺失分组信息的个体，其分组名称由 `--rest-name` 参数定义（默认值为 NA），这些个体将被统一放置在图像的最右侧。
+You can provide a sample list (one individual ID per line) via the `--order-file` parameter. The generated structure plot will strictly follow this file to order samples from left to right.
 
-群体内部的样本排序逻辑由 `--within` 参数控制：
+If no sample list is provided, you can specify the group order using a comma-separated list via the `--blocks` parameter. Groups present in the group table but omitted in `--blocks` will be appended to the end of the plot in alphabetical order. If neither parameter is provided, all samples are ordered by group name alphabetically by default. For individuals missing group information, their group name is defined by the `--rest-name` parameter (default is NA), and they are placed at the far right of the plot.
 
-- `iid`：按个体 ID 的字母顺序排列。此为默认模式。
-- `q`：根据该个体在当前所属群体中占比最高的祖先成分比例，由高到低进行降序排列。
-- `hclust`：进行组内层次聚类（算法细节详见上文）。
-- `input`：保持原输入 Q 矩阵文件中的样本行序。
+Sample sorting logic within groups is controlled by the `--within` parameter:
 
-若需对特定群体采用不同的组内排序策略，可使用 `--within-group` 参数单独指定（例如 `--within-group NA=hclust`），该参数支持多次声明。
+- `iid`: Sort alphabetically by individual ID. This is the default.
+- `q`: Sort in descending order based on the highest ancestry component proportion of the individual within their current group.
+- `hclust`: Perform within-group hierarchical clustering (see algorithm details above).
+- `input`: Keep the original sample row order from the input Q matrix file.
 
-参数 `--sort-col 2` 可用于强制指定所有按 `q` 模式排序的群体均依照第 2 列的祖先成分比例进行降序排列。此处的列号从 1 开始计数，对应列对齐处理后的 C1、C2 等祖先成分。
+To apply a different sorting strategy to a specific group, use the `--within-group` parameter (e.g., `--within-group NA=hclust`). This parameter can be declared multiple times.
 
-## 列怎么对
+The `--sort-col 2` parameter forces all groups sorted by `q` to sort in descending order based on the proportion of the 2nd ancestry component. Column numbering starts at 1, corresponding to the aligned ancestry components C1, C2, etc.
 
-当输入两个或更多 K 值的文件时，程序会自动执行跨 K 值的列对齐操作。若需要保持每个输入文件原有的列顺序，请使用 `--no-align` 参数。
+## How to align columns
 
-对齐模式说明：
-`--align-mode all` 为默认模式。该模式将利用 `--align-groups` 参数指定的群体样本计算 Pearson 相关系数。若未提供 `--align-groups` 参数，则默认利用全体样本进行计算。
+When files with two or more K values are provided, the program automatically aligns columns across K. To keep the original column order for each file, use the `--no-align` parameter.
 
-`--align-mode core` 模式将仅保留在相邻两个 K 值的分析结果中，其最大祖先成分比例均高于 `--qmax` 阈值（默认值为 0.75）的个体。若某群体内不存在满足该阈值条件的个体，则选取该群体在较低 K 值结果中祖先成分比例最高的单一代表个体参与计算。启用 core 模式时必须同时声明 `--align-groups` 参数。
+Alignment modes:
+`--align-mode all` is the default. This mode calculates Pearson correlation coefficients using samples from groups specified by `--align-groups`. If `--align-groups` is omitted, all samples are used by default.
 
-`--anchor-group WWE1` 参数用于在最低 K 值的分析结果中，提取指定群体（如 WWE1）内祖先成分比例最高的个体的优势成分，并将其固定排列于结构图的最底层（标记为 C1）。
+`--align-mode core` only keeps individuals whose maximum ancestry component proportion is higher than the `--qmax` threshold (default 0.75) at both adjacent K values. If a group has no individuals meeting this threshold, the single representative individual with the highest ancestry component proportion in that group at the lower K value is selected. The `--align-groups` parameter must be declared when using the core mode.
 
-祖先成分的绘图颜色可通过参数指定，格式如 `--color WWE1=#4470b7` 或直接按列号指定如 `--color C3=#112233`。每一种祖先成分仅应用单一颜色。若为两个不同的群体指定了相同的颜色，后续遇到颜色冲突的群体将被自动分配一种尚未被使用的新颜色。
+The `--anchor-group WWE1` parameter extracts the dominant component of the individual with the highest ancestry component proportion in the specified group (e.g., WWE1) at the lowest K value, and anchors it at the bottom of the structure plot (labeled C1).
 
-## 写到哪
+Ancestry component plot colors can be specified via parameters, formatted as `--color WWE1=#4470b7` or directly by column number as `--color C3=#112233`. Each ancestry component uses only one color. If the same color is assigned to two different groups, the subsequently conflicting group is automatically assigned an unused new color.
 
-所有的分析输出结果均将保存至 `--outdir` 参数指定的目录下。
+## Where to write
 
-当输入文件包含两个或以上的 K 值时，程序将生成汇总图谱 `panel.png` 与矢量格式的 `panel.pdf` 文件，同时为每个具体的 K 值输出单张结构图（例如 `bar_K2.png`）。当仅输入单个 K 值时，只会生成对应的单张图谱，如 `bar_K8.png`。
+All output results are saved to the directory specified by `--outdir`.
 
-目录下同时生成以下记录文件：
-`order.tsv` 记录了图谱自左向右所有样本的最终排序结果。`blocks.tsv` 记录了图像中每个群体区块起始和终止的样本编号（`start` 坐标从 1 开始计数）。各 K 值的对齐映射文件（如 `perm_K8.tsv`）中的 `raw` 列指示了对齐后的祖先成分对应于原始 Q 矩阵文件中自左向右的列序号。`align.tsv` 记录了每步跨 K 值对齐过程中所使用的样本数量以及对应的 Pearson 相关系数。`args.txt` 保存了本次执行的完整命令与参数。
+When input files contain two or more K values, the program generates a summary plot `panel.png` and a vector format `panel.pdf`. It also outputs a single structure plot for each specific K value (e.g., `bar_K2.png`). For a single K value input, only the corresponding single plot is generated, such as `bar_K8.png`.
 
-在可视化排版上，标记为 C1 的祖先成分将固定绘制于条形图的最底层。样本之间紧密排列不留空隙，不同群体之间使用灰色竖线作为边界分隔。若某个群体在图像中的宽度过窄，图谱顶部将省略该群体的名称标注，但对应的个体信息仍会完整记录在 `order.tsv` 文件中。
+The following log files are generated in the directory:
+`order.tsv` records the final left-to-right sample order in the plot. `blocks.tsv` records the start and end sample indices for each group block in the plot (`start` coordinates count from 1). The alignment mapping files for each K (e.g., `perm_K8.tsv`) indicate the raw column index in the original Q matrix file corresponding to the aligned ancestry component in the `raw` column. `align.tsv` records the number of samples and corresponding Pearson correlation coefficients used during each cross-K alignment step. `args.txt` saves the complete command and parameters for this run.
 
-若将生成的 `order.tsv` 再次作为 `--order-file` 参数输入，程序将自动识别表头中名为 `iid` 的数据列。若输入文件不包含表头，则默认读取每行的第一列数据。
+For visual layout, the ancestry component labeled C1 is anchored at the very bottom of the bar chart. Samples are packed tightly with no gaps. Different groups are separated by vertical gray lines. If a group block is too narrow, its name label is omitted from the top of the plot, but the individual records remain intact in `order.tsv`.
+
+If the generated `order.tsv` is reused as the `--order-file` parameter, the program automatically identifies the data column named `iid` in the header. If the file has no header, it reads the first data column of each row by default.
 
 ## 2448
 
-`demo/2448/` 目录下包含了 2448 个样本的数据集，包含从 K=2 到 K=12 的分析结果。样本源自 Dong et al. 2023 *Science* 379:892（[10.1126/science.add8655](https://doi.org/10.1126/science.add8655)）。该 Q 矩阵数据集是使用 seed 43 重新运行生成的，原论文 Fig. 1D 图表使用的是原作者提供的另一份分析矩阵，二者不应混同。提供的数据中仅包含祖先成分比例矩阵，不含基因型文件。各群体具体的样本量分布参见 `demo/README.md`。
+The `demo/2448/` directory contains a dataset of 2448 samples, with K values ranging from 2 to 12. Samples are from Dong et al. 2023 *Science* 379:892 ([10.1126/science.add8655](https://doi.org/10.1126/science.add8655)). This Q matrix dataset was rerun using seed 43. The Fig. 1D chart in the original paper uses a different matrix provided by the authors; the two should not be confused. The provided data only contains the ancestry component proportion matrix, without genotype files. For specific sample sizes of each group, see `demo/README.md`.
 
-在使用通配符匹配文件时必须添加引号，以防止 shell 环境提前展开路径。请在 `qbar/` 目录下执行以下命令：
+Wildcards must be quoted to prevent the shell from expanding the path prematurely. Run the following command in the `qbar/` directory:
 
 ```bash
 python3 qbar.py \
@@ -73,7 +75,7 @@ python3 qbar.py \
   --outdir demo/out
 ```
 
-生成的汇总图谱将保存至 `demo/out/panel.png` 路径下。生成的 `order.tsv` 文件包含一行表头加 2448 个样本行，群体的排序与 `--blocks` 参数声明的顺序一致，各群体内部的样本按照个体 ID 排序。
+The summary plot is saved to `demo/out/panel.png`. The generated `order.tsv` file contains one header line plus 2448 sample rows. Group order matches the `--blocks` parameter, and samples within groups are sorted by individual ID.
 
 ```bash
 python3 test_qbar.py
