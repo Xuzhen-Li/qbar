@@ -115,7 +115,7 @@ Sort using a custom list. `order.txt` contains one individual ID per line.
 ```
 
 ```bash
-python3 qbar.py --q demo/2448/ref2448_pruned.8.Q --fam demo/2448/ref2448_pruned.fam --groups demo/2448/groups.tsv --id-col id --group-col group --order-file order.txt --outdir out
+python3 qbar.py --q demo/2448/ref2448_pruned.8.Q --fam demo/2448/ref2448_pruned.fam --groups demo/2448/groups.tsv --id-col id --group-col group --order-file demo/2448/order.txt --outdir out
 ```
 
 ```text
