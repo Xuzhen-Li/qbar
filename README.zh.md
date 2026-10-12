@@ -104,7 +104,7 @@ python3 qbar.py --q demo/2448/ref2448_pruned.8.Q --fam demo/2448/ref2448_pruned.
 
 ## 常见用法
 
-用自己的名单排序。`order.txt` 中每行一个个体 ID。
+示例用仓库自带的 `demo/2448/order.txt`，换成自己的名单时每行写一个 IID。
 
 ```text
 106-A
@@ -122,6 +122,7 @@ python3 qbar.py --q demo/2448/ref2448_pruned.8.Q --fam demo/2448/ref2448_pruned.
 out/bar_K8.png
 order	out/order.tsv
 ```
+
 ![Custom order](docs/img/f_order_file.png)
 
 对比组内排序：`iid`（默认）按个体 ID 字母顺序排列，而 `hclust` 会将祖先成分相似的个体聚类在一起。
@@ -142,13 +143,6 @@ python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_p
 python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_pruned.fam --groups demo/2448/groups.tsv --id-col id --group-col group --blocks C-Ad,CG1,CG2,CG3,CG4,CG5,CG6,W-Ad,WEE1,WEE2,WWE1,WWE2 --within q --anchor-group WWE1 --color WWE1=#4470b7 --color WEE1=#dc1f26 --color CG4=#f7922c --color C3=#2ca02c --outdir out/e_color
 ```
 ![Custom colors](docs/img/e_color.png)
-
-默认在跨 K 值之间对齐颜色。
-
-```bash
-python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_pruned.fam --groups demo/2448/groups.tsv --id-col id --group-col group --blocks C-Ad,CG1,CG2,CG3,CG4,CG5,CG6,W-Ad,WEE1,WEE2,WWE1,WWE2 --within iid --anchor-group WWE1 --outdir out/c_align
-```
-![Aligned default](docs/img/c_align_default.png)
 
 关闭对齐，保留原始 Q 矩阵列序。
 

@@ -104,7 +104,7 @@ python3 qbar.py --q demo/2448/ref2448_pruned.8.Q --fam demo/2448/ref2448_pruned.
 
 ## Common tasks
 
-Sort using a custom list. `order.txt` contains one individual ID per line.
+The example uses the repository's built-in `demo/2448/order.txt`; when using your own list, write one IID per line.
 
 ```text
 106-A
@@ -122,6 +122,7 @@ python3 qbar.py --q demo/2448/ref2448_pruned.8.Q --fam demo/2448/ref2448_pruned.
 out/bar_K8.png
 order	out/order.tsv
 ```
+
 ![Custom order](docs/img/f_order_file.png)
 
 Compare within-group sorting: `iid` (default) sorts alphabetically by ID, while `hclust` clusters individuals with similar ancestry profiles.
@@ -142,13 +143,6 @@ Apply custom colors to groups and columns.
 python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_pruned.fam --groups demo/2448/groups.tsv --id-col id --group-col group --blocks C-Ad,CG1,CG2,CG3,CG4,CG5,CG6,W-Ad,WEE1,WEE2,WWE1,WWE2 --within q --anchor-group WWE1 --color WWE1=#4470b7 --color WEE1=#dc1f26 --color CG4=#f7922c --color C3=#2ca02c --outdir out/e_color
 ```
 ![Custom colors](docs/img/e_color.png)
-
-Align columns across K values automatically.
-
-```bash
-python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_pruned.fam --groups demo/2448/groups.tsv --id-col id --group-col group --blocks C-Ad,CG1,CG2,CG3,CG4,CG5,CG6,W-Ad,WEE1,WEE2,WWE1,WWE2 --within iid --anchor-group WWE1 --outdir out/c_align
-```
-![Aligned default](docs/img/c_align_default.png)
 
 Keep the raw ADMIXTURE column order without cross-K alignment.
 
