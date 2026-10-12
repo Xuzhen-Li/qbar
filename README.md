@@ -13,6 +13,8 @@ This tool requires Python 3, numpy, and Pillow. The scipy library is only requir
 Create a virtual environment and install the requirements:
 
 ```bash
+git clone https://github.com/Xuzhen-Li/qbar.git
+cd qbar
 python3 -m venv .venv
 . .venv/bin/activate
 python3 -m pip install -r requirements.txt
@@ -27,6 +29,7 @@ python3 test_qbar.py
 ## Input files
 
 Q matrix (`.Q`): Contains ancestry proportions.
+
 ```text
 0.048906 0.126240 0.516154 0.158683 0.000010 0.002808 0.000010 0.147189
 0.000010 0.856385 0.015772 0.055593 0.052034 0.000010 0.000010 0.020186
@@ -36,6 +39,7 @@ Q matrix (`.Q`): Contains ancestry proportions.
 ```
 
 Family or ID list (`.fam` or `--ids`): Individual IDs matching the Q matrix rows.
+
 ```text
 1 1 0 0 0 -9
 1-A 1-A 0 0 0 -9
@@ -45,6 +49,7 @@ Family or ID list (`.fam` or `--ids`): Individual IDs matching the Q matrix rows
 ```
 
 Groups table: Maps individual IDs to group names.
+
 ```text
 id	group
 1	CG6
@@ -72,6 +77,7 @@ python3 qbar.py \
 ```
 
 Terminal output:
+
 ```text
 demo/out/panel.png
 order	demo/out/order.tsv
@@ -98,31 +104,54 @@ python3 qbar.py --q demo/2448/ref2448_pruned.8.Q --fam demo/2448/ref2448_pruned.
 
 ## Common tasks
 
-Sort samples within groups alphabetically by ID.
+Sort using a custom list. `order.txt` contains one individual ID per line.
+
+```text
+106-A
+13
+136
+14-A
+15-A
+```
+
+```bash
+python3 qbar.py --q demo/2448/ref2448_pruned.8.Q --fam demo/2448/ref2448_pruned.fam --groups demo/2448/groups.tsv --id-col id --group-col group --order-file order.txt --outdir out
+```
+
+```text
+out/bar_K8.png
+order	out/order.tsv
+```
+![Custom order](docs/img/f_order_file.png)
+
+Compare within-group sorting: `iid` (default) sorts alphabetically by ID, while `hclust` clusters individuals with similar ancestry profiles.
+
 ```bash
 python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_pruned.fam --groups demo/2448/groups.tsv --id-col id --group-col group --blocks C-Ad,CG1,CG2,CG3,CG4,CG5,CG6,W-Ad,WEE1,WEE2,WWE1,WWE2 --within iid --anchor-group WWE1 --outdir out/d_iid
 ```
 ![Within iid](docs/img/d_within_iid.png)
 
-Cluster samples within groups using average linkage.
 ```bash
 python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_pruned.fam --groups demo/2448/groups.tsv --id-col id --group-col group --blocks C-Ad,CG1,CG2,CG3,CG4,CG5,CG6,W-Ad,WEE1,WEE2,WWE1,WWE2 --within hclust --anchor-group WWE1 --outdir out/d_hclust
 ```
 ![Within hclust](docs/img/d_within_hclust.png)
 
 Apply custom colors to groups and columns.
+
 ```bash
 python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_pruned.fam --groups demo/2448/groups.tsv --id-col id --group-col group --blocks C-Ad,CG1,CG2,CG3,CG4,CG5,CG6,W-Ad,WEE1,WEE2,WWE1,WWE2 --within q --anchor-group WWE1 --color WWE1=#4470b7 --color WEE1=#dc1f26 --color CG4=#f7922c --color C3=#2ca02c --outdir out/e_color
 ```
 ![Custom colors](docs/img/e_color.png)
 
 Align columns across K values automatically.
+
 ```bash
 python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_pruned.fam --groups demo/2448/groups.tsv --id-col id --group-col group --blocks C-Ad,CG1,CG2,CG3,CG4,CG5,CG6,W-Ad,WEE1,WEE2,WWE1,WWE2 --within iid --anchor-group WWE1 --outdir out/c_align
 ```
 ![Aligned default](docs/img/c_align_default.png)
 
 Keep the raw ADMIXTURE column order without cross-K alignment.
+
 ```bash
 python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_pruned.fam --groups demo/2448/groups.tsv --id-col id --group-col group --blocks C-Ad,CG1,CG2,CG3,CG4,CG5,CG6,W-Ad,WEE1,WEE2,WWE1,WWE2 --within iid --no-align --outdir out/c_noalign
 ```
@@ -193,4 +222,5 @@ Ancestry component plot colors can be specified via parameters, formatted as `--
 ## Citation
 
 ADMIXTURE mode merging requires CLUMPP (Jakobsson and Rosenberg 2007 *Bioinformatics* 23:1801, 10.1093/bioinformatics/btm233).
+
 Theoretical background of label switching: Alexander, Novembre and Lange 2009 *Genome Res* 19:1655 (10.1101/gr.094052.109).

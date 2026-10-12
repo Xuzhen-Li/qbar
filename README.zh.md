@@ -13,6 +13,8 @@
 创建虚拟环境并安装依赖：
 
 ```bash
+git clone https://github.com/Xuzhen-Li/qbar.git
+cd qbar
 python3 -m venv .venv
 . .venv/bin/activate
 python3 -m pip install -r requirements.txt
@@ -27,6 +29,7 @@ python3 test_qbar.py
 ## 输入文件
 
 Q 矩阵 (`.Q`)：包含祖先成分比例。
+
 ```text
 0.048906 0.126240 0.516154 0.158683 0.000010 0.002808 0.000010 0.147189
 0.000010 0.856385 0.015772 0.055593 0.052034 0.000010 0.000010 0.020186
@@ -36,6 +39,7 @@ Q 矩阵 (`.Q`)：包含祖先成分比例。
 ```
 
 样本名单 (`.fam` 或 `--ids`)：对应 Q 矩阵行的个体 ID。
+
 ```text
 1 1 0 0 0 -9
 1-A 1-A 0 0 0 -9
@@ -45,6 +49,7 @@ Q 矩阵 (`.Q`)：包含祖先成分比例。
 ```
 
 分组表：个体 ID 与群体名称的映射。
+
 ```text
 id	group
 1	CG6
@@ -72,6 +77,7 @@ python3 qbar.py \
 ```
 
 终端输出：
+
 ```text
 demo/out/panel.png
 order	demo/out/order.tsv
@@ -98,31 +104,54 @@ python3 qbar.py --q demo/2448/ref2448_pruned.8.Q --fam demo/2448/ref2448_pruned.
 
 ## 常见用法
 
-按个体 ID 字母顺序排列组内样本。
+用自己的名单排序。`order.txt` 中每行一个个体 ID。
+
+```text
+106-A
+13
+136
+14-A
+15-A
+```
+
+```bash
+python3 qbar.py --q demo/2448/ref2448_pruned.8.Q --fam demo/2448/ref2448_pruned.fam --groups demo/2448/groups.tsv --id-col id --group-col group --order-file order.txt --outdir out
+```
+
+```text
+out/bar_K8.png
+order	out/order.tsv
+```
+![Custom order](docs/img/f_order_file.png)
+
+对比组内排序：`iid`（默认）按个体 ID 字母顺序排列，而 `hclust` 会将祖先成分相似的个体聚类在一起。
+
 ```bash
 python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_pruned.fam --groups demo/2448/groups.tsv --id-col id --group-col group --blocks C-Ad,CG1,CG2,CG3,CG4,CG5,CG6,W-Ad,WEE1,WEE2,WWE1,WWE2 --within iid --anchor-group WWE1 --outdir out/d_iid
 ```
 ![Within iid](docs/img/d_within_iid.png)
 
-进行组内层次聚类，相似配置相连。
 ```bash
 python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_pruned.fam --groups demo/2448/groups.tsv --id-col id --group-col group --blocks C-Ad,CG1,CG2,CG3,CG4,CG5,CG6,W-Ad,WEE1,WEE2,WWE1,WWE2 --within hclust --anchor-group WWE1 --outdir out/d_hclust
 ```
 ![Within hclust](docs/img/d_within_hclust.png)
 
 给群体和祖先列指定颜色。
+
 ```bash
 python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_pruned.fam --groups demo/2448/groups.tsv --id-col id --group-col group --blocks C-Ad,CG1,CG2,CG3,CG4,CG5,CG6,W-Ad,WEE1,WEE2,WWE1,WWE2 --within q --anchor-group WWE1 --color WWE1=#4470b7 --color WEE1=#dc1f26 --color CG4=#f7922c --color C3=#2ca02c --outdir out/e_color
 ```
 ![Custom colors](docs/img/e_color.png)
 
 默认在跨 K 值之间对齐颜色。
+
 ```bash
 python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_pruned.fam --groups demo/2448/groups.tsv --id-col id --group-col group --blocks C-Ad,CG1,CG2,CG3,CG4,CG5,CG6,W-Ad,WEE1,WEE2,WWE1,WWE2 --within iid --anchor-group WWE1 --outdir out/c_align
 ```
 ![Aligned default](docs/img/c_align_default.png)
 
 关闭对齐，保留原始 Q 矩阵列序。
+
 ```bash
 python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_pruned.fam --groups demo/2448/groups.tsv --id-col id --group-col group --blocks C-Ad,CG1,CG2,CG3,CG4,CG5,CG6,W-Ad,WEE1,WEE2,WWE1,WWE2 --within iid --no-align --outdir out/c_noalign
 ```
@@ -193,4 +222,5 @@ python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_p
 ## 引文
 
 合并同一 K 值的多次重复结果需使用 CLUMPP 软件 (Jakobsson and Rosenberg 2007 *Bioinformatics* 23:1801, 10.1093/bioinformatics/btm233)。
+
 关于标签切换的理论背景：Alexander, Novembre and Lange 2009 *Genome Res* 19:1655 (10.1101/gr.094052.109)。
