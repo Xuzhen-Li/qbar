@@ -86,15 +86,15 @@ order	demo/out/order.tsv
 ## Output
 
 Results are saved to the directory specified by `--outdir`.
-- `panel.png`: The multi-K summary structure plot.
-- `bar_K*.png`: Single structure plot for a specific K value.
+- `panel.png` and `panel.pdf`: The multi-K summary structure plot.
+- `bar_K*.png` and `bar_K*.pdf`: Single structure plot for a specific K value.
 - `order.tsv`: Final left-to-right sample order.
 - `blocks.tsv`: Start and end sample indices for each group block.
 - `align.tsv`: Pearson correlation coefficients used during cross-K alignment.
 - `perm_K*.tsv`: Raw column index mapped to aligned ancestry component.
 - `args.txt`: Complete command and parameters.
 
-Passing a single .Q file to `--q` produces a single-K plot `bar_K8.png`. No `panel.png` is generated.
+Passing a single .Q file to `--q` produces a single-K plot `bar_K8.png` and `bar_K8.pdf`. No `panel.png` or `panel.pdf` is generated.
 
 ```bash
 python3 qbar.py --q demo/2448/ref2448_pruned.8.Q --fam demo/2448/ref2448_pruned.fam --groups demo/2448/groups.tsv --id-col id --group-col group --blocks C-Ad,CG1,CG2,CG3,CG4,CG5,CG6,W-Ad,WEE1,WEE2,WWE1,WWE2 --within iid --color WWE1=#4470b7 --color WEE1=#dc1f26 --color WEE2=#0b5475 --color CG6=#981b1e --color CG4=#f7922c --color CG3=#835ca6 --color CG5=#fbee61 --color WWE2=#f6a3b1 --outdir out/b_singleK8
@@ -161,7 +161,7 @@ Sample sorting logic within groups is controlled by the `--within` parameter:
 
 - `iid`: Sort alphabetically by individual ID. This is the default.
 - `q`: Sort in descending order based on the highest ancestry component proportion of the individual within their current group.
-- `hclust`: Perform within-group hierarchical clustering.
+- `hclust`: Perform within-group hierarchical clustering. The algorithm uses average linkage and a distance metric of 1 minus the Pearson correlation coefficient, equivalent to scipy's `linkage(method="average", metric="correlation")` ([documentation](https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.hierarchy.linkage.html)).
 - `input`: Keep the original sample row order from the input Q matrix file.
 
 To apply a different sorting strategy to a specific group, use the `--within-group` parameter (e.g., `--within-group NA=hclust`). This parameter can be declared multiple times.
@@ -215,6 +215,6 @@ Ancestry component plot colors can be specified via parameters, formatted as `--
 
 ## Citation
 
-ADMIXTURE mode merging requires CLUMPP (Jakobsson and Rosenberg 2007 *Bioinformatics* 23:1801, 10.1093/bioinformatics/btm233).
+ADMIXTURE mode merging requires CLUMPP (Jakobsson and Rosenberg 2007 *Bioinformatics* 23:1801, [10.1093/bioinformatics/btm233](https://doi.org/10.1093/bioinformatics/btm233)).
 
-Theoretical background of label switching: Alexander, Novembre and Lange 2009 *Genome Res* 19:1655 (10.1101/gr.094052.109).
+Theoretical background of label switching: Alexander, Novembre and Lange 2009 *Genome Res* 19:1655 ([10.1101/gr.094052.109](https://doi.org/10.1101/gr.094052.109)).

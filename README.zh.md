@@ -86,15 +86,15 @@ order	demo/out/order.tsv
 ## 输出
 
 结果保存在 `--outdir` 目录。
-- `panel.png`：跨 K 值的汇总图谱。
-- `bar_K*.png`：具体 K 值的单张结构图。
+- `panel.png` 与 `panel.pdf`：跨 K 值的汇总图谱。
+- `bar_K*.png` 与 `bar_K*.pdf`：具体 K 值的单张结构图。
 - `order.tsv`：自左向右样本排序结果。
 - `blocks.tsv`：每个群体区块起始和终止样本编号。
 - `align.tsv`：跨 K 值对齐的 Pearson 相关系数。
 - `perm_K*.tsv`：原始列序号对应对齐后的祖先成分。
 - `args.txt`：运行命令与参数。
 
-只传入一个 `.Q` 文件即为单 K 值运行，生成 `bar_K8.png`。不生成 `panel.png`。
+只传入一个 `.Q` 文件即为单 K 值运行，生成 `bar_K8.png` 与 `bar_K8.pdf`。不生成 `panel.png` 和 `panel.pdf`。
 
 ```bash
 python3 qbar.py --q demo/2448/ref2448_pruned.8.Q --fam demo/2448/ref2448_pruned.fam --groups demo/2448/groups.tsv --id-col id --group-col group --blocks C-Ad,CG1,CG2,CG3,CG4,CG5,CG6,W-Ad,WEE1,WEE2,WWE1,WWE2 --within iid --color WWE1=#4470b7 --color WEE1=#dc1f26 --color WEE2=#0b5475 --color CG6=#981b1e --color CG4=#f7922c --color CG3=#835ca6 --color CG5=#fbee61 --color WWE2=#f6a3b1 --outdir out/b_singleK8
@@ -161,7 +161,7 @@ python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_p
 
 - `iid`：按个体 ID 字母顺序排列。默认模式。
 - `q`：根据最高祖先成分比例降序排列。
-- `hclust`：进行组内层次聚类。
+- `hclust`：进行组内层次聚类。算法采用平均连锁，距离度量为 1 减去 Pearson 相关系数，等效于 scipy 的 `linkage(method="average", metric="correlation")`（[文档](https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.hierarchy.linkage.html)）。
 - `input`：保持原输入 Q 矩阵行序。
 
 需对特定群体采用不同排序，使用 `--within-group` 单独指定（例如 `--within-group NA=hclust`），支持多次声明。
@@ -215,6 +215,6 @@ python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_p
 
 ## 引文
 
-合并同一 K 值的多次重复结果需使用 CLUMPP 软件 (Jakobsson and Rosenberg 2007 *Bioinformatics* 23:1801, 10.1093/bioinformatics/btm233)。
+合并同一 K 值的多次重复结果需使用 CLUMPP 软件 (Jakobsson and Rosenberg 2007 *Bioinformatics* 23:1801, [10.1093/bioinformatics/btm233](https://doi.org/10.1093/bioinformatics/btm233))。
 
-关于标签切换的理论背景：Alexander, Novembre and Lange 2009 *Genome Res* 19:1655 (10.1101/gr.094052.109)。
+关于标签切换的理论背景：Alexander, Novembre and Lange 2009 *Genome Res* 19:1655 ([10.1101/gr.094052.109](https://doi.org/10.1101/gr.094052.109))。

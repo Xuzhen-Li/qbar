@@ -2,7 +2,7 @@
 
 [中文](README.zh.md)
 
-This demo contains data for 2448 samples, with K values ranging from 2 to 12. The sample dataset is from Dong et al. 2023 *Science* 379:892. The Q matrix files provided here were obtained by rerunning with seed 43. Fig. 1D in the original paper is based on a different matrix from the authors. This demo only provides the population ancestry component proportion matrix and does not include the raw genotype files.
+This demo contains data for 2448 samples, with K values ranging from 2 to 12. The sample dataset is from Dong et al. 2023 *Science* 379:892 ([10.1126/science.add8655](https://doi.org/10.1126/science.add8655)). The Q matrix files provided here were obtained by rerunning with seed 43. Fig. 1D in the original paper is based on a different matrix from the authors. This demo only provides the population ancestry component proportion matrix and does not include the raw genotype files.
 
 The row order of the `ref2448_pruned.fam` file is strictly identical to the row order inside each Q matrix file. The `groups.tsv` file contains two columns: `id` and `group`.
 
