@@ -94,7 +94,7 @@ order	demo/out/order.tsv
 - `perm_K*.tsv`：原始列序号对应对齐后的祖先成分。
 - `args.txt`：运行命令与参数。
 
-只传入一个 `.Q` 文件即为单 K 值运行，生成 `bar_K8.png` 与 `bar_K8.pdf`。不生成 `panel.png` 和 `panel.pdf`。[[TODO-TEXT]]
+只传入一个 `.Q` 文件即为单 K 值运行，生成 `bar_K8.png` 与 `bar_K8.pdf`。不生成 `panel.png` 和 `panel.pdf`。单个 K 的运行不会写入 `align.tsv`。
 
 ```bash
 python3 qbar.py --q demo/2448/ref2448_pruned.8.Q --fam demo/2448/ref2448_pruned.fam --groups demo/2448/groups.tsv --id-col id --group-col group --blocks C-Ad,CG1,CG2,CG3,CG4,CG5,CG6,W-Ad,WEE1,WEE2,WWE1,WWE2 --within iid --color WWE1=#4470b7 --color WEE1=#dc1f26 --color WEE2=#0b5475 --color CG6=#981b1e --color CG4=#f7922c --color CG3=#835ca6 --color CG5=#fbee61 --color WWE2=#f6a3b1 --outdir out/b_singleK8
