@@ -94,7 +94,7 @@ Results are saved to the directory specified by `--outdir`.
 - `perm_K*.tsv`: Raw column index mapped to aligned ancestry component.
 - `args.txt`: Complete command and parameters.
 
-Passing a single .Q file to `--q` produces a single-K plot `bar_K8.png` and `bar_K8.pdf`. No `panel.png` or `panel.pdf` is generated.
+Passing a single .Q file to `--q` produces a single-K plot `bar_K8.png` and `bar_K8.pdf`. No `panel.png` or `panel.pdf` is generated. A single-K run does not write `align.tsv`.
 
 ```bash
 python3 qbar.py --q demo/2448/ref2448_pruned.8.Q --fam demo/2448/ref2448_pruned.fam --groups demo/2448/groups.tsv --id-col id --group-col group --blocks C-Ad,CG1,CG2,CG3,CG4,CG5,CG6,W-Ad,WEE1,WEE2,WWE1,WWE2 --within iid --color WWE1=#4470b7 --color WEE1=#dc1f26 --color WEE2=#0b5475 --color CG6=#981b1e --color CG4=#f7922c --color CG3=#835ca6 --color CG5=#fbee61 --color WWE2=#f6a3b1 --outdir out/b_singleK8
