@@ -219,24 +219,62 @@ def check_shapes(q_by_k, n):
             print("注意：K=%d 有 %d 行人的组分和离 1 超过 0.05，图上多出来的部分留白" % (k, len(bad)), file=sys.stderr)
 
 
-def hclust_order(q):
+HCLUST_DIST = ("correlation", "euclidean", "braycurtis")
+HCLUST_LINK = ("average", "ward", "complete")
+HCLUST_PRE = ("none", "dominant")
+
+
+def check_hclust_opts(dist, link):
+    if dist not in HCLUST_DIST:
+        raise SystemExit("--hclust-dist 只能是 %s" % "/".join(HCLUST_DIST))
+    if link not in HCLUST_LINK:
+        raise SystemExit("--hclust-linkage 只能是 %s" % "/".join(HCLUST_LINK))
+    if link == "ward" and dist != "euclidean":
+        raise SystemExit("--hclust-linkage ward 需要 --hclust-dist euclidean，收到 %s" % dist)
+
+
+def hclust_order(q, dist="correlation", link="average", olo=False):
+    check_hclust_opts(dist, link)
     q = np.asarray(q, dtype=float)
     if q.ndim != 2 or q.shape[0] < 2:
         return list(range(q.shape[0]))
     try:
-        from scipy.cluster.hierarchy import leaves_list, linkage
+        from scipy.cluster.hierarchy import leaves_list, linkage, optimal_leaf_ordering
+        from scipy.spatial.distance import pdist
     except ImportError as exc:
         raise SystemExit("hclust 需要 scipy（scipy.cluster.hierarchy）") from exc
     work = q.copy()
-    std = work.std(axis=1)
-    for i in np.where(std == 0.0)[0]:
-        work[i, 0] += 1e-12
+    if dist == "correlation":
+        std = work.std(axis=1)
+        for i in np.where(std == 0.0)[0]:
+            work[i, 0] += 1e-12
     import warnings
     from scipy.cluster.hierarchy import ClusterWarning
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=ClusterWarning)
-        z = linkage(work, method="average", metric="correlation")
+        z = linkage(work, method=link, metric=dist)
+        if olo:
+            z = optimal_leaf_ordering(z, pdist(work, metric=dist))
     return [int(x) for x in leaves_list(z)]
+
+
+def hclust_block_order(q, dist="correlation", link="average", olo=False, pre="none"):
+    """pre=dominant: split rows by their highest column (lowest index on ties), blocks in
+    column order C1, C2, ...; hclust inside each block."""
+    q = np.asarray(q, dtype=float)
+    if pre == "none":
+        return hclust_order(q, dist, link, olo)
+    if pre != "dominant":
+        raise SystemExit("--hclust-pre 只能是 %s" % "/".join(HCLUST_PRE))
+    top = q.argmax(axis=1)
+    out = []
+    for c in range(q.shape[1]):
+        ii = [int(i) for i in np.where(top == c)[0]]
+        if len(ii) >= 2:
+            out.extend(ii[j] for j in hclust_order(q[ii], dist, link, olo))
+        else:
+            out.extend(ii)
+    return out
 
 
 def order_from_file(path, iids):
@@ -276,7 +314,7 @@ def order_from_file(path, iids):
     return order
 
 
-def sort_block(idxs, mode, iids, q, sort_col):
+def sort_block(idxs, mode, iids, q, sort_col, hc=None):
     idxs = list(idxs)
     if mode == "input":
         return idxs
@@ -293,12 +331,13 @@ def sort_block(idxs, mode, iids, q, sort_col):
     if mode == "hclust":
         if q is None or len(idxs) < 2:
             return idxs
-        sub = hclust_order(q[idxs])
+        sub = hclust_block_order(q[idxs], **(hc or {}))
         return [idxs[j] for j in sub]
     raise SystemExit("未知的组内排序：%s" % mode)
 
 
-def build_order(iids, groups, blocks, within, within_group, rest_name, q_sort, q_hclust, sort_col, order_file):
+def build_order(iids, groups, blocks, within, within_group, rest_name, q_sort, q_hclust, sort_col, order_file,
+                hc=None):
     if order_file:
         order = order_from_file(order_file, iids)
         return order, spans_of(order, groups)
@@ -323,7 +362,7 @@ def build_order(iids, groups, blocks, within, within_group, rest_name, q_sort, q
         # --sort-col forces one column for every q-sorted block.
         # Without it, each block sorts on its own majority column.
         col = sort_col - 1 if (mode == "q" and sort_col) else None
-        order.extend(sort_block(idxs, mode, iids, q, col))
+        order.extend(sort_block(idxs, mode, iids, q, col, hc))
     if len(order) != len(iids) or len(set(order)) != len(iids):
         raise SystemExit("排序结果不是全体样本的一个排列")
     return order, spans_of(order, groups)
@@ -378,8 +417,153 @@ def core_mask(q_prev, q_new, groups, align_groups, qmax_cut):
     return m
 
 
-def match_next(q_prev, q_new, mask):
+ALIGN_METHODS = ("greedy", "hungarian", "pong", "jaccard")
+JACCARD_SETS = ("dominant", "threshold")
+
+
+def pearson_matrix(q_prev, q_new, mask):
+    """r[c, j] = Pearson between aligned column c of q_prev and raw column j of q_new."""
+    k_old = q_prev.shape[1]
+    k_new = q_new.shape[1]
+    r = np.zeros((k_old, k_new))
+    for c in range(k_old):
+        for j in range(k_new):
+            r[c, j] = col_pearson(q_prev[mask, c], q_new[mask, j])
+    return r
+
+
+def match_next_hungarian(q_prev, q_new, mask):
+    """Assignment of old columns to distinct new columns maximising the summed Pearson r.
+
+    Solved with scipy.optimize.linear_sum_assignment(maximize=True).
+    The one unassigned new column is put last.
+    """
+    try:
+        from scipy.optimize import linear_sum_assignment
+    except ImportError as exc:
+        raise SystemExit("--align-method hungarian 需要 scipy（scipy.optimize）") from exc
+    k_old = q_prev.shape[1]
+    k_new = q_new.shape[1]
+    if k_new != k_old + 1:
+        raise SystemExit("对齐要求 K 连续，相邻两个 Q 的列数必须差 1")
+    r = pearson_matrix(q_prev, q_new, mask)
+    rows, cols = linear_sum_assignment(r, maximize=True)
+    by_row = dict(zip(rows.tolist(), cols.tolist()))
+    perm = [int(by_row[c]) for c in range(k_old)]
+    rs = [float(r[c, perm[c]]) for c in range(k_old)]
+    rest = [j for j in range(k_new) if j not in set(perm)]
+    perm.append(int(rest[0]))
+    rs.append(None)
+    return perm, rs
+
+
+def pong_sim(a, b):
+    """pong default similarity (Behr et al. 2016, manual eq. 1):
+    1 - sqrt(sum((a-b)^2 over N*) / (2|N*|)), N* = people with a+b > 0."""
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+    keep = (a + b) > 0
+    n = int(keep.sum())
+    if n == 0:
+        return 0.0
+    d = a[keep] - b[keep]
+    return float(1.0 - np.sqrt(np.dot(d, d) / (2.0 * n)))
+
+
+def match_next_pong(q_prev, q_new, mask):
+    """Split-aware matching between adjacent K, after pong (Behr et al. 2016).
+
+    For each pair (a, b) of new columns, sum them into one column, match the k old
+    columns to the k merged columns by maximum summed similarity, and keep the pair
+    with the highest mean similarity. The old column matched to a+b is the split
+    parent: of a and b, the one more similar to it takes its place, the other goes last.
+    Returns (perm, sims, split) with split = {"parent": c, "pair": (raw_a, raw_b)}.
+    """
+    try:
+        from scipy.optimize import linear_sum_assignment
+    except ImportError as exc:
+        raise SystemExit("--align-method pong 需要 scipy（scipy.optimize）") from exc
+    k_old = q_prev.shape[1]
+    k_new = q_new.shape[1]
+    if k_new != k_old + 1:
+        raise SystemExit("对齐要求 K 连续，相邻两个 Q 的列数必须差 1")
+    old = q_prev[mask]
+    new = q_new[mask]
+    best = None
+    for a in range(k_new):
+        for b in range(a + 1, k_new):
+            cols = [j for j in range(k_new) if j not in (a, b)] + [(a, b)]
+            merged = [new[:, j] if not isinstance(j, tuple) else new[:, a] + new[:, b] for j in cols]
+            sim = np.array([[pong_sim(old[:, c], m) for m in merged] for c in range(k_old)])
+            rows, cidx = linear_sum_assignment(sim, maximize=True)
+            score = float(sim[rows, cidx].mean())
+            if best is None or score > best[0]:
+                best = (score, cols, dict(zip(rows.tolist(), cidx.tolist())), sim)
+    _score, cols, by_row, sim = best
+    perm, sims, split = [], [], None
+    for c in range(k_old):
+        j = cols[by_row[c]]
+        if isinstance(j, tuple):
+            a, b = j
+            sa, sb = pong_sim(old[:, c], new[:, a]), pong_sim(old[:, c], new[:, b])
+            keep, rest = (a, b) if sa >= sb else (b, a)
+            perm.append(int(keep))
+            split = {"parent": c, "pair": (int(keep), int(rest))}
+        else:
+            perm.append(int(j))
+        sims.append(float(sim[c, by_row[c]]))
+    perm.append(int(split["pair"][1]))
+    sims.append(None)
+    return perm, sims, split
+
+
+def member_sets(q, mask, kind, cut):
+    """Per column, the boolean set of masked people: dominant = column is the row's
+    argmax (lowest index on ties); threshold = q >= cut."""
+    q = np.asarray(q, dtype=float)[mask]
+    if kind == "dominant":
+        top = q.argmax(axis=1)
+        return np.stack([top == c for c in range(q.shape[1])], axis=1)
+    return q >= cut
+
+
+def jaccard_matrix(q_prev, q_new, mask, kind="dominant", cut=0.5):
+    """j[c, k] = |A_c & B_k| / |A_c | B_k| on member_sets; 0 when both are empty."""
+    a = member_sets(q_prev, mask, kind, cut)
+    b = member_sets(q_new, mask, kind, cut)
+    j = np.zeros((a.shape[1], b.shape[1]))
+    for c in range(a.shape[1]):
+        for k in range(b.shape[1]):
+            union = int((a[:, c] | b[:, k]).sum())
+            if union:
+                j[c, k] = int((a[:, c] & b[:, k]).sum()) / union
+    return j
+
+
+def match_next_jaccard(q_prev, q_new, mask, kind="dominant", cut=0.5):
+    """One-to-one matching maximising summed Jaccard (scipy linear_sum_assignment); leftover goes last."""
+    try:
+        from scipy.optimize import linear_sum_assignment
+    except ImportError as exc:
+        raise SystemExit("--align-method jaccard 需要 scipy（scipy.optimize）") from exc
+    k_old = q_prev.shape[1]
+    k_new = q_new.shape[1]
+    if k_new != k_old + 1:
+        raise SystemExit("对齐要求 K 连续，相邻两个 Q 的列数必须差 1")
+    j = jaccard_matrix(q_prev, q_new, mask, kind, cut)
+    rows, cols = linear_sum_assignment(j, maximize=True)
+    by_row = dict(zip(rows.tolist(), cols.tolist()))
+    perm = [int(by_row[c]) for c in range(k_old)]
+    sims = [float(j[c, perm[c]]) for c in range(k_old)]
+    perm.append(int([x for x in range(k_new) if x not in set(perm)][0]))
+    sims.append(None)
+    return perm, sims
+
+
+def match_next(q_prev, q_new, mask, method="greedy"):
     """q_prev is already aligned. Return raw-column order for q_new."""
+    if method == "hungarian":
+        return match_next_hungarian(q_prev, q_new, mask)
     k_new = q_new.shape[1]
     k_old = q_prev.shape[1]
     if k_new != k_old + 1:
@@ -406,7 +590,8 @@ def match_next(q_prev, q_new, mask):
     return perm, rs
 
 
-def align_qs(q_by_k, groups, anchor, mode, align_groups, qmax_cut, do_align):
+def align_qs(q_by_k, groups, anchor, mode, align_groups, qmax_cut, do_align, method="greedy",
+             jaccard_set="dominant", jaccard_cut=0.5):
     ks = sorted(q_by_k)
     if do_align and len(ks) > 1:
         for a, b in zip(ks, ks[1:]):
@@ -434,10 +619,21 @@ def align_qs(q_by_k, groups, anchor, mode, align_groups, qmax_cut, do_align):
                 mask = np.ones(len(groups), dtype=bool)
             if not mask.any():
                 raise SystemExit("对齐用的人是空的")
-        p, rs = match_next(aligned[k], q_by_k[k + 1], mask)
+        if method == "pong":
+            p, rs, split = match_next_pong(aligned[k], q_by_k[k + 1], mask)
+        elif method == "jaccard":
+            p, rs = match_next_jaccard(aligned[k], q_by_k[k + 1], mask, jaccard_set, jaccard_cut)
+        else:
+            p, rs = match_next(aligned[k], q_by_k[k + 1], mask, method)
         perm[k + 1] = p
         aligned[k + 1] = q_by_k[k + 1][:, p]
-        meta[k + 1] = {"n_mask": int(mask.sum()), "pearson": rs}
+        meta[k + 1] = {"n_mask": int(mask.sum()), "pearson": rs, "mask": mask}
+        if method == "pong":
+            meta[k + 1]["split_parent"] = split["parent"]
+            continue
+        if method == "jaccard":
+            meta[k + 1]["jaccard"] = True
+            continue
         low = [r for r in rs[:-1] if r is not None and r < 0.5]
         if low:
             print("注意：K=%d→%d 有 %d 列的 Pearson < 0.5，这两次的列可能不是同一个解" % (k, k + 1, len(low)), file=sys.stderr)
@@ -669,10 +865,129 @@ def write_tables(outdir, iids, groups, order, spans, perm, owners, hexes, meta, 
                 f.write("C%d\t%d\t%s\t%s\n" % (c + 1, raw + 1, hexes[k][c], ow))
     if meta:
         with open(os.path.join(outdir, "align.tsv"), "w") as f:
-            f.write("K_to\tn_mask\tpearson\n")
+            pong = any("split_parent" in info for info in meta.values())
+            jac = any("jaccard" in info for info in meta.values())
+            f.write("K_to\tn_mask\tpong_sim\tsplit_parent\n" if pong else
+                    "K_to\tn_mask\tjaccard\n" if jac else "K_to\tn_mask\tpearson\n")
             for k, info in sorted(meta.items()):
                 rs = " ".join("%.3f" % r for r in info["pearson"][:-1])
-                f.write("%d\t%d\t%s\n" % (k, info["n_mask"], rs))
+                if pong:
+                    f.write("%d\t%d\t%s\tC%d\n" % (k, info["n_mask"], rs, info["split_parent"] + 1))
+                else:
+                    f.write("%d\t%d\t%s\n" % (k, info["n_mask"], rs))
+
+
+REPORT_LOW = {"greedy": 0.5, "hungarian": 0.5, "pong": 0.8, "jaccard": 0.5}
+
+
+def parent_shares(q_prev, q_new_col, mask):
+    """share[c] = sum_i new_i * prev_ic / sum_i new_i over masked people."""
+    w = np.asarray(q_new_col, dtype=float)[mask]
+    tot = float(w.sum())
+    if tot <= 0.0:
+        return np.zeros(q_prev.shape[1])
+    return (w[:, None] * np.asarray(q_prev, dtype=float)[mask]).sum(axis=0) / tot
+
+
+def split_parent_of(q_prev, q_new_col, mask):
+    """Old column the new column's membership mostly came from (largest share, lower column on ties).
+    Returns (c, share, runner_c, runner_share); all None when the new column sums to 0."""
+    if float(np.asarray(q_new_col, dtype=float)[mask].sum()) <= 0.0:
+        return None, None, None, None
+    shares = parent_shares(q_prev, q_new_col, mask)
+    rank = sorted(range(len(shares)), key=lambda c: (-shares[c], c))
+    c = rank[0]
+    r = rank[1] if len(rank) > 1 else None
+    return c, float(shares[c]), r, (float(shares[r]) if r is not None else None)
+
+
+def top_groups(q, groups, col, n=3):
+    mus = []
+    for g in sorted(set(groups)):
+        idx = [i for i, x in enumerate(groups) if x == g]
+        mus.append((float(q[idx, col].mean()), g))
+    mus.sort(key=lambda t: (-t[0], t[1]))
+    return mus[:n]
+
+
+def dominant_groups(q, groups, col, n=3):
+    top = q.argmax(axis=1)
+    counts = {}
+    for i, g in enumerate(groups):
+        if top[i] == col:
+            counts[g] = counts.get(g, 0) + 1
+    out = sorted(counts.items(), key=lambda t: (-t[1], t[0]))
+    return int((top == col).sum()), out[:n]
+
+
+def align_report_rows(aligned, meta, groups, method, perm, low=None):
+    cut = REPORT_LOW[method] if low is None else low
+    rows = []
+    for k_to in sorted(meta):
+        info = meta[k_to]
+        prev, new, mask = aligned[k_to - 1], aligned[k_to], info["mask"]
+        k_old = prev.shape[1]
+        for c in range(k_to):
+            row = {"K_to": k_to, "column": "C%d" % (c + 1), "raw_column": perm[k_to][c] + 1, "method": method}
+            if c < k_old:
+                sim = info["pearson"][c]
+                row.update(matched_from="C%d" % (c + 1), similarity="%.3f" % sim,
+                           pearson="%.3f" % col_pearson(prev[mask, c], new[mask, c]),
+                           split_parent="", parent_share="", runner_up="", runner_up_share="",
+                           low_confidence="yes" if sim < cut else "no")
+            else:
+                mx, mx_share, ru, ru_share = split_parent_of(prev, new[:, c], mask)
+                if method == "pong":
+                    pc = info["split_parent"]
+                    share = None if mx is None else float(parent_shares(prev, new[:, c], mask)[pc])
+                    if mx is not None:
+                        ru, ru_share = (mx, mx_share) if mx != pc else (ru, ru_share)
+                else:
+                    pc, share = mx, mx_share
+                    if mx is None:
+                        pc = None
+                fmt_c = lambda x: "NA" if x is None else "C%d" % (x + 1)
+                fmt_s = lambda x: "NA" if x is None else "%.3f" % x
+                row.update(matched_from="new", similarity="NA", pearson="NA",
+                           split_parent=fmt_c(pc if share is not None else None), parent_share=fmt_s(share),
+                           runner_up=fmt_c(ru), runner_up_share=fmt_s(ru_share),
+                           low_confidence="NA")
+            n_dom, dom = dominant_groups(new, groups, c)
+            row["top_groups_mean"] = ";".join("%s:%.3f" % (g, mu) for mu, g in top_groups(new, groups, c))
+            row["n_dominant"] = n_dom
+            row["top_groups_dominant"] = ";".join("%s:%d" % (g, n) for g, n in dom)
+            rows.append(row)
+    return rows, cut
+
+
+REPORT_COLS = ("K_to", "column", "raw_column", "matched_from", "method", "similarity", "pearson", "low_confidence",
+               "split_parent", "parent_share", "runner_up", "runner_up_share", "top_groups_mean", "n_dominant", "top_groups_dominant")
+
+
+def write_align_report(outdir, aligned, meta, groups, method, perm, low=None):
+    rows, cut = align_report_rows(aligned, meta, groups, method, perm, low)
+    with open(os.path.join(outdir, "align_report.tsv"), "w") as f:
+        f.write("\t".join(REPORT_COLS) + "\n")
+        for r in rows:
+            f.write("\t".join(str(r[c]) for c in REPORT_COLS) + "\n")
+    measure = {"greedy": "Pearson r", "hungarian": "Pearson r", "pong": "pong similarity", "jaccard": "Jaccard"}[method]
+    with open(os.path.join(outdir, "align_report.txt"), "w") as f:
+        f.write("Alignment report\nmethod: %s (similarity = %s)\nlow confidence: similarity < %g\n" % (method, measure, cut))
+        f.write("split parent: %s\n" % ("pong split pair" if method == "pong" else
+                "K-1 column with the largest membership-weighted mean over the new column"))
+        for k_to in sorted(meta):
+            f.write("\nK=%d -> K=%d (people used: %d)\n" % (k_to - 1, k_to, meta[k_to]["n_mask"]))
+            for r in [r for r in rows if r["K_to"] == k_to]:
+                if r["matched_from"] == "new":
+                    f.write("  %s new, split from %s (parent share %s; runner-up %s %s); top groups: %s\n"
+                            % (r["column"], r["split_parent"], r["parent_share"], r["runner_up"],
+                               r["runner_up_share"], r["top_groups_mean"]))
+                else:
+                    ref = "" if measure == "Pearson r" else ", Pearson r %s" % r["pearson"]
+                    f.write("  %s <- %s  %s %s%s%s; top groups: %s\n"
+                            % (r["column"], r["matched_from"], measure, r["similarity"], ref,
+                               "  LOW CONFIDENCE" if r["low_confidence"] == "yes" else "", r["top_groups_mean"]))
+    return rows
 
 
 def parse_within(items):
@@ -688,11 +1003,15 @@ def parse_within(items):
     return out
 
 
+class HelpFormatter(argparse.RawDescriptionHelpFormatter, argparse.ArgumentDefaultsHelpFormatter):
+    pass
+
+
 def build_parser():
     p = argparse.ArgumentParser(
         prog="qbar",
         description="读 ADMIXTURE 的 Q，按指定规则排人，跨 K 对齐列，写出结构条形图。",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        formatter_class=HelpFormatter,
         epilog="排序：--order-file 用你给的名单；否则按 --blocks 的组序分块，组内用 --within。\n"
         "组内 iid=名字，q=该组占比最高的那一列从高到低，hclust=平均连锁、距离 1−Pearson，input=Q 里的原顺序。\n"
         "多个 K 默认做 Pearson 贪心对齐，新列放在最上面。--no-align 保持每个 Q 自己的列顺序。",
@@ -711,11 +1030,28 @@ def build_parser():
     p.add_argument("--sort-k", type=int, help="按组分排序时用哪个 K。默认最大的 K")
     p.add_argument("--sort-col", type=int, help="所有按 q 排序的组都用这一列（从 1 数）。不给就每组用自己占比最高的列")
     p.add_argument("--hclust-k", type=int, help="hclust 用哪个 K。默认与 --sort-k 相同")
+    p.add_argument("--hclust-dist", choices=HCLUST_DIST, default="correlation",
+                   help="hclust 距离。默认 correlation（1−Pearson）")
+    p.add_argument("--hclust-linkage", choices=HCLUST_LINK, default="average",
+                   help="hclust 连锁法。默认 average。ward 只能配 euclidean")
+    p.add_argument("--hclust-pre", choices=HCLUST_PRE, default="none",
+                   help="dominant=组内先按每人最高的列分小块（C1、C2…顺序），块内再 hclust。默认 none")
+    p.add_argument("--hclust-olo", action="store_true",
+                   help="叶序用 scipy optimal_leaf_ordering")
     p.add_argument("--align", dest="align", action="store_true")
     p.add_argument("--no-align", dest="align", action="store_false")
     p.set_defaults(align=None)
     p.add_argument("--align-mode", choices=("all", "core"), default="all",
                    help="all=掩码内所有人做 Pearson。core=只留 qmax 超过 --qmax 的人，与 c_align 相同")
+    p.add_argument("--align-method", choices=ALIGN_METHODS, default="greedy",
+                   help="greedy=按列顺序逐列取 Pearson 最高的未用列（默认）。hungarian=Pearson 总和最大的一一匹配。pong=允许上一 K 的一列拆成两列（Behr 2016），align.tsv 第三列为 pong 相似度并多一列 split_parent。jaccard=按人的集合算 Jaccard 后一一匹配，见 --jaccard-set")
+    p.add_argument("--jaccard-set", choices=JACCARD_SETS, default="dominant",
+                   help="jaccard 用的集合：dominant=该列是此人最高的列；threshold=此人该列 >= --jaccard-cut。默认 dominant")
+    p.add_argument("--jaccard-cut", type=float, default=0.5, help="threshold 集合的阈值。默认 0.5")
+    p.add_argument("--align-report", action="store_true",
+                   help="另写 align_report.tsv 和 align_report.txt")
+    p.add_argument("--align-report-low", type=float,
+                   help="低置信阈值。默认 greedy/hungarian/jaccard 0.5，pong 0.8")
     p.add_argument("--align-groups", default="", help="参与对齐的组，逗号分隔。core 模式必填")
     p.add_argument("--qmax", type=float, default=0.75, help="core 模式的 qmax 阈值。默认 0.75")
     p.add_argument("--anchor-group", default="", help="最低 K 把这个组最纯的人的主列放到 C1")
@@ -730,6 +1066,7 @@ def build_parser():
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    check_hclust_opts(args.hclust_dist, args.hclust_linkage)
     files = collect_q(args.q)
     q_by_k, src = load_q_set(files)
     iids = load_ids(args.fam, args.ids)
@@ -744,7 +1081,8 @@ def main(argv=None):
     do_align = (len(q_by_k) > 1) if args.align is None else args.align
     aligned, perm, meta = align_qs(
         q_by_k, groups, args.anchor_group.strip(), args.align_mode,
-        align_groups, args.qmax, do_align,
+        align_groups, args.qmax, do_align, args.align_method,
+        args.jaccard_set, args.jaccard_cut,
     )
     ks = sorted(aligned)
     sort_k = args.sort_k or ks[-1]
@@ -759,6 +1097,7 @@ def main(argv=None):
     order, spans = build_order(
         iids, groups, blocks, args.within, within_group, args.rest_name,
         aligned[sort_k], aligned[hclust_k], args.sort_col, args.order_file,
+        {"dist": args.hclust_dist, "link": args.hclust_linkage, "olo": args.hclust_olo, "pre": args.hclust_pre},
     )
     rank = {name: i for i, name in enumerate(blocks)}
     group_color, col_color = parse_colors(args.color, args.color_file)
@@ -790,6 +1129,8 @@ def main(argv=None):
         render(panel, rows, spans, args.width, bar_h, args.title)
         print(panel)
     write_tables(args.outdir, iids, groups, order, spans, perm, owners, hexes, meta, aligned)
+    if args.align_report and meta:
+        write_align_report(args.outdir, aligned, meta, groups, args.align_method, perm, args.align_report_low)
     with open(os.path.join(args.outdir, "args.txt"), "w") as f:
         f.write(" ".join(sys.argv if argv is None else ["qbar"] + list(argv)) + "\n")
         for k in ks:

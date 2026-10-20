@@ -113,6 +113,412 @@ class AlignTests(unittest.TestCase):
         mask = qbar.core_mask(q, q, groups, ["W", "E"], 0.75)
         self.assertEqual(mask.tolist(), [True, True, False, False, True])
 
+    def _greedy_vs_hungarian_case(self):
+        # raw K=3 columns are blocks A (rows 0-9), B (10-19), C (20-29).
+        # aligned K=2: C1 = A 1.0 + B 0.8; C2 = A 0.5 + C 0.2.
+        # r = [[0.65, 0.33, -0.98], [0.92, -0.80, -0.11]]
+        n = 30
+        q3 = np.zeros((n, 3))
+        q3[:10, 0] = 1.0
+        q3[10:20, 1] = 1.0
+        q3[20:, 2] = 1.0
+        q2 = np.zeros((n, 2))
+        q2[:10, 0] = 1.0
+        q2[10:20, 0] = 0.8
+        q2[:10, 1] = 0.5
+        q2[20:, 1] = 0.2
+        return q2, q3, np.ones(n, dtype=bool)
+
+    def test_greedy_and_hungarian_differ(self):
+        q2, q3, mask = self._greedy_vs_hungarian_case()
+        r = qbar.pearson_matrix(q2, q3, mask)
+        g, g_rs = qbar.match_next(q2, q3, mask, "greedy")
+        h, h_rs = qbar.match_next(q2, q3, mask, "hungarian")
+        self.assertEqual(g, [0, 2, 1])
+        self.assertEqual(h, [1, 0, 2])
+        self.assertIsNone(h_rs[-1])
+        self.assertGreater(sum(h_rs[:-1]), sum(g_rs[:-1]))
+        for c in range(2):
+            self.assertAlmostEqual(h_rs[c], r[c, h[c]])
+
+    def test_hungarian_is_optimal_by_brute_force(self):
+        import itertools
+        rng = np.random.default_rng(7)
+        for _ in range(20):
+            k = int(rng.integers(2, 6))
+            q_prev = rng.dirichlet(np.ones(k), size=40)
+            q_new = rng.dirichlet(np.ones(k + 1), size=40)
+            mask = np.ones(40, dtype=bool)
+            r = qbar.pearson_matrix(q_prev, q_new, mask)
+            best = max(sum(r[c, p[c]] for c in range(k)) for p in itertools.permutations(range(k + 1), k))
+            h, h_rs = qbar.match_next(q_prev, q_new, mask, "hungarian")
+            self.assertAlmostEqual(sum(h_rs[:-1]), best)
+            self.assertEqual(sorted(h), list(range(k + 1)))
+
+    def test_hungarian_without_scipy_exits(self):
+        import builtins
+        from unittest import mock
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name.startswith("scipy"):
+                raise ImportError("no scipy")
+            return real_import(name, *args, **kwargs)
+
+        q2, q3, mask = self._greedy_vs_hungarian_case()
+        with mock.patch("builtins.__import__", side_effect=fake_import):
+            with self.assertRaises(SystemExit) as cm:
+                qbar.match_next(q2, q3, mask, "hungarian")
+            self.assertIn("scipy", str(cm.exception.code))
+            self.assertEqual(qbar.match_next(q2, q3, mask, "greedy")[0], [0, 2, 1])
+
+    def test_default_method_is_greedy(self):
+        q2, q3, mask = self._greedy_vs_hungarian_case()
+        self.assertEqual(qbar.match_next(q2, q3, mask), qbar.match_next(q2, q3, mask, "greedy"))
+        args = qbar.build_parser().parse_args(["--q", "x.Q", "--outdir", "o"])
+        self.assertEqual(args.align_method, "greedy")
+
+    def test_cli_align_method_hungarian(self):
+        q2, q3, _ = self._greedy_vs_hungarian_case()
+        with tempfile.TemporaryDirectory() as tmp:
+            for k, q in ((2, q2), (3, q3)):
+                np.savetxt(os.path.join(tmp, "t.%d.Q" % k), q + 1e-6, fmt="%.6f")
+            ids = os.path.join(tmp, "ids.txt")
+            with open(ids, "w") as f:
+                f.write("".join("s%d\n" % i for i in range(30)))
+            got = {}
+            for m in ("greedy", "hungarian"):
+                out = os.path.join(tmp, m)
+                qbar.main(["--q", os.path.join(tmp, "t.2.Q"), os.path.join(tmp, "t.3.Q"),
+                           "--ids", ids, "--align-method", m, "--outdir", out])
+                with open(os.path.join(out, "perm_K3.tsv")) as f:
+                    got[m] = [line.split("\t")[1] for line in f.read().splitlines()[1:]]
+            self.assertEqual(got["greedy"], ["1", "3", "2"])
+            self.assertEqual(got["hungarian"], ["2", "1", "3"])
+
+    def _split_case(self):
+        # K=2: C1 = rows 0-9, C2 = rows 10-29. K=3 raw: col 1 = rows 0-9,
+        # C2 splits into raw col 2 (0.9 on rows 10-19) and raw col 0 (0.1 on rows 10-19, 1 on 20-29).
+        # Against C2, pong_sim is 0.497 for raw 2 and 0.550 for raw 0, so raw 0 keeps C2.
+        n = 30
+        q2 = np.zeros((n, 2))
+        q2[:10, 0] = 1.0
+        q2[10:, 1] = 1.0
+        q3 = np.zeros((n, 3))
+        q3[:10, 1] = 1.0
+        q3[10:20, 2] = 0.9
+        q3[10:20, 0] = 0.1
+        q3[20:, 0] = 1.0
+        return q2, q3, np.ones(n, dtype=bool)
+
+    def test_pong_sim_matches_manual_formula(self):
+        a = np.array([1.0, 0.5, 0.0, 0.0])
+        b = np.array([0.5, 0.5, 0.5, 0.0])
+        # N* = first three; sum sq = 0.25 + 0 + 0.25
+        self.assertAlmostEqual(qbar.pong_sim(a, b), 1 - np.sqrt(0.5 / 6))
+        self.assertAlmostEqual(qbar.pong_sim(a, a), 1.0)
+
+    def test_pong_without_scipy_exits(self):
+        import builtins
+        from unittest import mock
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name.startswith("scipy"):
+                raise ImportError("no scipy")
+            return real_import(name, *args, **kwargs)
+
+        q2, q3, mask = self._split_case()
+        with mock.patch("builtins.__import__", side_effect=fake_import):
+            with self.assertRaises(SystemExit) as cm:
+                qbar.match_next_pong(q2, q3, mask)
+        self.assertIn("pong", str(cm.exception.code))
+        self.assertIn("scipy", str(cm.exception.code))
+
+    def test_pong_split_records_parent(self):
+        q2, q3, mask = self._split_case()
+        perm, sims, split = qbar.match_next_pong(q2, q3, mask)
+        self.assertEqual(perm, [1, 0, 2])
+        self.assertEqual(split, {"parent": 1, "pair": (0, 2)})
+        self.assertAlmostEqual(sims[0], 1.0)
+        self.assertAlmostEqual(sims[1], 1.0)
+        self.assertIsNone(sims[2])
+
+    def test_pong_align_tsv_has_split_parent(self):
+        q2, q3, _ = self._split_case()
+        with tempfile.TemporaryDirectory() as tmp:
+            for k, q in ((2, q2), (3, q3)):
+                np.savetxt(os.path.join(tmp, "t.%d.Q" % k), q, fmt="%.6f")
+            ids = os.path.join(tmp, "ids.txt")
+            with open(ids, "w") as f:
+                f.write("".join("s%d\n" % i for i in range(30)))
+            out = os.path.join(tmp, "o")
+            qbar.main(["--q", os.path.join(tmp, "t.2.Q"), os.path.join(tmp, "t.3.Q"),
+                       "--ids", ids, "--align-method", "pong", "--outdir", out])
+            with open(os.path.join(out, "align.tsv")) as f:
+                lines = f.read().splitlines()
+            self.assertEqual(lines[0], "K_to\tn_mask\tpong_sim\tsplit_parent")
+            self.assertEqual(lines[1], "3\t30\t1.000 1.000\tC2")
+
+    def test_member_sets_and_jaccard_matrix(self):
+        q = np.array([[0.7, 0.3], [0.5, 0.5], [0.2, 0.8]])
+        m = np.ones(3, dtype=bool)
+        self.assertEqual(qbar.member_sets(q, m, "dominant", 0.5).tolist(),
+                         [[True, False], [True, False], [False, True]])
+        self.assertEqual(qbar.member_sets(q, m, "threshold", 0.5).tolist(),
+                         [[True, False], [True, True], [False, True]])
+        q3 = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+        j = qbar.jaccard_matrix(q, q3, m, "dominant")
+        self.assertEqual(j.tolist(), [[0.5, 0.5, 0.0], [0.0, 0.0, 1.0]])
+
+    def test_jaccard_threshold_differs_from_greedy(self):
+        q2, q3, mask = self._greedy_vs_hungarian_case()
+        # threshold 0.5 sets: C1 = rows 0-19, C2 = rows 0-9; raw cols are blocks A, B, C
+        j = qbar.jaccard_matrix(q2, q3, mask, "threshold", 0.5)
+        self.assertEqual(j.tolist(), [[0.5, 0.5, 0.0], [1.0, 0.0, 0.0]])
+        perm, sims = qbar.match_next_jaccard(q2, q3, mask, "threshold", 0.5)
+        self.assertEqual(perm, [1, 0, 2])
+        self.assertEqual(sims, [0.5, 1.0, None])
+        self.assertEqual(qbar.match_next(q2, q3, mask)[0], [0, 2, 1])
+
+    def test_jaccard_is_optimal_by_brute_force(self):
+        import itertools
+        rng = np.random.default_rng(11)
+        for kind in ("dominant", "threshold"):
+            for _ in range(10):
+                k = int(rng.integers(2, 5))
+                q_prev = rng.dirichlet(np.ones(k) * 0.5, size=30)
+                q_new = rng.dirichlet(np.ones(k + 1) * 0.5, size=30)
+                mask = np.ones(30, dtype=bool)
+                j = qbar.jaccard_matrix(q_prev, q_new, mask, kind, 0.3)
+                best = max(sum(j[c, p[c]] for c in range(k)) for p in itertools.permutations(range(k + 1), k))
+                perm, sims = qbar.match_next_jaccard(q_prev, q_new, mask, kind, 0.3)
+                self.assertAlmostEqual(sum(sims[:-1]), best)
+                self.assertEqual(sorted(perm), list(range(k + 1)))
+
+    def test_jaccard_without_scipy_exits(self):
+        import builtins
+        from unittest import mock
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name.startswith("scipy"):
+                raise ImportError("no scipy")
+            return real_import(name, *args, **kwargs)
+
+        q2, q3, mask = self._greedy_vs_hungarian_case()
+        with mock.patch("builtins.__import__", side_effect=fake_import):
+            with self.assertRaises(SystemExit) as cm:
+                qbar.match_next_jaccard(q2, q3, mask)
+        self.assertIn("jaccard", str(cm.exception.code))
+        self.assertIn("scipy", str(cm.exception.code))
+
+    def test_cli_jaccard_writes_jaccard_column(self):
+        q2, q3, _ = self._greedy_vs_hungarian_case()
+        with tempfile.TemporaryDirectory() as tmp:
+            for k, q in ((2, q2), (3, q3)):
+                np.savetxt(os.path.join(tmp, "t.%d.Q" % k), q, fmt="%.6f")
+            ids = os.path.join(tmp, "ids.txt")
+            with open(ids, "w") as f:
+                f.write("".join("s%d\n" % i for i in range(30)))
+            out = os.path.join(tmp, "o")
+            qbar.main(["--q", os.path.join(tmp, "t.2.Q"), os.path.join(tmp, "t.3.Q"), "--ids", ids,
+                       "--align-method", "jaccard", "--jaccard-set", "threshold", "--outdir", out])
+            with open(os.path.join(out, "align.tsv")) as f:
+                self.assertEqual(f.read().splitlines(), ["K_to\tn_mask\tjaccard", "3\t30\t0.500 1.000"])
+            with open(os.path.join(out, "perm_K3.tsv")) as f:
+                self.assertEqual([l.split("\t")[1] for l in f.read().splitlines()[1:]], ["2", "1", "3"])
+        args = qbar.build_parser().parse_args(["--q", "x.Q", "--outdir", "o"])
+        self.assertEqual((args.jaccard_set, args.jaccard_cut), ("dominant", 0.5))
+
+    def _report(self, method, q2, q3, low=None):
+        groups = ["A"] * 10 + ["B"] * 10 + ["C"] * (q2.shape[0] - 20)
+        aligned, perm, meta = qbar.align_qs({2: q2, 3: q3}, groups, "", "all", [], 0.75, True, method)
+        rows, cut = qbar.align_report_rows(aligned, meta, groups, method, perm, low)
+        return rows, cut, aligned
+
+    def test_report_greedy_and_hungarian(self):
+        q2, q3, _ = self._greedy_vs_hungarian_case()
+        for method, raws, parent in (("greedy", [1, 3, 2], "C1"), ("hungarian", [2, 1, 3], "C2")):
+            rows, cut, aligned = self._report(method, q2, q3)
+            self.assertEqual(cut, 0.5)
+            self.assertEqual([r["raw_column"] for r in rows], raws)
+            self.assertEqual([r["matched_from"] for r in rows], ["C1", "C2", "new"])
+            self.assertEqual(rows[0]["similarity"], rows[0]["pearson"])
+            self.assertEqual(rows[2]["split_parent"], parent)
+            self.assertEqual(rows[2]["runner_up"], "C2" if parent == "C1" else "C1")
+            self.assertEqual(rows[0]["runner_up"], "")
+            self.assertEqual(rows[2]["low_confidence"], "NA")
+        rows, _cut, _a = self._report("greedy", q2, q3)
+        self.assertEqual(rows[1]["low_confidence"], "yes")  # r = -0.11
+        self.assertEqual(rows[0]["top_groups_mean"].split(";")[0], "A:1.000")
+
+    def test_report_split_parent_share(self):
+        prev = np.array([[1.0, 0.0], [0.5, 0.5], [0.0, 1.0]])
+        c, share, ru, ru_share = qbar.split_parent_of(prev, np.array([0.0, 1.0, 1.0]), np.ones(3, dtype=bool))
+        self.assertEqual((c, ru), (1, 0))
+        self.assertAlmostEqual(share, 0.75)
+        self.assertAlmostEqual(ru_share, 0.25)
+        # tie goes to the lower column
+        c, share, ru, ru_share = qbar.split_parent_of(prev, np.array([0.0, 1.0, 0.0]), np.ones(3, dtype=bool))
+        self.assertEqual((c, ru, share, ru_share), (0, 1, 0.5, 0.5))
+
+    def test_report_zero_new_column_is_na(self):
+        prev = np.array([[1.0, 0.0], [0.0, 1.0]])
+        self.assertEqual(qbar.split_parent_of(prev, np.zeros(2), np.ones(2, dtype=bool)), (None, None, None, None))
+        n = 30
+        q2 = np.zeros((n, 2))
+        q2[:15, 0] = 1.0
+        q2[15:, 1] = 1.0
+        q3 = np.zeros((n, 3))
+        q3[:15, 0] = 1.0
+        q3[15:, 1] = 1.0
+        for method in qbar.ALIGN_METHODS:
+            rows, _cut, _a = self._report(method, q2, q3)
+            new = rows[2]
+            self.assertEqual(new["matched_from"], "new")
+            self.assertEqual((new["split_parent"], new["parent_share"], new["runner_up"], new["runner_up_share"]),
+                             ("NA", "NA", "NA", "NA"), method)
+
+    def test_report_txt_zero_new_column_prints_na(self):
+        n = 30
+        q2 = np.zeros((n, 2))
+        q2[:15, 0] = 1.0
+        q2[15:, 1] = 1.0
+        q3 = np.zeros((n, 3))
+        q3[:15, 0] = 1.0
+        q3[15:, 1] = 1.0
+        groups = ["A"] * 10 + ["B"] * 10 + ["C"] * (n - 20)
+        for method in qbar.ALIGN_METHODS:
+            aligned, perm, meta = qbar.align_qs({2: q2, 3: q3}, groups, "", "all", [], 0.75, True, method)
+            with tempfile.TemporaryDirectory() as d:
+                qbar.write_align_report(d, aligned, meta, groups, method, perm)
+                with open(os.path.join(d, "align_report.txt")) as f:
+                    line = [x for x in f if " new, split from " in x][0]
+            self.assertIn("C3 new, split from NA (parent share NA; runner-up NA NA)", line, method)
+
+    def test_report_pong_uses_split_pair(self):
+        q2, q3, _ = self._split_case()
+        rows, cut, _a = self._report("pong", q2, q3)
+        self.assertEqual(cut, 0.8)
+        self.assertEqual(rows[2]["split_parent"], "C2")
+        self.assertEqual(rows[2]["parent_share"], "1.000")
+        self.assertEqual((rows[2]["runner_up"], rows[2]["runner_up_share"]), ("C1", "0.000"))
+        self.assertEqual(rows[0]["similarity"], "1.000")
+        self.assertEqual(rows[2]["top_groups_dominant"], "B:10")
+
+    def test_report_jaccard_and_low_override(self):
+        q2, q3, _ = self._greedy_vs_hungarian_case()
+        rows, cut, _a = self._report("jaccard", q2, q3, low=0.6)
+        self.assertEqual(cut, 0.6)
+        self.assertEqual([r["low_confidence"] for r in rows], ["yes", "no", "NA"])
+        self.assertNotEqual(rows[0]["similarity"], rows[0]["pearson"])
+
+    def test_cli_report_is_opt_in(self):
+        q2, q3, _ = self._greedy_vs_hungarian_case()
+        with tempfile.TemporaryDirectory() as tmp:
+            for k, q in ((2, q2), (3, q3)):
+                np.savetxt(os.path.join(tmp, "t.%d.Q" % k), q, fmt="%.6f")
+            ids = os.path.join(tmp, "ids.txt")
+            with open(ids, "w") as f:
+                f.write("".join("s%d\n" % i for i in range(30)))
+            base = ["--q", os.path.join(tmp, "t.2.Q"), os.path.join(tmp, "t.3.Q"), "--ids", ids]
+            qbar.main(base + ["--outdir", os.path.join(tmp, "a")])
+            self.assertFalse(os.path.exists(os.path.join(tmp, "a", "align_report.tsv")))
+            for m in qbar.ALIGN_METHODS:
+                out = os.path.join(tmp, m)
+                qbar.main(base + ["--align-method", m, "--align-report", "--outdir", out])
+                with open(os.path.join(out, "align_report.tsv")) as f:
+                    lines = f.read().splitlines()
+                self.assertEqual(lines[0].split("\t"), list(qbar.REPORT_COLS))
+                self.assertEqual(len(lines), 4)
+                with open(os.path.join(out, "align_report.txt")) as f:
+                    txt = f.read()
+                self.assertIn("method: %s" % m, txt)
+                self.assertIn("K=2 -> K=3", txt)
+                self.assertIn("runner-up", txt)
+
+    def _hc_q(self):
+        rng = np.random.default_rng(3)
+        return rng.dirichlet(np.ones(3) * 0.4, size=25)
+
+    def test_hclust_default_matches_scipy_average_correlation(self):
+        from scipy.cluster.hierarchy import leaves_list, linkage
+        q = self._hc_q()
+        self.assertEqual(qbar.hclust_order(q), [int(x) for x in leaves_list(linkage(q, "average", "correlation"))])
+        self.assertEqual(qbar.hclust_block_order(q), qbar.hclust_order(q))
+
+    def test_hclust_dist_and_linkage_follow_scipy(self):
+        from scipy.cluster.hierarchy import leaves_list, linkage
+        q = self._hc_q()
+        for dist, link in (("euclidean", "average"), ("braycurtis", "complete"), ("euclidean", "ward"),
+                           ("correlation", "complete")):
+            want = [int(x) for x in leaves_list(linkage(q, link, dist))]
+            self.assertEqual(qbar.hclust_order(q, dist, link), want)
+        self.assertNotEqual(qbar.hclust_order(q, "euclidean", "ward"), qbar.hclust_order(q))
+
+    def test_ward_needs_euclidean(self):
+        for dist in ("correlation", "braycurtis"):
+            with self.assertRaises(SystemExit) as cm:
+                qbar.hclust_order(self._hc_q(), dist, "ward")
+            self.assertIn("euclidean", str(cm.exception.code))
+        with self.assertRaises(SystemExit):
+            qbar.main(["--q", "x.Q", "--hclust-linkage", "ward", "--outdir", "o"])
+
+    def test_hclust_olo_matches_scipy(self):
+        from scipy.cluster.hierarchy import leaves_list, linkage, optimal_leaf_ordering
+        from scipy.spatial.distance import pdist
+        q = self._hc_q()
+        z = optimal_leaf_ordering(linkage(q, "average", "correlation"), pdist(q, "correlation"))
+        got = qbar.hclust_order(q, olo=True)
+        self.assertEqual(got, [int(x) for x in leaves_list(z)])
+        self.assertEqual(sorted(got), list(range(25)))
+
+    def test_hclust_pre_dominant_keeps_blocks_contiguous(self):
+        q = self._hc_q()
+        order = qbar.hclust_block_order(q, pre="dominant")
+        tops = [int(q[i].argmax()) for i in order]
+        self.assertEqual(tops, sorted(tops))
+        self.assertEqual(sorted(order), list(range(25)))
+        for c in range(3):
+            ii = [i for i in range(25) if q[i].argmax() == c]
+            sub = [ii[j] for j in qbar.hclust_order(q[ii])]
+            self.assertEqual([i for i in order if q[i].argmax() == c], sub)
+
+    def test_hclust_order_is_the_same_for_every_k(self):
+        # row i carries i in a tiny offset of column 1 so each drawn row can be identified
+        n = 24
+        rng = np.random.default_rng(5)
+        seen = {}
+        real = qbar.ancestry_image
+
+        def spy(q, hexes, height):
+            seen[q.shape[1]] = [int(round(x)) for x in q[:, -1] * 1e6 % 1000]
+            return real(q, hexes, height)
+
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = []
+            for k in (2, 3, 4):
+                q = rng.dirichlet(np.ones(k), size=n)
+                q[:, -1] = np.floor(q[:, -1] * 1000) / 1000 + np.arange(n) * 1e-6
+                path = os.path.join(tmp, "t.%d.Q" % k)
+                np.savetxt(path, q, fmt="%.9f")
+                paths.append(path)
+            ids = os.path.join(tmp, "ids.txt")
+            with open(ids, "w") as f:
+                f.write("".join("s%02d\n" % i for i in range(n)))
+            out = os.path.join(tmp, "o")
+            with mock.patch.object(qbar, "ancestry_image", side_effect=spy):
+                qbar.main(["--q"] + paths + ["--ids", ids, "--no-align", "--within", "hclust",
+                           "--hclust-dist", "euclidean", "--hclust-linkage", "ward", "--hclust-olo",
+                           "--hclust-pre", "dominant", "--hclust-k", "3", "--outdir", out])
+            with open(os.path.join(out, "order.tsv")) as f:
+                want = [int(l.split("\t")[1][1:]) for l in f.read().splitlines()[1:]]
+        self.assertEqual(sorted(seen), [2, 3, 4])
+        for k in (2, 3, 4):
+            self.assertEqual(seen[k], want)
+
     def test_gap_in_k_refuses_align(self):
         q = {
             2: np.array([[1.0, 0.0], [0.0, 1.0]]),
