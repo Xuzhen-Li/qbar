@@ -882,7 +882,7 @@ def build_parser():
     p.add_argument("--align-method", choices=ALIGN_METHODS, default="greedy",
                    help="greedy=按列顺序逐列取 Pearson 最高的未用列（默认）。hungarian=Pearson 总和最大的一一匹配。pong=允许上一 K 的一列拆成两列（Behr 2016），align.tsv 第三列为 pong 相似度并多一列 split_parent。jaccard=按人的集合算 Jaccard 后一一匹配，见 --jaccard-set")
     p.add_argument("--jaccard-set", choices=JACCARD_SETS, default="dominant",
-                   help="jaccard 用的集合：dominant=该列是此人最高的列；threshold=此人该列 >= --jaccard-cut")
+                   help="jaccard 用的集合：dominant=该列是此人最高的列；threshold=此人该列 >= --jaccard-cut。默认 dominant")
     p.add_argument("--jaccard-cut", type=float, default=0.5, help="threshold 集合的阈值。默认 0.5")
     p.add_argument("--align-groups", default="", help="参与对齐的组，逗号分隔。core 模式必填")
     p.add_argument("--qmax", type=float, default=0.75, help="core 模式的 qmax 阈值。默认 0.75")
