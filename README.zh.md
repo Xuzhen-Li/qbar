@@ -22,7 +22,7 @@ python3 -m venv .venv
 python3 -m pip install -r requirements.txt
 ```
 
-本工具已在 Python 3.13.5、`numpy` 2.5.4、`Pillow` 12.3.0 和 `scipy` 1.18.1 环境下完成测试。你可以运行以下命令进行自检，共有 43 项测试通过：
+本工具已在 Python 3.13.5、`numpy` 2.5.4、`Pillow` 12.3.0 和 `scipy` 1.18.1 环境下完成测试。你可以运行以下命令进行自检，共有 44 项测试通过：
 
 ```bash
 python3 test_qbar.py

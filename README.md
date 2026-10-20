@@ -28,7 +28,7 @@ qbar was tested on Python 3.13.5, numpy 2.5.4, Pillow 12.3.0, and scipy 1.18.1. 
 python3 test_qbar.py
 ```
 
-43 tests pass. New features do not change defaults: with no new options, results are the same as before.
+44 tests pass. New features do not change defaults: with no new options, results are the same as before.
 
 ## Input files
 
