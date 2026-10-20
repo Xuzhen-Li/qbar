@@ -398,7 +398,10 @@ def match_next_hungarian(q_prev, q_new, mask):
     Solved with scipy.optimize.linear_sum_assignment(maximize=True).
     The one unassigned new column is put last.
     """
-    from scipy.optimize import linear_sum_assignment
+    try:
+        from scipy.optimize import linear_sum_assignment
+    except ImportError as exc:
+        raise SystemExit("--align-method hungarian 需要 scipy（scipy.optimize）") from exc
     k_old = q_prev.shape[1]
     k_new = q_new.shape[1]
     if k_new != k_old + 1:

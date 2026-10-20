@@ -10,6 +10,8 @@
 
 本工具需要 Python 3、numpy 与 Pillow。仅当启用 `hclust` 排序时需要 scipy。
 
+[[TODO-TEXT-ZH: same facts as the English Install scipy slot, in Chinese]]
+
 创建虚拟环境并安装依赖：
 
 ```bash
@@ -214,6 +216,8 @@ python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_p
 
 - `hclust 需要 scipy（scipy.cluster.hierarchy）`
   当前环境没有 scipy 库，使用 pip 安装。
+
+[[TODO-TEXT-ZH: same facts as the English common-error hungarian/scipy slot, in Chinese]]
 
 ## 引文
 
