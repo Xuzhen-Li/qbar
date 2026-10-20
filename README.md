@@ -164,6 +164,8 @@ Sample sorting logic within groups is controlled by the `--within` parameter:
 - `iid`: Sort alphabetically by individual ID. This is the default.
 - `q`: Sort in descending order based on the highest ancestry component proportion of the individual within their current group.
 - `hclust`: Perform within-group hierarchical clustering. The algorithm uses average linkage and a distance metric of 1 minus the Pearson correlation coefficient, equivalent to scipy's `linkage(method="average", metric="correlation")` ([documentation](https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.hierarchy.linkage.html)).
+
+[[TODO-TEXT: new options for within-group hclust (apply wherever hclust is used: --within hclust or --within-group X=hclust); --hclust-dist correlation (default, 1 - Pearson, current behaviour) | euclidean | braycurtis; --hclust-linkage average (default) | ward | complete; ward requires --hclust-dist euclidean, otherwise exit with `--hclust-linkage ward 需要 --hclust-dist euclidean，收到 <dist>` (checked at start, even if no group uses hclust); --hclust-olo reorders leaves with scipy.cluster.hierarchy.optimal_leaf_ordering using the same distance (off by default); --hclust-pre dominant (default none) first splits each group by each person's highest column (ties to the lower column), blocks in column order C1, C2, ..., then runs hclust inside each block; all computed on one K (--hclust-k, default --sort-k, default the largest K) and that one sample order is used for every K, so order is the same across K (tested); defaults reproduce the previous order exactly (demo/2448 README hclust and quick-start commands: outputs byte-identical to main apart from PDF timestamps); on demo/2448 K2-6 with --within hclust each new option changes the order (rows in a different position out of 2448: euclidean 2417, braycurtis 2424, ward 2419, complete 2423, olo 2391, pre dominant 1516); docs: scipy linkage https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.hierarchy.linkage.html, optimal_leaf_ordering https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.hierarchy.optimal_leaf_ordering.html; olo method: Bar-Joseph Z, Gifford DK, Jaakkola TS. Fast optimal leaf ordering for hierarchical clustering. Bioinformatics 2001;17 Suppl 1:S22-S29 (cited by scipy docs; verify DOI before use)]]
 - `input`: Keep the original sample row order from the input Q matrix file.
 
 To apply a different sorting strategy to a specific group, use the `--within-group` parameter (e.g., `--within-group NA=hclust`). This parameter can be declared multiple times.
@@ -224,6 +226,8 @@ Ancestry component plot colors can be specified via parameters, formatted as `--
   Install scipy to use `--within hclust`.
 
 [[TODO-TEXT: new common error `--align-method hungarian 需要 scipy（scipy.optimize）`: printed and exit when --align-method hungarian is used without scipy installed; fix = pip install scipy (in requirements.txt) or use the default greedy; likewise `--align-method pong 需要 scipy（scipy.optimize）` for --align-method pong without scipy, same fix; and `--align-method jaccard 需要 scipy（scipy.optimize）` for --align-method jaccard, same fix]]
+
+[[TODO-TEXT: new common error `--hclust-linkage ward 需要 --hclust-dist euclidean，收到 correlation`: ward linkage only works with euclidean distance; fix = add --hclust-dist euclidean or pick average/complete]]
 
 ## Citation
 

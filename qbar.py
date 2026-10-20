@@ -219,24 +219,62 @@ def check_shapes(q_by_k, n):
             print("注意：K=%d 有 %d 行人的组分和离 1 超过 0.05，图上多出来的部分留白" % (k, len(bad)), file=sys.stderr)
 
 
-def hclust_order(q):
+HCLUST_DIST = ("correlation", "euclidean", "braycurtis")
+HCLUST_LINK = ("average", "ward", "complete")
+HCLUST_PRE = ("none", "dominant")
+
+
+def check_hclust_opts(dist, link):
+    if dist not in HCLUST_DIST:
+        raise SystemExit("--hclust-dist 只能是 %s" % "/".join(HCLUST_DIST))
+    if link not in HCLUST_LINK:
+        raise SystemExit("--hclust-linkage 只能是 %s" % "/".join(HCLUST_LINK))
+    if link == "ward" and dist != "euclidean":
+        raise SystemExit("--hclust-linkage ward 需要 --hclust-dist euclidean，收到 %s" % dist)
+
+
+def hclust_order(q, dist="correlation", link="average", olo=False):
+    check_hclust_opts(dist, link)
     q = np.asarray(q, dtype=float)
     if q.ndim != 2 or q.shape[0] < 2:
         return list(range(q.shape[0]))
     try:
-        from scipy.cluster.hierarchy import leaves_list, linkage
+        from scipy.cluster.hierarchy import leaves_list, linkage, optimal_leaf_ordering
+        from scipy.spatial.distance import pdist
     except ImportError as exc:
         raise SystemExit("hclust 需要 scipy（scipy.cluster.hierarchy）") from exc
     work = q.copy()
-    std = work.std(axis=1)
-    for i in np.where(std == 0.0)[0]:
-        work[i, 0] += 1e-12
+    if dist == "correlation":
+        std = work.std(axis=1)
+        for i in np.where(std == 0.0)[0]:
+            work[i, 0] += 1e-12
     import warnings
     from scipy.cluster.hierarchy import ClusterWarning
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=ClusterWarning)
-        z = linkage(work, method="average", metric="correlation")
+        z = linkage(work, method=link, metric=dist)
+        if olo:
+            z = optimal_leaf_ordering(z, pdist(work, metric=dist))
     return [int(x) for x in leaves_list(z)]
+
+
+def hclust_block_order(q, dist="correlation", link="average", olo=False, pre="none"):
+    """pre=dominant: split rows by their highest column (lowest index on ties), blocks in
+    column order C1, C2, ...; hclust inside each block."""
+    q = np.asarray(q, dtype=float)
+    if pre == "none":
+        return hclust_order(q, dist, link, olo)
+    if pre != "dominant":
+        raise SystemExit("--hclust-pre 只能是 %s" % "/".join(HCLUST_PRE))
+    top = q.argmax(axis=1)
+    out = []
+    for c in range(q.shape[1]):
+        ii = [int(i) for i in np.where(top == c)[0]]
+        if len(ii) >= 2:
+            out.extend(ii[j] for j in hclust_order(q[ii], dist, link, olo))
+        else:
+            out.extend(ii)
+    return out
 
 
 def order_from_file(path, iids):
@@ -276,7 +314,7 @@ def order_from_file(path, iids):
     return order
 
 
-def sort_block(idxs, mode, iids, q, sort_col):
+def sort_block(idxs, mode, iids, q, sort_col, hc=None):
     idxs = list(idxs)
     if mode == "input":
         return idxs
@@ -293,12 +331,13 @@ def sort_block(idxs, mode, iids, q, sort_col):
     if mode == "hclust":
         if q is None or len(idxs) < 2:
             return idxs
-        sub = hclust_order(q[idxs])
+        sub = hclust_block_order(q[idxs], **(hc or {}))
         return [idxs[j] for j in sub]
     raise SystemExit("未知的组内排序：%s" % mode)
 
 
-def build_order(iids, groups, blocks, within, within_group, rest_name, q_sort, q_hclust, sort_col, order_file):
+def build_order(iids, groups, blocks, within, within_group, rest_name, q_sort, q_hclust, sort_col, order_file,
+                hc=None):
     if order_file:
         order = order_from_file(order_file, iids)
         return order, spans_of(order, groups)
@@ -323,7 +362,7 @@ def build_order(iids, groups, blocks, within, within_group, rest_name, q_sort, q
         # --sort-col forces one column for every q-sorted block.
         # Without it, each block sorts on its own majority column.
         col = sort_col - 1 if (mode == "q" and sort_col) else None
-        order.extend(sort_block(idxs, mode, iids, q, col))
+        order.extend(sort_block(idxs, mode, iids, q, col, hc))
     if len(order) != len(iids) or len(set(order)) != len(iids):
         raise SystemExit("排序结果不是全体样本的一个排列")
     return order, spans_of(order, groups)
@@ -973,6 +1012,14 @@ def build_parser():
     p.add_argument("--sort-k", type=int, help="按组分排序时用哪个 K。默认最大的 K")
     p.add_argument("--sort-col", type=int, help="所有按 q 排序的组都用这一列（从 1 数）。不给就每组用自己占比最高的列")
     p.add_argument("--hclust-k", type=int, help="hclust 用哪个 K。默认与 --sort-k 相同")
+    p.add_argument("--hclust-dist", choices=HCLUST_DIST, default="correlation",
+                   help="hclust 距离。默认 correlation（1−Pearson）")
+    p.add_argument("--hclust-linkage", choices=HCLUST_LINK, default="average",
+                   help="hclust 连锁法。默认 average。ward 只能配 euclidean")
+    p.add_argument("--hclust-pre", choices=HCLUST_PRE, default="none",
+                   help="dominant=组内先按每人最高的列分小块（C1、C2…顺序），块内再 hclust。默认 none")
+    p.add_argument("--hclust-olo", action="store_true",
+                   help="叶序用 scipy optimal_leaf_ordering")
     p.add_argument("--align", dest="align", action="store_true")
     p.add_argument("--no-align", dest="align", action="store_false")
     p.set_defaults(align=None)
@@ -1001,6 +1048,7 @@ def build_parser():
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    check_hclust_opts(args.hclust_dist, args.hclust_linkage)
     files = collect_q(args.q)
     q_by_k, src = load_q_set(files)
     iids = load_ids(args.fam, args.ids)
@@ -1031,6 +1079,7 @@ def main(argv=None):
     order, spans = build_order(
         iids, groups, blocks, args.within, within_group, args.rest_name,
         aligned[sort_k], aligned[hclust_k], args.sort_col, args.order_file,
+        {"dist": args.hclust_dist, "link": args.hclust_linkage, "olo": args.hclust_olo, "pre": args.hclust_pre},
     )
     rank = {name: i for i, name in enumerate(blocks)}
     group_color, col_color = parse_colors(args.color, args.color_file)

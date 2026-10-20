@@ -164,6 +164,8 @@ python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_p
 - `iid`：按个体 ID 字母顺序排列。默认模式。
 - `q`：根据最高祖先成分比例降序排列。
 - `hclust`：进行组内层次聚类。算法采用平均连锁，距离度量为 1 减去 Pearson 相关系数，等效于 scipy 的 `linkage(method="average", metric="correlation")`（[文档](https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.hierarchy.linkage.html)）。
+
+[[TODO-TEXT-ZH: same facts as the English hclust options slot, in Chinese]]
 - `input`：保持原输入 Q 矩阵行序。
 
 需对特定群体采用不同排序，使用 `--within-group` 单独指定（例如 `--within-group NA=hclust`），支持多次声明。
@@ -224,6 +226,8 @@ python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_p
   当前环境没有 scipy 库，使用 pip 安装。
 
 [[TODO-TEXT-ZH: same facts as the English common-error hungarian/pong/jaccard scipy slot, in Chinese]]
+
+[[TODO-TEXT-ZH: same facts as the English common-error ward slot, in Chinese]]
 
 ## 引文
 

@@ -396,6 +396,87 @@ class AlignTests(unittest.TestCase):
                 self.assertIn("method: %s" % m, txt)
                 self.assertIn("K=2 -> K=3", txt)
 
+    def _hc_q(self):
+        rng = np.random.default_rng(3)
+        return rng.dirichlet(np.ones(3) * 0.4, size=25)
+
+    def test_hclust_default_matches_scipy_average_correlation(self):
+        from scipy.cluster.hierarchy import leaves_list, linkage
+        q = self._hc_q()
+        self.assertEqual(qbar.hclust_order(q), [int(x) for x in leaves_list(linkage(q, "average", "correlation"))])
+        self.assertEqual(qbar.hclust_block_order(q), qbar.hclust_order(q))
+
+    def test_hclust_dist_and_linkage_follow_scipy(self):
+        from scipy.cluster.hierarchy import leaves_list, linkage
+        q = self._hc_q()
+        for dist, link in (("euclidean", "average"), ("braycurtis", "complete"), ("euclidean", "ward"),
+                           ("correlation", "complete")):
+            want = [int(x) for x in leaves_list(linkage(q, link, dist))]
+            self.assertEqual(qbar.hclust_order(q, dist, link), want)
+        self.assertNotEqual(qbar.hclust_order(q, "euclidean", "ward"), qbar.hclust_order(q))
+
+    def test_ward_needs_euclidean(self):
+        for dist in ("correlation", "braycurtis"):
+            with self.assertRaises(SystemExit) as cm:
+                qbar.hclust_order(self._hc_q(), dist, "ward")
+            self.assertIn("euclidean", str(cm.exception.code))
+        with self.assertRaises(SystemExit):
+            qbar.main(["--q", "x.Q", "--hclust-linkage", "ward", "--outdir", "o"])
+
+    def test_hclust_olo_matches_scipy(self):
+        from scipy.cluster.hierarchy import leaves_list, linkage, optimal_leaf_ordering
+        from scipy.spatial.distance import pdist
+        q = self._hc_q()
+        z = optimal_leaf_ordering(linkage(q, "average", "correlation"), pdist(q, "correlation"))
+        got = qbar.hclust_order(q, olo=True)
+        self.assertEqual(got, [int(x) for x in leaves_list(z)])
+        self.assertEqual(sorted(got), list(range(25)))
+
+    def test_hclust_pre_dominant_keeps_blocks_contiguous(self):
+        q = self._hc_q()
+        order = qbar.hclust_block_order(q, pre="dominant")
+        tops = [int(q[i].argmax()) for i in order]
+        self.assertEqual(tops, sorted(tops))
+        self.assertEqual(sorted(order), list(range(25)))
+        for c in range(3):
+            ii = [i for i in range(25) if q[i].argmax() == c]
+            sub = [ii[j] for j in qbar.hclust_order(q[ii])]
+            self.assertEqual([i for i in order if q[i].argmax() == c], sub)
+
+    def test_hclust_order_is_the_same_for_every_k(self):
+        # row i carries i in a tiny offset of column 1 so each drawn row can be identified
+        n = 24
+        rng = np.random.default_rng(5)
+        seen = {}
+        real = qbar.ancestry_image
+
+        def spy(q, hexes, height):
+            seen[q.shape[1]] = [int(round(x)) for x in q[:, -1] * 1e6 % 1000]
+            return real(q, hexes, height)
+
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = []
+            for k in (2, 3, 4):
+                q = rng.dirichlet(np.ones(k), size=n)
+                q[:, -1] = np.floor(q[:, -1] * 1000) / 1000 + np.arange(n) * 1e-6
+                path = os.path.join(tmp, "t.%d.Q" % k)
+                np.savetxt(path, q, fmt="%.9f")
+                paths.append(path)
+            ids = os.path.join(tmp, "ids.txt")
+            with open(ids, "w") as f:
+                f.write("".join("s%02d\n" % i for i in range(n)))
+            out = os.path.join(tmp, "o")
+            with mock.patch.object(qbar, "ancestry_image", side_effect=spy):
+                qbar.main(["--q"] + paths + ["--ids", ids, "--no-align", "--within", "hclust",
+                           "--hclust-dist", "euclidean", "--hclust-linkage", "ward", "--hclust-olo",
+                           "--hclust-pre", "dominant", "--hclust-k", "3", "--outdir", out])
+            with open(os.path.join(out, "order.tsv")) as f:
+                want = [int(l.split("\t")[1][1:]) for l in f.read().splitlines()[1:]]
+        self.assertEqual(sorted(seen), [2, 3, 4])
+        for k in (2, 3, 4):
+            self.assertEqual(seen[k], want)
+
     def test_gap_in_k_refuses_align(self):
         q = {
             2: np.array([[1.0, 0.0], [0.0, 1.0]]),
