@@ -346,6 +346,8 @@ class AlignTests(unittest.TestCase):
             self.assertEqual([r["matched_from"] for r in rows], ["C1", "C2", "new"])
             self.assertEqual(rows[0]["similarity"], rows[0]["pearson"])
             self.assertEqual(rows[2]["split_parent"], parent)
+            self.assertEqual(rows[2]["runner_up"], "C2" if parent == "C1" else "C1")
+            self.assertEqual(rows[0]["runner_up"], "")
             self.assertEqual(rows[2]["low_confidence"], "NA")
         rows, _cut, _a = self._report("greedy", q2, q3)
         self.assertEqual(rows[1]["low_confidence"], "yes")  # r = -0.11
@@ -353,9 +355,30 @@ class AlignTests(unittest.TestCase):
 
     def test_report_split_parent_share(self):
         prev = np.array([[1.0, 0.0], [0.5, 0.5], [0.0, 1.0]])
-        c, share = qbar.split_parent_of(prev, np.array([0.0, 1.0, 1.0]), np.ones(3, dtype=bool))
-        self.assertEqual(c, 1)
+        c, share, ru, ru_share = qbar.split_parent_of(prev, np.array([0.0, 1.0, 1.0]), np.ones(3, dtype=bool))
+        self.assertEqual((c, ru), (1, 0))
         self.assertAlmostEqual(share, 0.75)
+        self.assertAlmostEqual(ru_share, 0.25)
+        # tie goes to the lower column
+        c, share, ru, ru_share = qbar.split_parent_of(prev, np.array([0.0, 1.0, 0.0]), np.ones(3, dtype=bool))
+        self.assertEqual((c, ru, share, ru_share), (0, 1, 0.5, 0.5))
+
+    def test_report_zero_new_column_is_na(self):
+        prev = np.array([[1.0, 0.0], [0.0, 1.0]])
+        self.assertEqual(qbar.split_parent_of(prev, np.zeros(2), np.ones(2, dtype=bool)), (None, None, None, None))
+        n = 30
+        q2 = np.zeros((n, 2))
+        q2[:15, 0] = 1.0
+        q2[15:, 1] = 1.0
+        q3 = np.zeros((n, 3))
+        q3[:15, 0] = 1.0
+        q3[15:, 1] = 1.0
+        for method in qbar.ALIGN_METHODS:
+            rows, _cut, _a = self._report(method, q2, q3)
+            new = rows[2]
+            self.assertEqual(new["matched_from"], "new")
+            self.assertEqual((new["split_parent"], new["parent_share"], new["runner_up"], new["runner_up_share"]),
+                             ("NA", "NA", "NA", "NA"), method)
 
     def test_report_pong_uses_split_pair(self):
         q2, q3, _ = self._split_case()
@@ -363,6 +386,7 @@ class AlignTests(unittest.TestCase):
         self.assertEqual(cut, 0.8)
         self.assertEqual(rows[2]["split_parent"], "C2")
         self.assertEqual(rows[2]["parent_share"], "1.000")
+        self.assertEqual((rows[2]["runner_up"], rows[2]["runner_up_share"]), ("C1", "0.000"))
         self.assertEqual(rows[0]["similarity"], "1.000")
         self.assertEqual(rows[2]["top_groups_dominant"], "B:10")
 
@@ -395,6 +419,7 @@ class AlignTests(unittest.TestCase):
                     txt = f.read()
                 self.assertIn("method: %s" % m, txt)
                 self.assertIn("K=2 -> K=3", txt)
+                self.assertIn("runner-up", txt)
 
     def _hc_q(self):
         rng = np.random.default_rng(3)

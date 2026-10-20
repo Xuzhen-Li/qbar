@@ -187,7 +187,7 @@ python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_p
 
 [[TODO-TEXT-ZH: same facts as the English --align-method jaccard slot, in Chinese, incl. the CLUMPAK/CLUMPP contrast (Kopelman 2015 cited only as contrast) and that --anchor-group's component may leave C1 under jaccard (demo/2448 K10-K12)]]
 
-[[TODO-TEXT-ZH: same facts as the English --align-report slot, in Chinese; column names stay English]]
+[[TODO-TEXT-ZH: same facts as the English --align-report slot, in Chinese, incl. runner_up/runner_up_share, NA when the new column sums to 0, ties to the lower column, shares below ~0.5 only indicative, pong split pair vs largest share, 0.5/0.8 cuts are qbar's rules of thumb; column names stay English]]
 
 `--anchor-group WWE1` 参数用于在最低 K 值分析结果中，提取指定群体（如 WWE1）内祖先成分比例最高的个体的优势成分，并将其固定排列于图最底层（标记 C1）。
 
