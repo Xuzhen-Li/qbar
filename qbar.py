@@ -588,7 +588,7 @@ def align_qs(q_by_k, groups, anchor, mode, align_groups, qmax_cut, do_align, met
             p, rs = match_next(aligned[k], q_by_k[k + 1], mask, method)
         perm[k + 1] = p
         aligned[k + 1] = q_by_k[k + 1][:, p]
-        meta[k + 1] = {"n_mask": int(mask.sum()), "pearson": rs}
+        meta[k + 1] = {"n_mask": int(mask.sum()), "pearson": rs, "mask": mask}
         if method == "pong":
             meta[k + 1]["split_parent"] = split["parent"]
             continue
@@ -838,6 +838,105 @@ def write_tables(outdir, iids, groups, order, spans, perm, owners, hexes, meta, 
                     f.write("%d\t%d\t%s\n" % (k, info["n_mask"], rs))
 
 
+REPORT_LOW = {"greedy": 0.5, "hungarian": 0.5, "pong": 0.8, "jaccard": 0.5}
+
+
+def parent_shares(q_prev, q_new_col, mask):
+    """share[c] = sum_i new_i * prev_ic / sum_i new_i over masked people."""
+    w = np.asarray(q_new_col, dtype=float)[mask]
+    tot = float(w.sum())
+    if tot <= 0.0:
+        return np.zeros(q_prev.shape[1])
+    return (w[:, None] * np.asarray(q_prev, dtype=float)[mask]).sum(axis=0) / tot
+
+
+def split_parent_of(q_prev, q_new_col, mask):
+    """Old column the new column's membership mostly came from (largest share). Returns (c, share)."""
+    shares = parent_shares(q_prev, q_new_col, mask)
+    c = int(np.argmax(shares))
+    return c, float(shares[c])
+
+
+def top_groups(q, groups, col, n=3):
+    mus = []
+    for g in sorted(set(groups)):
+        idx = [i for i, x in enumerate(groups) if x == g]
+        mus.append((float(q[idx, col].mean()), g))
+    mus.sort(key=lambda t: (-t[0], t[1]))
+    return mus[:n]
+
+
+def dominant_groups(q, groups, col, n=3):
+    top = q.argmax(axis=1)
+    counts = {}
+    for i, g in enumerate(groups):
+        if top[i] == col:
+            counts[g] = counts.get(g, 0) + 1
+    out = sorted(counts.items(), key=lambda t: (-t[1], t[0]))
+    return int((top == col).sum()), out[:n]
+
+
+def align_report_rows(aligned, meta, groups, method, perm, low=None):
+    cut = REPORT_LOW[method] if low is None else low
+    rows = []
+    for k_to in sorted(meta):
+        info = meta[k_to]
+        prev, new, mask = aligned[k_to - 1], aligned[k_to], info["mask"]
+        k_old = prev.shape[1]
+        for c in range(k_to):
+            row = {"K_to": k_to, "column": "C%d" % (c + 1), "raw_column": perm[k_to][c] + 1, "method": method}
+            if c < k_old:
+                sim = info["pearson"][c]
+                row.update(matched_from="C%d" % (c + 1), similarity="%.3f" % sim,
+                           pearson="%.3f" % col_pearson(prev[mask, c], new[mask, c]),
+                           split_parent="", parent_share="",
+                           low_confidence="yes" if sim < cut else "no")
+            else:
+                if method == "pong":
+                    pc = info["split_parent"]
+                    share = float(parent_shares(prev, new[:, c], mask)[pc])
+                else:
+                    pc, share = split_parent_of(prev, new[:, c], mask)
+                row.update(matched_from="new", similarity="NA", pearson="NA",
+                           split_parent="C%d" % (pc + 1), parent_share="%.3f" % share,
+                           low_confidence="NA")
+            n_dom, dom = dominant_groups(new, groups, c)
+            row["top_groups_mean"] = ";".join("%s:%.3f" % (g, mu) for mu, g in top_groups(new, groups, c))
+            row["n_dominant"] = n_dom
+            row["top_groups_dominant"] = ";".join("%s:%d" % (g, n) for g, n in dom)
+            rows.append(row)
+    return rows, cut
+
+
+REPORT_COLS = ("K_to", "column", "raw_column", "matched_from", "method", "similarity", "pearson", "low_confidence",
+               "split_parent", "parent_share", "top_groups_mean", "n_dominant", "top_groups_dominant")
+
+
+def write_align_report(outdir, aligned, meta, groups, method, perm, low=None):
+    rows, cut = align_report_rows(aligned, meta, groups, method, perm, low)
+    with open(os.path.join(outdir, "align_report.tsv"), "w") as f:
+        f.write("\t".join(REPORT_COLS) + "\n")
+        for r in rows:
+            f.write("\t".join(str(r[c]) for c in REPORT_COLS) + "\n")
+    measure = {"greedy": "Pearson r", "hungarian": "Pearson r", "pong": "pong similarity", "jaccard": "Jaccard"}[method]
+    with open(os.path.join(outdir, "align_report.txt"), "w") as f:
+        f.write("Alignment report\nmethod: %s (similarity = %s)\nlow confidence: similarity < %g\n" % (method, measure, cut))
+        f.write("split parent: %s\n" % ("pong split pair" if method == "pong" else
+                "K-1 column with the largest membership-weighted mean over the new column"))
+        for k_to in sorted(meta):
+            f.write("\nK=%d -> K=%d (people used: %d)\n" % (k_to - 1, k_to, meta[k_to]["n_mask"]))
+            for r in [r for r in rows if r["K_to"] == k_to]:
+                if r["matched_from"] == "new":
+                    f.write("  %s new, split from %s (parent share %s); top groups: %s\n"
+                            % (r["column"], r["split_parent"], r["parent_share"], r["top_groups_mean"]))
+                else:
+                    ref = "" if measure == "Pearson r" else ", Pearson r %s" % r["pearson"]
+                    f.write("  %s <- %s  %s %s%s%s; top groups: %s\n"
+                            % (r["column"], r["matched_from"], measure, r["similarity"], ref,
+                               "  LOW CONFIDENCE" if r["low_confidence"] == "yes" else "", r["top_groups_mean"]))
+    return rows
+
+
 def parse_within(items):
     out = {}
     for item in items or []:
@@ -884,6 +983,10 @@ def build_parser():
     p.add_argument("--jaccard-set", choices=JACCARD_SETS, default="dominant",
                    help="jaccard 用的集合：dominant=该列是此人最高的列；threshold=此人该列 >= --jaccard-cut。默认 dominant")
     p.add_argument("--jaccard-cut", type=float, default=0.5, help="threshold 集合的阈值。默认 0.5")
+    p.add_argument("--align-report", action="store_true",
+                   help="另写 align_report.tsv 和 align_report.txt")
+    p.add_argument("--align-report-low", type=float,
+                   help="低置信阈值。默认 greedy/hungarian/jaccard 0.5，pong 0.8")
     p.add_argument("--align-groups", default="", help="参与对齐的组，逗号分隔。core 模式必填")
     p.add_argument("--qmax", type=float, default=0.75, help="core 模式的 qmax 阈值。默认 0.75")
     p.add_argument("--anchor-group", default="", help="最低 K 把这个组最纯的人的主列放到 C1")
@@ -959,6 +1062,8 @@ def main(argv=None):
         render(panel, rows, spans, args.width, bar_h, args.title)
         print(panel)
     write_tables(args.outdir, iids, groups, order, spans, perm, owners, hexes, meta, aligned)
+    if args.align_report and meta:
+        write_align_report(args.outdir, aligned, meta, groups, args.align_method, perm, args.align_report_low)
     with open(os.path.join(args.outdir, "args.txt"), "w") as f:
         f.write(" ".join(sys.argv if argv is None else ["qbar"] + list(argv)) + "\n")
         for k in ks:

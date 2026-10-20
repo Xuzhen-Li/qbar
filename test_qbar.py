@@ -331,6 +331,71 @@ class AlignTests(unittest.TestCase):
         args = qbar.build_parser().parse_args(["--q", "x.Q", "--outdir", "o"])
         self.assertEqual((args.jaccard_set, args.jaccard_cut), ("dominant", 0.5))
 
+    def _report(self, method, q2, q3, low=None):
+        groups = ["A"] * 10 + ["B"] * 10 + ["C"] * (q2.shape[0] - 20)
+        aligned, perm, meta = qbar.align_qs({2: q2, 3: q3}, groups, "", "all", [], 0.75, True, method)
+        rows, cut = qbar.align_report_rows(aligned, meta, groups, method, perm, low)
+        return rows, cut, aligned
+
+    def test_report_greedy_and_hungarian(self):
+        q2, q3, _ = self._greedy_vs_hungarian_case()
+        for method, raws, parent in (("greedy", [1, 3, 2], "C1"), ("hungarian", [2, 1, 3], "C2")):
+            rows, cut, aligned = self._report(method, q2, q3)
+            self.assertEqual(cut, 0.5)
+            self.assertEqual([r["raw_column"] for r in rows], raws)
+            self.assertEqual([r["matched_from"] for r in rows], ["C1", "C2", "new"])
+            self.assertEqual(rows[0]["similarity"], rows[0]["pearson"])
+            self.assertEqual(rows[2]["split_parent"], parent)
+            self.assertEqual(rows[2]["low_confidence"], "NA")
+        rows, _cut, _a = self._report("greedy", q2, q3)
+        self.assertEqual(rows[1]["low_confidence"], "yes")  # r = -0.11
+        self.assertEqual(rows[0]["top_groups_mean"].split(";")[0], "A:1.000")
+
+    def test_report_split_parent_share(self):
+        prev = np.array([[1.0, 0.0], [0.5, 0.5], [0.0, 1.0]])
+        c, share = qbar.split_parent_of(prev, np.array([0.0, 1.0, 1.0]), np.ones(3, dtype=bool))
+        self.assertEqual(c, 1)
+        self.assertAlmostEqual(share, 0.75)
+
+    def test_report_pong_uses_split_pair(self):
+        q2, q3, _ = self._split_case()
+        rows, cut, _a = self._report("pong", q2, q3)
+        self.assertEqual(cut, 0.8)
+        self.assertEqual(rows[2]["split_parent"], "C2")
+        self.assertEqual(rows[2]["parent_share"], "1.000")
+        self.assertEqual(rows[0]["similarity"], "1.000")
+        self.assertEqual(rows[2]["top_groups_dominant"], "B:10")
+
+    def test_report_jaccard_and_low_override(self):
+        q2, q3, _ = self._greedy_vs_hungarian_case()
+        rows, cut, _a = self._report("jaccard", q2, q3, low=0.6)
+        self.assertEqual(cut, 0.6)
+        self.assertEqual([r["low_confidence"] for r in rows], ["yes", "no", "NA"])
+        self.assertNotEqual(rows[0]["similarity"], rows[0]["pearson"])
+
+    def test_cli_report_is_opt_in(self):
+        q2, q3, _ = self._greedy_vs_hungarian_case()
+        with tempfile.TemporaryDirectory() as tmp:
+            for k, q in ((2, q2), (3, q3)):
+                np.savetxt(os.path.join(tmp, "t.%d.Q" % k), q, fmt="%.6f")
+            ids = os.path.join(tmp, "ids.txt")
+            with open(ids, "w") as f:
+                f.write("".join("s%d\n" % i for i in range(30)))
+            base = ["--q", os.path.join(tmp, "t.2.Q"), os.path.join(tmp, "t.3.Q"), "--ids", ids]
+            qbar.main(base + ["--outdir", os.path.join(tmp, "a")])
+            self.assertFalse(os.path.exists(os.path.join(tmp, "a", "align_report.tsv")))
+            for m in qbar.ALIGN_METHODS:
+                out = os.path.join(tmp, m)
+                qbar.main(base + ["--align-method", m, "--align-report", "--outdir", out])
+                with open(os.path.join(out, "align_report.tsv")) as f:
+                    lines = f.read().splitlines()
+                self.assertEqual(lines[0].split("\t"), list(qbar.REPORT_COLS))
+                self.assertEqual(len(lines), 4)
+                with open(os.path.join(out, "align_report.txt")) as f:
+                    txt = f.read()
+                self.assertIn("method: %s" % m, txt)
+                self.assertIn("K=2 -> K=3", txt)
+
     def test_gap_in_k_refuses_align(self):
         q = {
             2: np.array([[1.0, 0.0], [0.0, 1.0]]),
