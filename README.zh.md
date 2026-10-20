@@ -177,6 +177,8 @@ python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_p
 
 `--align-mode core` 模式仅保留相邻两个 K 值结果中，最大祖先成分比例均高于 `--qmax` 阈值（默认 0.75）的个体。若群体内不存在满足该条件的个体，选取较低 K 值结果中祖先成分比例最高的单一代表个体参与计算。启用 core 模式时必须同时声明 `--align-groups` 参数。
 
+[[TODO-TEXT-ZH: same facts as the English --align-method slot, in Chinese]]
+
 `--anchor-group WWE1` 参数用于在最低 K 值分析结果中，提取指定群体（如 WWE1）内祖先成分比例最高的个体的优势成分，并将其固定排列于图最底层（标记 C1）。
 
 祖先成分的颜色可通过参数指定，格式如 `--color WWE1=#4470b7` 或按列号指定 `--color C3=#112233`。每种祖先成分仅应用单一颜色。若不同群体指定了相同颜色，后续冲突群体自动分配新颜色。

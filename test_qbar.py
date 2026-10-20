@@ -113,6 +113,72 @@ class AlignTests(unittest.TestCase):
         mask = qbar.core_mask(q, q, groups, ["W", "E"], 0.75)
         self.assertEqual(mask.tolist(), [True, True, False, False, True])
 
+    def _greedy_vs_hungarian_case(self):
+        # raw K=3 columns are blocks A (rows 0-9), B (10-19), C (20-29).
+        # aligned K=2: C1 = A 1.0 + B 0.8; C2 = A 0.5 + C 0.2.
+        # r = [[0.65, 0.33, -0.98], [0.92, -0.80, -0.11]]
+        n = 30
+        q3 = np.zeros((n, 3))
+        q3[:10, 0] = 1.0
+        q3[10:20, 1] = 1.0
+        q3[20:, 2] = 1.0
+        q2 = np.zeros((n, 2))
+        q2[:10, 0] = 1.0
+        q2[10:20, 0] = 0.8
+        q2[:10, 1] = 0.5
+        q2[20:, 1] = 0.2
+        return q2, q3, np.ones(n, dtype=bool)
+
+    def test_greedy_and_hungarian_differ(self):
+        q2, q3, mask = self._greedy_vs_hungarian_case()
+        r = qbar.pearson_matrix(q2, q3, mask)
+        g, g_rs = qbar.match_next(q2, q3, mask, "greedy")
+        h, h_rs = qbar.match_next(q2, q3, mask, "hungarian")
+        self.assertEqual(g, [0, 2, 1])
+        self.assertEqual(h, [1, 0, 2])
+        self.assertIsNone(h_rs[-1])
+        self.assertGreater(sum(h_rs[:-1]), sum(g_rs[:-1]))
+        for c in range(2):
+            self.assertAlmostEqual(h_rs[c], r[c, h[c]])
+
+    def test_hungarian_is_optimal_by_brute_force(self):
+        import itertools
+        rng = np.random.default_rng(7)
+        for _ in range(20):
+            k = int(rng.integers(2, 6))
+            q_prev = rng.dirichlet(np.ones(k), size=40)
+            q_new = rng.dirichlet(np.ones(k + 1), size=40)
+            mask = np.ones(40, dtype=bool)
+            r = qbar.pearson_matrix(q_prev, q_new, mask)
+            best = max(sum(r[c, p[c]] for c in range(k)) for p in itertools.permutations(range(k + 1), k))
+            h, h_rs = qbar.match_next(q_prev, q_new, mask, "hungarian")
+            self.assertAlmostEqual(sum(h_rs[:-1]), best)
+            self.assertEqual(sorted(h), list(range(k + 1)))
+
+    def test_default_method_is_greedy(self):
+        q2, q3, mask = self._greedy_vs_hungarian_case()
+        self.assertEqual(qbar.match_next(q2, q3, mask), qbar.match_next(q2, q3, mask, "greedy"))
+        args = qbar.build_parser().parse_args(["--q", "x.Q", "--outdir", "o"])
+        self.assertEqual(args.align_method, "greedy")
+
+    def test_cli_align_method_hungarian(self):
+        q2, q3, _ = self._greedy_vs_hungarian_case()
+        with tempfile.TemporaryDirectory() as tmp:
+            for k, q in ((2, q2), (3, q3)):
+                np.savetxt(os.path.join(tmp, "t.%d.Q" % k), q + 1e-6, fmt="%.6f")
+            ids = os.path.join(tmp, "ids.txt")
+            with open(ids, "w") as f:
+                f.write("".join("s%d\n" % i for i in range(30)))
+            got = {}
+            for m in ("greedy", "hungarian"):
+                out = os.path.join(tmp, m)
+                qbar.main(["--q", os.path.join(tmp, "t.2.Q"), os.path.join(tmp, "t.3.Q"),
+                           "--ids", ids, "--align-method", m, "--outdir", out])
+                with open(os.path.join(out, "perm_K3.tsv")) as f:
+                    got[m] = [line.split("\t")[1] for line in f.read().splitlines()[1:]]
+            self.assertEqual(got["greedy"], ["1", "3", "2"])
+            self.assertEqual(got["hungarian"], ["2", "1", "3"])
+
     def test_gap_in_k_refuses_align(self):
         q = {
             2: np.array([[1.0, 0.0], [0.0, 1.0]]),
