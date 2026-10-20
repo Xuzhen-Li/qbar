@@ -851,10 +851,15 @@ def parent_shares(q_prev, q_new_col, mask):
 
 
 def split_parent_of(q_prev, q_new_col, mask):
-    """Old column the new column's membership mostly came from (largest share). Returns (c, share)."""
+    """Old column the new column's membership mostly came from (largest share, lower column on ties).
+    Returns (c, share, runner_c, runner_share); all None when the new column sums to 0."""
+    if float(np.asarray(q_new_col, dtype=float)[mask].sum()) <= 0.0:
+        return None, None, None, None
     shares = parent_shares(q_prev, q_new_col, mask)
-    c = int(np.argmax(shares))
-    return c, float(shares[c])
+    rank = sorted(range(len(shares)), key=lambda c: (-shares[c], c))
+    c = rank[0]
+    r = rank[1] if len(rank) > 1 else None
+    return c, float(shares[c]), r, (float(shares[r]) if r is not None else None)
 
 
 def top_groups(q, groups, col, n=3):
@@ -889,16 +894,24 @@ def align_report_rows(aligned, meta, groups, method, perm, low=None):
                 sim = info["pearson"][c]
                 row.update(matched_from="C%d" % (c + 1), similarity="%.3f" % sim,
                            pearson="%.3f" % col_pearson(prev[mask, c], new[mask, c]),
-                           split_parent="", parent_share="",
+                           split_parent="", parent_share="", runner_up="", runner_up_share="",
                            low_confidence="yes" if sim < cut else "no")
             else:
+                mx, mx_share, ru, ru_share = split_parent_of(prev, new[:, c], mask)
                 if method == "pong":
                     pc = info["split_parent"]
-                    share = float(parent_shares(prev, new[:, c], mask)[pc])
+                    share = None if mx is None else float(parent_shares(prev, new[:, c], mask)[pc])
+                    if mx is not None:
+                        ru, ru_share = (mx, mx_share) if mx != pc else (ru, ru_share)
                 else:
-                    pc, share = split_parent_of(prev, new[:, c], mask)
+                    pc, share = mx, mx_share
+                    if mx is None:
+                        pc = None
+                fmt_c = lambda x: "NA" if x is None else "C%d" % (x + 1)
+                fmt_s = lambda x: "NA" if x is None else "%.3f" % x
                 row.update(matched_from="new", similarity="NA", pearson="NA",
-                           split_parent="C%d" % (pc + 1), parent_share="%.3f" % share,
+                           split_parent=fmt_c(pc if share is not None else None), parent_share=fmt_s(share),
+                           runner_up=fmt_c(ru), runner_up_share=fmt_s(ru_share),
                            low_confidence="NA")
             n_dom, dom = dominant_groups(new, groups, c)
             row["top_groups_mean"] = ";".join("%s:%.3f" % (g, mu) for mu, g in top_groups(new, groups, c))
@@ -909,7 +922,7 @@ def align_report_rows(aligned, meta, groups, method, perm, low=None):
 
 
 REPORT_COLS = ("K_to", "column", "raw_column", "matched_from", "method", "similarity", "pearson", "low_confidence",
-               "split_parent", "parent_share", "top_groups_mean", "n_dominant", "top_groups_dominant")
+               "split_parent", "parent_share", "runner_up", "runner_up_share", "top_groups_mean", "n_dominant", "top_groups_dominant")
 
 
 def write_align_report(outdir, aligned, meta, groups, method, perm, low=None):
@@ -927,8 +940,9 @@ def write_align_report(outdir, aligned, meta, groups, method, perm, low=None):
             f.write("\nK=%d -> K=%d (people used: %d)\n" % (k_to - 1, k_to, meta[k_to]["n_mask"]))
             for r in [r for r in rows if r["K_to"] == k_to]:
                 if r["matched_from"] == "new":
-                    f.write("  %s new, split from %s (parent share %s); top groups: %s\n"
-                            % (r["column"], r["split_parent"], r["parent_share"], r["top_groups_mean"]))
+                    f.write("  %s new, split from %s (parent share %s; runner-up %s %s); top groups: %s\n"
+                            % (r["column"], r["split_parent"], r["parent_share"], r["runner_up"],
+                               r["runner_up_share"], r["top_groups_mean"]))
                 else:
                     ref = "" if measure == "Pearson r" else ", Pearson r %s" % r["pearson"]
                     f.write("  %s <- %s  %s %s%s%s; top groups: %s\n"
