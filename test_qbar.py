@@ -260,6 +260,77 @@ class AlignTests(unittest.TestCase):
             self.assertEqual(lines[0], "K_to\tn_mask\tpong_sim\tsplit_parent")
             self.assertEqual(lines[1], "3\t30\t1.000 1.000\tC2")
 
+    def test_member_sets_and_jaccard_matrix(self):
+        q = np.array([[0.7, 0.3], [0.5, 0.5], [0.2, 0.8]])
+        m = np.ones(3, dtype=bool)
+        self.assertEqual(qbar.member_sets(q, m, "dominant", 0.5).tolist(),
+                         [[True, False], [True, False], [False, True]])
+        self.assertEqual(qbar.member_sets(q, m, "threshold", 0.5).tolist(),
+                         [[True, False], [True, True], [False, True]])
+        q3 = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+        j = qbar.jaccard_matrix(q, q3, m, "dominant")
+        self.assertEqual(j.tolist(), [[0.5, 0.5, 0.0], [0.0, 0.0, 1.0]])
+
+    def test_jaccard_threshold_differs_from_greedy(self):
+        q2, q3, mask = self._greedy_vs_hungarian_case()
+        # threshold 0.5 sets: C1 = rows 0-19, C2 = rows 0-9; raw cols are blocks A, B, C
+        j = qbar.jaccard_matrix(q2, q3, mask, "threshold", 0.5)
+        self.assertEqual(j.tolist(), [[0.5, 0.5, 0.0], [1.0, 0.0, 0.0]])
+        perm, sims = qbar.match_next_jaccard(q2, q3, mask, "threshold", 0.5)
+        self.assertEqual(perm, [1, 0, 2])
+        self.assertEqual(sims, [0.5, 1.0, None])
+        self.assertEqual(qbar.match_next(q2, q3, mask)[0], [0, 2, 1])
+
+    def test_jaccard_is_optimal_by_brute_force(self):
+        import itertools
+        rng = np.random.default_rng(11)
+        for kind in ("dominant", "threshold"):
+            for _ in range(10):
+                k = int(rng.integers(2, 5))
+                q_prev = rng.dirichlet(np.ones(k) * 0.5, size=30)
+                q_new = rng.dirichlet(np.ones(k + 1) * 0.5, size=30)
+                mask = np.ones(30, dtype=bool)
+                j = qbar.jaccard_matrix(q_prev, q_new, mask, kind, 0.3)
+                best = max(sum(j[c, p[c]] for c in range(k)) for p in itertools.permutations(range(k + 1), k))
+                perm, sims = qbar.match_next_jaccard(q_prev, q_new, mask, kind, 0.3)
+                self.assertAlmostEqual(sum(sims[:-1]), best)
+                self.assertEqual(sorted(perm), list(range(k + 1)))
+
+    def test_jaccard_without_scipy_exits(self):
+        import builtins
+        from unittest import mock
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name.startswith("scipy"):
+                raise ImportError("no scipy")
+            return real_import(name, *args, **kwargs)
+
+        q2, q3, mask = self._greedy_vs_hungarian_case()
+        with mock.patch("builtins.__import__", side_effect=fake_import):
+            with self.assertRaises(SystemExit) as cm:
+                qbar.match_next_jaccard(q2, q3, mask)
+        self.assertIn("jaccard", str(cm.exception.code))
+        self.assertIn("scipy", str(cm.exception.code))
+
+    def test_cli_jaccard_writes_jaccard_column(self):
+        q2, q3, _ = self._greedy_vs_hungarian_case()
+        with tempfile.TemporaryDirectory() as tmp:
+            for k, q in ((2, q2), (3, q3)):
+                np.savetxt(os.path.join(tmp, "t.%d.Q" % k), q, fmt="%.6f")
+            ids = os.path.join(tmp, "ids.txt")
+            with open(ids, "w") as f:
+                f.write("".join("s%d\n" % i for i in range(30)))
+            out = os.path.join(tmp, "o")
+            qbar.main(["--q", os.path.join(tmp, "t.2.Q"), os.path.join(tmp, "t.3.Q"), "--ids", ids,
+                       "--align-method", "jaccard", "--jaccard-set", "threshold", "--outdir", out])
+            with open(os.path.join(out, "align.tsv")) as f:
+                self.assertEqual(f.read().splitlines(), ["K_to\tn_mask\tjaccard", "3\t30\t0.500 1.000"])
+            with open(os.path.join(out, "perm_K3.tsv")) as f:
+                self.assertEqual([l.split("\t")[1] for l in f.read().splitlines()[1:]], ["2", "1", "3"])
+        args = qbar.build_parser().parse_args(["--q", "x.Q", "--outdir", "o"])
+        self.assertEqual((args.jaccard_set, args.jaccard_cut), ("dominant", 0.5))
+
     def test_gap_in_k_refuses_align(self):
         q = {
             2: np.array([[1.0, 0.0], [0.0, 1.0]]),

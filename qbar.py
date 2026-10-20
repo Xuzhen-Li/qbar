@@ -378,7 +378,8 @@ def core_mask(q_prev, q_new, groups, align_groups, qmax_cut):
     return m
 
 
-ALIGN_METHODS = ("greedy", "hungarian", "pong")
+ALIGN_METHODS = ("greedy", "hungarian", "pong", "jaccard")
+JACCARD_SETS = ("dominant", "threshold")
 
 
 def pearson_matrix(q_prev, q_new, mask):
@@ -477,6 +478,49 @@ def match_next_pong(q_prev, q_new, mask):
     return perm, sims, split
 
 
+def member_sets(q, mask, kind, cut):
+    """Per column, the boolean set of masked people: dominant = column is the row's
+    argmax (lowest index on ties); threshold = q >= cut."""
+    q = np.asarray(q, dtype=float)[mask]
+    if kind == "dominant":
+        top = q.argmax(axis=1)
+        return np.stack([top == c for c in range(q.shape[1])], axis=1)
+    return q >= cut
+
+
+def jaccard_matrix(q_prev, q_new, mask, kind="dominant", cut=0.5):
+    """j[c, k] = |A_c & B_k| / |A_c | B_k| on member_sets; 0 when both are empty."""
+    a = member_sets(q_prev, mask, kind, cut)
+    b = member_sets(q_new, mask, kind, cut)
+    j = np.zeros((a.shape[1], b.shape[1]))
+    for c in range(a.shape[1]):
+        for k in range(b.shape[1]):
+            union = int((a[:, c] | b[:, k]).sum())
+            if union:
+                j[c, k] = int((a[:, c] & b[:, k]).sum()) / union
+    return j
+
+
+def match_next_jaccard(q_prev, q_new, mask, kind="dominant", cut=0.5):
+    """One-to-one matching maximising summed Jaccard (scipy linear_sum_assignment); leftover goes last."""
+    try:
+        from scipy.optimize import linear_sum_assignment
+    except ImportError as exc:
+        raise SystemExit("--align-method jaccard 需要 scipy（scipy.optimize）") from exc
+    k_old = q_prev.shape[1]
+    k_new = q_new.shape[1]
+    if k_new != k_old + 1:
+        raise SystemExit("对齐要求 K 连续，相邻两个 Q 的列数必须差 1")
+    j = jaccard_matrix(q_prev, q_new, mask, kind, cut)
+    rows, cols = linear_sum_assignment(j, maximize=True)
+    by_row = dict(zip(rows.tolist(), cols.tolist()))
+    perm = [int(by_row[c]) for c in range(k_old)]
+    sims = [float(j[c, perm[c]]) for c in range(k_old)]
+    perm.append(int([x for x in range(k_new) if x not in set(perm)][0]))
+    sims.append(None)
+    return perm, sims
+
+
 def match_next(q_prev, q_new, mask, method="greedy"):
     """q_prev is already aligned. Return raw-column order for q_new."""
     if method == "hungarian":
@@ -507,7 +551,8 @@ def match_next(q_prev, q_new, mask, method="greedy"):
     return perm, rs
 
 
-def align_qs(q_by_k, groups, anchor, mode, align_groups, qmax_cut, do_align, method="greedy"):
+def align_qs(q_by_k, groups, anchor, mode, align_groups, qmax_cut, do_align, method="greedy",
+             jaccard_set="dominant", jaccard_cut=0.5):
     ks = sorted(q_by_k)
     if do_align and len(ks) > 1:
         for a, b in zip(ks, ks[1:]):
@@ -537,6 +582,8 @@ def align_qs(q_by_k, groups, anchor, mode, align_groups, qmax_cut, do_align, met
                 raise SystemExit("对齐用的人是空的")
         if method == "pong":
             p, rs, split = match_next_pong(aligned[k], q_by_k[k + 1], mask)
+        elif method == "jaccard":
+            p, rs = match_next_jaccard(aligned[k], q_by_k[k + 1], mask, jaccard_set, jaccard_cut)
         else:
             p, rs = match_next(aligned[k], q_by_k[k + 1], mask, method)
         perm[k + 1] = p
@@ -544,6 +591,9 @@ def align_qs(q_by_k, groups, anchor, mode, align_groups, qmax_cut, do_align, met
         meta[k + 1] = {"n_mask": int(mask.sum()), "pearson": rs}
         if method == "pong":
             meta[k + 1]["split_parent"] = split["parent"]
+            continue
+        if method == "jaccard":
+            meta[k + 1]["jaccard"] = True
             continue
         low = [r for r in rs[:-1] if r is not None and r < 0.5]
         if low:
@@ -777,7 +827,9 @@ def write_tables(outdir, iids, groups, order, spans, perm, owners, hexes, meta, 
     if meta:
         with open(os.path.join(outdir, "align.tsv"), "w") as f:
             pong = any("split_parent" in info for info in meta.values())
-            f.write("K_to\tn_mask\tpong_sim\tsplit_parent\n" if pong else "K_to\tn_mask\tpearson\n")
+            jac = any("jaccard" in info for info in meta.values())
+            f.write("K_to\tn_mask\tpong_sim\tsplit_parent\n" if pong else
+                    "K_to\tn_mask\tjaccard\n" if jac else "K_to\tn_mask\tpearson\n")
             for k, info in sorted(meta.items()):
                 rs = " ".join("%.3f" % r for r in info["pearson"][:-1])
                 if pong:
@@ -828,7 +880,10 @@ def build_parser():
     p.add_argument("--align-mode", choices=("all", "core"), default="all",
                    help="all=掩码内所有人做 Pearson。core=只留 qmax 超过 --qmax 的人，与 c_align 相同")
     p.add_argument("--align-method", choices=ALIGN_METHODS, default="greedy",
-                   help="greedy=按列顺序逐列取 Pearson 最高的未用列（默认）。hungarian=Pearson 总和最大的一一匹配。pong=允许上一 K 的一列拆成两列（Behr 2016），align.tsv 第三列为 pong 相似度并多一列 split_parent")
+                   help="greedy=按列顺序逐列取 Pearson 最高的未用列（默认）。hungarian=Pearson 总和最大的一一匹配。pong=允许上一 K 的一列拆成两列（Behr 2016），align.tsv 第三列为 pong 相似度并多一列 split_parent。jaccard=按人的集合算 Jaccard 后一一匹配，见 --jaccard-set")
+    p.add_argument("--jaccard-set", choices=JACCARD_SETS, default="dominant",
+                   help="jaccard 用的集合：dominant=该列是此人最高的列；threshold=此人该列 >= --jaccard-cut")
+    p.add_argument("--jaccard-cut", type=float, default=0.5, help="threshold 集合的阈值。默认 0.5")
     p.add_argument("--align-groups", default="", help="参与对齐的组，逗号分隔。core 模式必填")
     p.add_argument("--qmax", type=float, default=0.75, help="core 模式的 qmax 阈值。默认 0.75")
     p.add_argument("--anchor-group", default="", help="最低 K 把这个组最纯的人的主列放到 C1")
@@ -858,6 +913,7 @@ def main(argv=None):
     aligned, perm, meta = align_qs(
         q_by_k, groups, args.anchor_group.strip(), args.align_mode,
         align_groups, args.qmax, do_align, args.align_method,
+        args.jaccard_set, args.jaccard_cut,
     )
     ks = sorted(aligned)
     sort_k = args.sort_k or ks[-1]
