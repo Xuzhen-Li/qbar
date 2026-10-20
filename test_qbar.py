@@ -218,6 +218,23 @@ class AlignTests(unittest.TestCase):
         self.assertAlmostEqual(qbar.pong_sim(a, b), 1 - np.sqrt(0.5 / 6))
         self.assertAlmostEqual(qbar.pong_sim(a, a), 1.0)
 
+    def test_pong_without_scipy_exits(self):
+        import builtins
+        from unittest import mock
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name.startswith("scipy"):
+                raise ImportError("no scipy")
+            return real_import(name, *args, **kwargs)
+
+        q2, q3, mask = self._split_case()
+        with mock.patch("builtins.__import__", side_effect=fake_import):
+            with self.assertRaises(SystemExit) as cm:
+                qbar.match_next_pong(q2, q3, mask)
+        self.assertIn("pong", str(cm.exception.code))
+        self.assertIn("scipy", str(cm.exception.code))
+
     def test_pong_split_records_parent(self):
         q2, q3, mask = self._split_case()
         perm, sims, split = qbar.match_next_pong(q2, q3, mask)

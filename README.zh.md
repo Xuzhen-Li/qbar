@@ -219,7 +219,7 @@ python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_p
 - `hclust 需要 scipy（scipy.cluster.hierarchy）`
   当前环境没有 scipy 库，使用 pip 安装。
 
-[[TODO-TEXT-ZH: same facts as the English common-error hungarian/scipy slot, in Chinese]]
+[[TODO-TEXT-ZH: same facts as the English common-error hungarian/pong scipy slot, in Chinese]]
 
 ## 引文
 

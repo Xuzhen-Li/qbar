@@ -10,7 +10,7 @@
 
 This tool requires Python 3, numpy, and Pillow. The scipy library is only required when `hclust` sorting is enabled.
 
-[[TODO-TEXT: scipy is now required for `--within hclust` / `--within-group X=hclust` and for `--align-method hungarian` (scipy.optimize.linear_sum_assignment); default greedy alignment and all other options need only numpy and Pillow]]
+[[TODO-TEXT: scipy is now required for `--within hclust` / `--within-group X=hclust` and for `--align-method hungarian` and `--align-method pong` (scipy.optimize.linear_sum_assignment); default greedy alignment and all other options need only numpy and Pillow]]
 
 Create a virtual environment and install the requirements:
 
@@ -219,7 +219,7 @@ Ancestry component plot colors can be specified via parameters, formatted as `--
 - `hclust 需要 scipy（scipy.cluster.hierarchy）`
   Install scipy to use `--within hclust`.
 
-[[TODO-TEXT: new common error `--align-method hungarian 需要 scipy（scipy.optimize）`: printed and exit when --align-method hungarian is used without scipy installed; fix = pip install scipy (in requirements.txt) or use the default greedy]]
+[[TODO-TEXT: new common error `--align-method hungarian 需要 scipy（scipy.optimize）`: printed and exit when --align-method hungarian is used without scipy installed; fix = pip install scipy (in requirements.txt) or use the default greedy; likewise `--align-method pong 需要 scipy（scipy.optimize）` for --align-method pong without scipy, same fix]]
 
 ## Citation
 
