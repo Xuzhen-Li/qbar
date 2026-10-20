@@ -196,6 +196,53 @@ class AlignTests(unittest.TestCase):
             self.assertEqual(got["greedy"], ["1", "3", "2"])
             self.assertEqual(got["hungarian"], ["2", "1", "3"])
 
+    def _split_case(self):
+        # K=2: C1 = rows 0-9, C2 = rows 10-29. K=3 raw: col 1 = rows 0-9,
+        # C2 splits into raw col 2 (0.9 on rows 10-19) and raw col 0 (0.1 on rows 10-19, 1 on 20-29).
+        # Against C2, pong_sim is 0.497 for raw 2 and 0.550 for raw 0, so raw 0 keeps C2.
+        n = 30
+        q2 = np.zeros((n, 2))
+        q2[:10, 0] = 1.0
+        q2[10:, 1] = 1.0
+        q3 = np.zeros((n, 3))
+        q3[:10, 1] = 1.0
+        q3[10:20, 2] = 0.9
+        q3[10:20, 0] = 0.1
+        q3[20:, 0] = 1.0
+        return q2, q3, np.ones(n, dtype=bool)
+
+    def test_pong_sim_matches_manual_formula(self):
+        a = np.array([1.0, 0.5, 0.0, 0.0])
+        b = np.array([0.5, 0.5, 0.5, 0.0])
+        # N* = first three; sum sq = 0.25 + 0 + 0.25
+        self.assertAlmostEqual(qbar.pong_sim(a, b), 1 - np.sqrt(0.5 / 6))
+        self.assertAlmostEqual(qbar.pong_sim(a, a), 1.0)
+
+    def test_pong_split_records_parent(self):
+        q2, q3, mask = self._split_case()
+        perm, sims, split = qbar.match_next_pong(q2, q3, mask)
+        self.assertEqual(perm, [1, 0, 2])
+        self.assertEqual(split, {"parent": 1, "pair": (0, 2)})
+        self.assertAlmostEqual(sims[0], 1.0)
+        self.assertAlmostEqual(sims[1], 1.0)
+        self.assertIsNone(sims[2])
+
+    def test_pong_align_tsv_has_split_parent(self):
+        q2, q3, _ = self._split_case()
+        with tempfile.TemporaryDirectory() as tmp:
+            for k, q in ((2, q2), (3, q3)):
+                np.savetxt(os.path.join(tmp, "t.%d.Q" % k), q, fmt="%.6f")
+            ids = os.path.join(tmp, "ids.txt")
+            with open(ids, "w") as f:
+                f.write("".join("s%d\n" % i for i in range(30)))
+            out = os.path.join(tmp, "o")
+            qbar.main(["--q", os.path.join(tmp, "t.2.Q"), os.path.join(tmp, "t.3.Q"),
+                       "--ids", ids, "--align-method", "pong", "--outdir", out])
+            with open(os.path.join(out, "align.tsv")) as f:
+                lines = f.read().splitlines()
+            self.assertEqual(lines[0], "K_to\tn_mask\tpong_sim\tsplit_parent")
+            self.assertEqual(lines[1], "3\t30\t1.000 1.000\tC2")
+
     def test_gap_in_k_refuses_align(self):
         q = {
             2: np.array([[1.0, 0.0], [0.0, 1.0]]),

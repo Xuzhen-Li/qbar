@@ -378,7 +378,7 @@ def core_mask(q_prev, q_new, groups, align_groups, qmax_cut):
     return m
 
 
-ALIGN_METHODS = ("greedy", "hungarian")
+ALIGN_METHODS = ("greedy", "hungarian", "pong")
 
 
 def pearson_matrix(q_prev, q_new, mask):
@@ -415,6 +415,66 @@ def match_next_hungarian(q_prev, q_new, mask):
     perm.append(int(rest[0]))
     rs.append(None)
     return perm, rs
+
+
+def pong_sim(a, b):
+    """pong default similarity (Behr et al. 2016, manual eq. 1):
+    1 - sqrt(sum((a-b)^2 over N*) / (2|N*|)), N* = people with a+b > 0."""
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+    keep = (a + b) > 0
+    n = int(keep.sum())
+    if n == 0:
+        return 0.0
+    d = a[keep] - b[keep]
+    return float(1.0 - np.sqrt(np.dot(d, d) / (2.0 * n)))
+
+
+def match_next_pong(q_prev, q_new, mask):
+    """Split-aware matching between adjacent K, after pong (Behr et al. 2016).
+
+    For each pair (a, b) of new columns, sum them into one column, match the k old
+    columns to the k merged columns by maximum summed similarity, and keep the pair
+    with the highest mean similarity. The old column matched to a+b is the split
+    parent: of a and b, the one more similar to it takes its place, the other goes last.
+    Returns (perm, sims, split) with split = {"parent": c, "pair": (raw_a, raw_b)}.
+    """
+    try:
+        from scipy.optimize import linear_sum_assignment
+    except ImportError as exc:
+        raise SystemExit("--align-method pong 需要 scipy（scipy.optimize）") from exc
+    k_old = q_prev.shape[1]
+    k_new = q_new.shape[1]
+    if k_new != k_old + 1:
+        raise SystemExit("对齐要求 K 连续，相邻两个 Q 的列数必须差 1")
+    old = q_prev[mask]
+    new = q_new[mask]
+    best = None
+    for a in range(k_new):
+        for b in range(a + 1, k_new):
+            cols = [j for j in range(k_new) if j not in (a, b)] + [(a, b)]
+            merged = [new[:, j] if not isinstance(j, tuple) else new[:, a] + new[:, b] for j in cols]
+            sim = np.array([[pong_sim(old[:, c], m) for m in merged] for c in range(k_old)])
+            rows, cidx = linear_sum_assignment(sim, maximize=True)
+            score = float(sim[rows, cidx].mean())
+            if best is None or score > best[0]:
+                best = (score, cols, dict(zip(rows.tolist(), cidx.tolist())), sim)
+    _score, cols, by_row, sim = best
+    perm, sims, split = [], [], None
+    for c in range(k_old):
+        j = cols[by_row[c]]
+        if isinstance(j, tuple):
+            a, b = j
+            sa, sb = pong_sim(old[:, c], new[:, a]), pong_sim(old[:, c], new[:, b])
+            keep, rest = (a, b) if sa >= sb else (b, a)
+            perm.append(int(keep))
+            split = {"parent": c, "pair": (int(keep), int(rest))}
+        else:
+            perm.append(int(j))
+        sims.append(float(sim[c, by_row[c]]))
+    perm.append(int(split["pair"][1]))
+    sims.append(None)
+    return perm, sims, split
 
 
 def match_next(q_prev, q_new, mask, method="greedy"):
@@ -475,10 +535,16 @@ def align_qs(q_by_k, groups, anchor, mode, align_groups, qmax_cut, do_align, met
                 mask = np.ones(len(groups), dtype=bool)
             if not mask.any():
                 raise SystemExit("对齐用的人是空的")
-        p, rs = match_next(aligned[k], q_by_k[k + 1], mask, method)
+        if method == "pong":
+            p, rs, split = match_next_pong(aligned[k], q_by_k[k + 1], mask)
+        else:
+            p, rs = match_next(aligned[k], q_by_k[k + 1], mask, method)
         perm[k + 1] = p
         aligned[k + 1] = q_by_k[k + 1][:, p]
         meta[k + 1] = {"n_mask": int(mask.sum()), "pearson": rs}
+        if method == "pong":
+            meta[k + 1]["split_parent"] = split["parent"]
+            continue
         low = [r for r in rs[:-1] if r is not None and r < 0.5]
         if low:
             print("注意：K=%d→%d 有 %d 列的 Pearson < 0.5，这两次的列可能不是同一个解" % (k, k + 1, len(low)), file=sys.stderr)
@@ -710,10 +776,14 @@ def write_tables(outdir, iids, groups, order, spans, perm, owners, hexes, meta, 
                 f.write("C%d\t%d\t%s\t%s\n" % (c + 1, raw + 1, hexes[k][c], ow))
     if meta:
         with open(os.path.join(outdir, "align.tsv"), "w") as f:
-            f.write("K_to\tn_mask\tpearson\n")
+            pong = any("split_parent" in info for info in meta.values())
+            f.write("K_to\tn_mask\tpong_sim\tsplit_parent\n" if pong else "K_to\tn_mask\tpearson\n")
             for k, info in sorted(meta.items()):
                 rs = " ".join("%.3f" % r for r in info["pearson"][:-1])
-                f.write("%d\t%d\t%s\n" % (k, info["n_mask"], rs))
+                if pong:
+                    f.write("%d\t%d\t%s\tC%d\n" % (k, info["n_mask"], rs, info["split_parent"] + 1))
+                else:
+                    f.write("%d\t%d\t%s\n" % (k, info["n_mask"], rs))
 
 
 def parse_within(items):
@@ -758,7 +828,7 @@ def build_parser():
     p.add_argument("--align-mode", choices=("all", "core"), default="all",
                    help="all=掩码内所有人做 Pearson。core=只留 qmax 超过 --qmax 的人，与 c_align 相同")
     p.add_argument("--align-method", choices=ALIGN_METHODS, default="greedy",
-                   help="greedy=按列顺序逐列取 Pearson 最高的未用列（默认）。hungarian=Pearson 总和最大的一一匹配")
+                   help="greedy=按列顺序逐列取 Pearson 最高的未用列（默认）。hungarian=Pearson 总和最大的一一匹配。pong=允许上一 K 的一列拆成两列（Behr 2016），align.tsv 第三列为 pong 相似度并多一列 split_parent")
     p.add_argument("--align-groups", default="", help="参与对齐的组，逗号分隔。core 模式必填")
     p.add_argument("--qmax", type=float, default=0.75, help="core 模式的 qmax 阈值。默认 0.75")
     p.add_argument("--anchor-group", default="", help="最低 K 把这个组最纯的人的主列放到 C1")
