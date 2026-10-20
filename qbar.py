@@ -1003,11 +1003,15 @@ def parse_within(items):
     return out
 
 
+class HelpFormatter(argparse.RawDescriptionHelpFormatter, argparse.ArgumentDefaultsHelpFormatter):
+    pass
+
+
 def build_parser():
     p = argparse.ArgumentParser(
         prog="qbar",
         description="读 ADMIXTURE 的 Q，按指定规则排人，跨 K 对齐列，写出结构条形图。",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        formatter_class=HelpFormatter,
         epilog="排序：--order-file 用你给的名单；否则按 --blocks 的组序分块，组内用 --within。\n"
         "组内 iid=名字，q=该组占比最高的那一列从高到低，hclust=平均连锁、距离 1−Pearson，input=Q 里的原顺序。\n"
         "多个 K 默认做 Pearson 贪心对齐，新列放在最上面。--no-align 保持每个 Q 自己的列顺序。",

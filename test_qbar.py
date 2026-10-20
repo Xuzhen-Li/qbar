@@ -380,6 +380,23 @@ class AlignTests(unittest.TestCase):
             self.assertEqual((new["split_parent"], new["parent_share"], new["runner_up"], new["runner_up_share"]),
                              ("NA", "NA", "NA", "NA"), method)
 
+    def test_report_txt_zero_new_column_prints_na(self):
+        n = 30
+        q2 = np.zeros((n, 2))
+        q2[:15, 0] = 1.0
+        q2[15:, 1] = 1.0
+        q3 = np.zeros((n, 3))
+        q3[:15, 0] = 1.0
+        q3[15:, 1] = 1.0
+        groups = ["A"] * 10 + ["B"] * 10 + ["C"] * (n - 20)
+        for method in qbar.ALIGN_METHODS:
+            aligned, perm, meta = qbar.align_qs({2: q2, 3: q3}, groups, "", "all", [], 0.75, True, method)
+            with tempfile.TemporaryDirectory() as d:
+                qbar.write_align_report(d, aligned, meta, groups, method, perm)
+                with open(os.path.join(d, "align_report.txt")) as f:
+                    line = [x for x in f if " new, split from " in x][0]
+            self.assertIn("C3 new, split from NA (parent share NA; runner-up NA NA)", line, method)
+
     def test_report_pong_uses_split_pair(self):
         q2, q3, _ = self._split_case()
         rows, cut, _a = self._report("pong", q2, q3)
