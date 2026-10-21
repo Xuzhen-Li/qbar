@@ -10,6 +10,9 @@ The package version is 0.2.0.dev0. No git tag exists.
 
 ### Added
 
+- The install notes in `README.md` and `README.zh.md` include `pip install qbar-plot` after the first PyPI release, and `pip install .` from a checkout. The installed command is `qbar`. `python3 qbar.py` still works.
+- `docs/cli.md` is generated from the argument parser by `tools/gen_cli_docs.py`.
+- `docs/choosing-alignment-method.md` describes the four alignment methods. Speed and agreement are not filled in.
 - `CONTRIBUTING.md`, the Contributor Covenant 2.1 code of conduct, a bug-report template, and a pull-request template.
 - `CITATION.cff` and `.zenodo.json` describe version 0.2.0.dev0. No release date is set, because there is no release.
 - GitHub Actions installs the package and runs the tests on ubuntu-latest and macos-latest for Python 3.9 and 3.14. The workflow does not compare PNG or PDF bytes (58369c4).

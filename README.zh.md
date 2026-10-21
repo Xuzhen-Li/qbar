@@ -22,7 +22,21 @@ python3 -m venv .venv
 python3 -m pip install -r requirements.txt
 ```
 
-本工具已在 Python 3.13.5、`numpy` 2.5.4、`Pillow` 12.3.0 和 `scipy` 1.18.1 环境下完成测试。你可以运行以下命令进行自检，共有 44 项测试通过：
+第一次发布到 PyPI 之后，可以用下面的命令安装：
+
+```bash
+pip install qbar-plot
+```
+
+第一次 PyPI 发布之前，这条命令还不能用。在本仓库的检出目录里，可以安装同一个包：
+
+```bash
+pip install .
+```
+
+安装后的命令是 `qbar`。在检出目录里不安装，直接运行 `python3 qbar.py` 仍然可以。
+
+本工具已在 Python 3.13.5、`numpy` 2.5.4、`Pillow` 12.3.0 和 `scipy` 1.18.1 环境下完成测试。你可以运行以下命令进行自检，共有 74 项测试通过：
 
 ```bash
 python3 test_qbar.py
