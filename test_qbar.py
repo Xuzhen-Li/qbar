@@ -641,6 +641,26 @@ class AlignTests(unittest.TestCase):
             qbar.match_next_jaccard(q2, q3, mask2),
         )
 
+    def test_constant_column_pearson_is_zero(self):
+        a = np.full(12, 0.2)
+        b = np.full(12, 0.8)
+        self.assertEqual(float(a.max()), float(a.min()))
+        self.assertEqual(float(b.max()), float(b.min()))
+        self.assertEqual(qbar.col_pearson(a, b), 0.0)
+        wide_a = np.full(2448, 0.1)
+        wide_b = np.full(2448, 0.9)
+        self.assertEqual(float(wide_a.max()), float(wide_a.min()))
+        self.assertEqual(qbar.col_pearson(wide_a, wide_b), 0.0)
+        varying = np.array([0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
+        self.assertNotEqual(float(varying.max()), float(varying.min()))
+        self.assertEqual(qbar.col_pearson(np.full(6, 0.3), varying), 0.0)
+        self.assertEqual(qbar.col_pearson(varying, np.full(6, 0.3)), 0.0)
+        x = np.array([0.1, 0.4, 0.2, 0.9, 0.3])
+        y = np.array([0.2, 0.1, 0.7, 0.3, 0.8])
+        ref = float(np.corrcoef(x, y)[0, 1])
+        self.assertTrue(np.isfinite(ref))
+        self.assertAlmostEqual(qbar.col_pearson(x, y), ref, places=12)
+
 
 class ColorTests(unittest.TestCase):
     def test_same_requested_colour_is_not_used_twice(self):
