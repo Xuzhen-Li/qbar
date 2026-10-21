@@ -566,10 +566,19 @@ def match_next_jaccard(q_prev, q_new, mask, kind="dominant", cut=0.5):
     return perm, sims
 
 
-def match_next(q_prev, q_new, mask, method="greedy"):
-    """q_prev is already aligned. Return raw-column order for q_new."""
+def match_next(q_prev, q_new, mask, method="greedy", jaccard_set="dominant", jaccard_cut=0.5):
+    """q_prev is already aligned. Return raw-column order for q_new.
+
+    "hungarian", "pong", and "jaccard" call those matchers and return the
+    same value. "pong" includes the split dict. Any other method, including
+    the default "greedy", is greedy Pearson.
+    """
     if method == "hungarian":
         return match_next_hungarian(q_prev, q_new, mask)
+    if method == "pong":
+        return match_next_pong(q_prev, q_new, mask)
+    if method == "jaccard":
+        return match_next_jaccard(q_prev, q_new, mask, jaccard_set, jaccard_cut)
     k_new = q_new.shape[1]
     k_old = q_prev.shape[1]
     if k_new != k_old + 1:
