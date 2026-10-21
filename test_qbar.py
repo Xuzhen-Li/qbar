@@ -584,6 +584,9 @@ class AlignTests(unittest.TestCase):
             return real(q, hexes, height)
 
         from unittest import mock
+        import inspect
+        # main() looks up ancestry_image in the module that defined it.
+        impl = inspect.getmodule(qbar.main)
         with tempfile.TemporaryDirectory() as tmp:
             paths = []
             for k in (2, 3, 4):
@@ -596,7 +599,7 @@ class AlignTests(unittest.TestCase):
             with open(ids, "w") as f:
                 f.write("".join("s%02d\n" % i for i in range(n)))
             out = os.path.join(tmp, "o")
-            with mock.patch.object(qbar, "ancestry_image", side_effect=spy):
+            with mock.patch.object(impl, "ancestry_image", side_effect=spy):
                 qbar.main(["--q"] + paths + ["--ids", ids, "--no-align", "--within", "hclust",
                            "--hclust-dist", "euclidean", "--hclust-linkage", "ward", "--hclust-olo",
                            "--hclust-pre", "dominant", "--hclust-k", "3", "--outdir", out])
@@ -1041,6 +1044,9 @@ def _cli_flag(parser, name):
 
 
 class DocstringTests(unittest.TestCase):
+    def test_package_version(self):
+        self.assertEqual(qbar.__version__, "0.2.0.dev0")
+
     def test_module_docstring_names_align_methods(self):
         # Expectations come from argparse, not from the wording under test.
         doc = qbar.__doc__ or ""
@@ -1071,7 +1077,7 @@ class DocstringTests(unittest.TestCase):
 
     def test_no_c_align_name(self):
         import inspect
-        src = inspect.getsource(qbar)
+        src = inspect.getsource(inspect.getmodule(qbar.col_pearson))
         self.assertNotIn("c_align", src)
         doc = qbar.core_mask.__doc__ or ""
         self.assertIn("qmax > cut", doc)
