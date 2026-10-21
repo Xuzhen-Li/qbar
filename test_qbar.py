@@ -702,6 +702,18 @@ class ColorTests(unittest.TestCase):
                 self.assertEqual(img.mode, "RGB")
                 self.assertGreater(img.size[0], bar_w)
 
+    def test_render_fromarray_omits_deprecated_mode(self):
+        # A uint8 HxWx3 array is already RGB. Passing mode= is the deprecated Pillow argument.
+        import inspect
+        src = inspect.getsource(qbar.render)
+        self.assertNotIn("mode=", src)
+        arr = np.arange(48, dtype=np.uint8).reshape(4, 4, 3)
+        with_mode = Image.fromarray(arr, mode="RGB")
+        plain = Image.fromarray(arr)
+        self.assertEqual(with_mode.mode, "RGB")
+        self.assertEqual(plain.mode, "RGB")
+        self.assertEqual(with_mode.tobytes(), plain.tobytes())
+
 
 class DemoTests(unittest.TestCase):
     def test_chip2448_q_plots_in_block_order(self):
