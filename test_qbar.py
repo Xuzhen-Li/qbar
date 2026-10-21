@@ -817,6 +817,15 @@ class DocstringTests(unittest.TestCase):
         self.assertIn("不能含逗号", zh)
         self.assertIn("不能含等号", zh)
 
+    def test_align_mode_help_requires_qmax_at_both_k(self):
+        # core_mask keeps a person only when qmax is above the cut at both
+        # adjacent K (q_prev and q_new). The help must say that.
+        help_s = _cli_flag(qbar.build_parser(), "--align-mode").help or ""
+        self.assertIn("相邻两个 K 的 qmax 都严格大于 --qmax", help_s)
+        doc = qbar.core_mask.__doc__ or ""
+        self.assertNotIn("c_align", doc)
+        self.assertIn("both K", doc)
+
 
 if __name__ == "__main__":
     unittest.main()

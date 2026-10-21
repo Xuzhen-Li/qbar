@@ -1062,7 +1062,7 @@ def build_parser():
     p.add_argument("--no-align", dest="align", action="store_false")
     p.set_defaults(align=None)
     p.add_argument("--align-mode", choices=("all", "core"), default="all",
-                   help="all=掩码内所有人参与对齐，greedy、hungarian、pong、jaccard 用同一批人。Pearson 只用于 greedy 和 hungarian。core=只留 qmax 严格大于 --qmax 的人；某一组没有人超过时，留下该组在较低 K 上最纯的一个人")
+                   help="all=掩码内所有人参与对齐，greedy、hungarian、pong、jaccard 用同一批人。Pearson 只用于 greedy 和 hungarian。core=只留相邻两个 K 的 qmax 都严格大于 --qmax 的人；某一组没有人超过时，留下该组在较低 K 上最纯的一个人")
     p.add_argument("--align-method", choices=ALIGN_METHODS, default="greedy",
                    help="greedy=按列顺序逐列取 Pearson 最高的未用列（默认）。hungarian=Pearson 总和最大的一一匹配。pong=允许上一 K 的一列拆成两列（Behr 2016），align.tsv 第三列为 pong 相似度并多一列 split_parent。jaccard=按人的集合算 Jaccard 后一一匹配，见 --jaccard-set")
     p.add_argument("--jaccard-set", choices=JACCARD_SETS, default="dominant",
