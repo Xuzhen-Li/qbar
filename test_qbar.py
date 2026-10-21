@@ -738,6 +738,24 @@ class DocstringTests(unittest.TestCase):
         missing = [name for name in qbar.ALIGN_METHODS if name not in help_s]
         self.assertEqual(missing, [], "align-mode help must name every ALIGN_METHODS entry")
 
+    def test_no_align_help_states_anchor_exception(self):
+        # Two K, alignment off. anchor_perm runs on every K, not only the lowest.
+        q2 = np.array([[0.2, 0.8], [0.9, 0.1]])
+        q3 = np.array([[0.1, 0.2, 0.7], [0.6, 0.3, 0.1]])
+        groups = ["A", "B"]
+        _aligned, perm, _meta = qbar.align_qs(
+            {2: q2, 3: q3}, groups, "A", "all", [], 0.75, False)
+        self.assertEqual(perm[2], qbar.anchor_perm(q2, groups, "A"))
+        self.assertEqual(perm[3], qbar.anchor_perm(q3, groups, "A"))
+        self.assertNotEqual(perm[2], list(range(q2.shape[1])))
+        self.assertNotEqual(perm[3], list(range(q3.shape[1])))
+        parser = qbar.build_parser()
+        epilog = parser.epilog or ""
+        anchor = _cli_flag(parser, "--anchor-group").help or ""
+        self.assertIn("--anchor-group", epilog)
+        self.assertIn("--no-align", anchor)
+        self.assertIn("每个 K", anchor)
+
 
 if __name__ == "__main__":
     unittest.main()
