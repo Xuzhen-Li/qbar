@@ -228,7 +228,7 @@ python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_p
 
 ![Custom colors](docs/img/e_color.png)
 
-如果你希望保留 ADMIXTURE 输出的原始列顺序，不进行跨 K 值的列对齐（即不把不同 K 值下代表同一祖先群体的列排成同一颜色），可以加上 `--no-align` 选项：
+如果你希望保留 ADMIXTURE 输出的原始列顺序，不进行跨 K 值的列对齐（即不把不同 K 值下代表同一祖先群体的列排成同一颜色），可以加上 `--no-align` 选项。若同时给了 `--anchor-group`，每个 K 仍把该组最纯的人的主列放到 C1：
 
 ```bash
 python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_pruned.fam --groups demo/2448/groups.tsv --id-col id --group-col group --blocks C-Ad,CG1,CG2,CG3,CG4,CG5,CG6,W-Ad,WEE1,WEE2,WWE1,WWE2 --within iid --no-align --outdir out/c_noalign
@@ -238,7 +238,7 @@ python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_p
 
 ## 列对齐
 
-当输入包含 2 个或更多 K 值时，程序会进行列对齐（即把不同 K 值下代表同一个祖先群体的列对应起来并使用同一种颜色，该功能默认开启，加上 `--no-align` 则保留原始列顺序）。对齐是按 K-1 到 K 逐步进行的：将前一个 K 值（K-1）的旧列与当前 K 值的新列进行匹配，多出来的那一个未匹配新列会排在最后成为新的末尾列。`--align-mode` 用于选择参与对齐计算的样本范围，默认值 `all` 会使用 `--align-groups` 指定的分组中的样本（若未指定则使用所有样本）；`core` 则只保留在相邻两个 K 值下最高祖先成分占比都高于 `--qmax`（默认值为 `0.75`）的核心样本。`--anchor-group G` 会在最小的 K 值下，把分组 `G` 中成分最纯粹的样本（即单一祖先成分占比最高的样本）的主导列固定在第 1 列 `C1` 的位置。
+当输入包含 2 个或更多 K 值时，程序会进行列对齐（即把不同 K 值下代表同一个祖先群体的列对应起来并使用同一种颜色，该功能默认开启，加上 `--no-align` 则保留每个 Q 自己的列顺序；若同时给了 `--anchor-group`，每个 K 仍把该组最纯的人的主列放到 C1）。对齐是按 K-1 到 K 逐步进行的：将前一个 K 值（K-1）的旧列与当前 K 值的新列进行匹配，多出来的那一个未匹配新列会排在最后成为新的末尾列。`--align-mode` 用于选择参与对齐计算的样本范围，默认值 `all` 会使用 `--align-groups` 指定的分组中的样本（若未指定则使用所有样本）；`core` 则只保留在相邻两个 K 值下最高祖先成分占比都高于 `--qmax`（默认值为 `0.75`）的核心样本。`--anchor-group G` 会在最小的 K 值下，把分组 `G` 中成分最纯粹的样本（即单一祖先成分占比最高的样本）的主导列固定在第 1 列 `C1` 的位置。
 
 ### 如何选择对齐方法
 
