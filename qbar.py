@@ -179,7 +179,10 @@ def collect_q(items):
 def read_q(path):
     if not os.path.isfile(path):
         raise SystemExit("找不到 Q：%s" % path)
-    q = np.loadtxt(path, dtype=float)
+    try:
+        q = np.loadtxt(path, dtype=float)
+    except ValueError as exc:
+        raise SystemExit("Q 只能是空白分隔的数字：%s" % path) from exc
     if q.ndim == 1:
         q = q.reshape(-1, 1)
     if q.size == 0 or q.ndim != 2:
@@ -1041,7 +1044,7 @@ def build_parser():
         "组内 iid=名字，q=该组占比最高的那一列从高到低，hclust=平均连锁、距离 1−Pearson，input=Q 里的原顺序。\n"
         "多个 K 默认做 Pearson 贪心对齐，新列放在最上面。--no-align 保持每个 Q 自己的列顺序；若同时给了 --anchor-group，每个 K 仍把该组最纯的人的主列放到 C1。",
     )
-    p.add_argument("--q", nargs="+", required=True, help="一个或多个 .Q，或带引号的通配符，或一个目录")
+    p.add_argument("--q", nargs="+", required=True, help="一个或多个 .Q，或带引号的通配符，或一个目录。只读空白分隔的数字 .Q 或 .q")
     p.add_argument("--fam", help="PLINK .fam，IID 在第 2 列，行序与 Q 相同")
     p.add_argument("--ids", help="一行一个 IID，行序与 Q 相同。与 --fam 二选一")
     p.add_argument("--groups", help="分组表，tsv 或 csv，要有表头")
