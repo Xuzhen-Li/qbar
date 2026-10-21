@@ -723,6 +723,16 @@ class DocstringTests(unittest.TestCase):
         self.assertIn("hclust default is average linkage on correlation", flat)
         self.assertIn("--hclust-olo", flat)
 
+    def test_no_c_align_name(self):
+        import inspect
+        src = inspect.getsource(qbar)
+        self.assertNotIn("c_align", src)
+        doc = qbar.core_mask.__doc__ or ""
+        self.assertIn("qmax > cut", doc)
+        help_s = _cli_flag(qbar.build_parser(), "--align-mode").help or ""
+        self.assertNotIn("c_align", help_s)
+        self.assertIn("严格大于", help_s)
+
 
 if __name__ == "__main__":
     unittest.main()
