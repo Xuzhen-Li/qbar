@@ -263,9 +263,14 @@ def hclust_order(q, dist="correlation", link="average", olo=False):
     from scipy.cluster.hierarchy import ClusterWarning
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=ClusterWarning)
-        z = linkage(work, method=link, metric=dist)
-        if olo:
-            z = optimal_leaf_ordering(z, pdist(work, metric=dist))
+        try:
+            z = linkage(work, method=link, metric=dist)
+            if olo:
+                z = optimal_leaf_ordering(z, pdist(work, metric=dist))
+        except ValueError as exc:
+            if "finite" not in str(exc):
+                raise
+            raise SystemExit("hclust 距离出现了非有限值（--hclust-dist %s）" % dist) from exc
     return [int(x) for x in leaves_list(z)]
 
 
