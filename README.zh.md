@@ -105,7 +105,7 @@ python3 qbar.py --q demo/2448/ref2448_pruned.8.Q --fam demo/2448/ref2448_pruned.
 
 ## 排序
 
-你可以通过 `--order-file` 传入一个每行包含一个样本编号（IID）的文件来固定从左到右的样本排列顺序，该选项会覆盖 `--blocks`。如果不使用 `--order-file`，可以用 `--blocks` 传入以逗号分隔的分组名称列表来指定从左到右的分组顺序，未在列表中出现的分组会按字母顺序追加在后面。没有对应分组的样本会被归入 `--rest-name` 指定的分组名中（默认值为 `NA`）。
+你可以通过 `--order-file` 传入一个每行包含一个样本编号（IID）的文件来固定从左到右的样本排列顺序，该选项会覆盖 `--blocks`。如果不使用 `--order-file`，可以用 `--blocks` 传入以逗号分隔的分组名称列表来指定从左到右的分组顺序，未在列表中出现的分组会按字母顺序追加在后面。组名不能含逗号，因为逗号会把一个组名拆成两项。没有对应分组的样本会被归入 `--rest-name` 指定的分组名中（默认值为 `NA`）。
 
 在每个分组内部，可以通过 `--within`（默认值为 `iid`）选择样本的排序方式：
 
@@ -220,7 +220,7 @@ python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_p
 
 ![Within iid](docs/img/d_within_iid.png)
 
-你可以通过 `NAME=#rrggbb` 格式为特定分组指定颜色，或通过 `C3=#rrggbb` 格式为对齐后的特定列指定颜色（其中 `#rrggbb` 是代表红绿蓝配比的十六进制颜色代码）：
+你可以通过 `NAME=#rrggbb` 格式为特定分组指定颜色，或通过 `C3=#rrggbb` 格式为对齐后的特定列指定颜色（其中 `#rrggbb` 是代表红绿蓝配比的十六进制颜色代码）。名字是第一个等号前面的文字，所以组名不能含等号。
 
 ```bash
 python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_pruned.fam --groups demo/2448/groups.tsv --id-col id --group-col group --blocks C-Ad,CG1,CG2,CG3,CG4,CG5,CG6,W-Ad,WEE1,WEE2,WWE1,WWE2 --within q --anchor-group WWE1 --color WWE1=#4470b7 --color WEE1=#dc1f26 --color CG4=#f7922c --color C3=#2ca02c --outdir out/e_color

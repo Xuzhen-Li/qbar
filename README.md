@@ -107,7 +107,7 @@ python3 qbar.py --q demo/2448/ref2448_pruned.8.Q --fam demo/2448/ref2448_pruned.
 
 ## Sorting
 
-`--order-file` takes a file with one IID per line, fixes the left-to-right sample order, and overrides `--blocks`. `--blocks` is a comma list of groups from left to right; any groups not listed are appended in alphabetical order. People without a group get the label from `--rest-name` (default `NA`).
+`--order-file` takes a file with one IID per line, fixes the left-to-right sample order, and overrides `--blocks`. `--blocks` is a comma list of groups from left to right; any groups not listed are appended in alphabetical order. A group name cannot contain a comma, because a comma splits one name into two blocks. People without a group get the label from `--rest-name` (default `NA`).
 
 The `--within` option (default `iid`) controls how samples are sorted inside each group:
 
@@ -224,7 +224,7 @@ python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_p
 
 ![Within iid](docs/img/d_within_iid.png)
 
-To set custom colors, pass `--color` with group names (`NAME=#rrggbb`) or aligned column names (`C3=#rrggbb`). A `#rrggbb` code is a six-digit hexadecimal color code that specifies exact amounts of red, green, and blue.
+To set custom colors, pass `--color` with group names (`NAME=#rrggbb`) or aligned column names (`C3=#rrggbb`). The text before the first `=` is the name, so a group name cannot contain `=`. A `#rrggbb` code is a six-digit hexadecimal color code that specifies exact amounts of red, green, and blue.
 
 ```bash
 python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_pruned.fam --groups demo/2448/groups.tsv --id-col id --group-col group --blocks C-Ad,CG1,CG2,CG3,CG4,CG5,CG6,W-Ad,WEE1,WEE2,WWE1,WWE2 --within q --anchor-group WWE1 --color WWE1=#4470b7 --color WEE1=#dc1f26 --color CG4=#f7922c --color C3=#2ca02c --outdir out/e_color
