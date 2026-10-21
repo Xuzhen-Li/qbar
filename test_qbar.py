@@ -826,6 +826,26 @@ class DocstringTests(unittest.TestCase):
         self.assertNotIn("c_align", doc)
         self.assertIn("both K", doc)
 
+    def test_readmes_state_no_align_anchor_exception(self):
+        # Help already says --no-align still runs the anchor on every K.
+        # A paragraph that only names both flags is not enough: the alignment
+        # section already does that while still saying the anchor is the lowest K.
+        def paragraphs(text):
+            return [p.strip() for p in text.split("\n\n") if p.strip()]
+
+        en = open("README.md", encoding="utf-8").read()
+        zh = open("README.zh.md", encoding="utf-8").read()
+        en_ok = [
+            p for p in paragraphs(en)
+            if "--no-align" in p and "--anchor-group" in p and "every K" in p and "C1" in p
+        ]
+        zh_ok = [
+            p for p in paragraphs(zh)
+            if "--no-align" in p and "--anchor-group" in p and "每个 K" in p and "C1" in p
+        ]
+        self.assertTrue(en_ok, "README.md has no --no-align paragraph for the every-K anchor")
+        self.assertTrue(zh_ok, "README.zh.md has no --no-align paragraph for the every-K anchor")
+
 
 if __name__ == "__main__":
     unittest.main()

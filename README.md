@@ -232,7 +232,7 @@ python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_p
 
 ![Custom colors](docs/img/e_color.png)
 
-To keep the raw ADMIXTURE column order without cross-K alignment, add `--no-align`. Cross-K alignment is the step that matches ancestral group columns from K-1 to K so each ancestral group keeps the same color across rows.
+To keep the raw ADMIXTURE column order without cross-K alignment, add `--no-align`. With `--anchor-group`, every K still puts that anchor group's purest person's main column at C1. Cross-K alignment is the step that matches ancestral group columns from K-1 to K so each ancestral group keeps the same color across rows.
 
 ```bash
 python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_pruned.fam --groups demo/2448/groups.tsv --id-col id --group-col group --blocks C-Ad,CG1,CG2,CG3,CG4,CG5,CG6,W-Ad,WEE1,WEE2,WWE1,WWE2 --within iid --no-align --outdir out/c_noalign
@@ -242,7 +242,7 @@ python3 qbar.py --q 'demo/2448/ref2448_pruned.[2-6].Q' --fam demo/2448/ref2448_p
 
 ## Column alignment
 
-When you provide 2 or more K values, columns are aligned across K (this is on by default, while `--no-align` keeps the raw order). Alignment works stepwise from K-1 to K: old columns are matched to new ones, and the leftover new column becomes the new last column. `--align-mode all` (default) uses all people from `--align-groups`, or everyone if that option is not set; `core` keeps only people whose highest ancestry value is above `--qmax` (default `0.75`) at both K values. `--anchor-group G` puts the main column of group `G`'s purest person at `C1` at the lowest K. A purest person is the sample with the highest proportion in a single ancestry column.
+When you provide 2 or more K values, columns are aligned across K (this is on by default, while `--no-align` keeps each Q file's own column order, except that `--anchor-group` still puts that group's purest person's main column at C1 on every K). Alignment works stepwise from K-1 to K: old columns are matched to new ones, and the leftover new column becomes the new last column. `--align-mode all` (default) uses all people from `--align-groups`, or everyone if that option is not set; `core` keeps only people whose highest ancestry value is above `--qmax` (default `0.75`) at both K values. `--anchor-group G` puts the main column of group `G`'s purest person at `C1` at the lowest K. A purest person is the sample with the highest proportion in a single ancestry column.
 
 ### Choosing an alignment method
 
