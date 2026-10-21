@@ -401,9 +401,9 @@ def anchor_perm(q, groups, anchor):
 def core_mask(q_prev, q_new, groups, align_groups, qmax_cut):
     """People used to match columns.
 
-    Same rule as c_align.core_match_mask: inside each listed group, keep
-    people with qmax above the cut at both K. If a group has none, keep
-    that group's single purest person at the lower K.
+    Inside each listed group, keep people with qmax > cut at both K.
+    If a group has none, keep that group's single purest person at the
+    lower K.
     """
     n = q_prev.shape[0]
     m = np.zeros(n, dtype=bool)
@@ -1057,7 +1057,7 @@ def build_parser():
     p.add_argument("--no-align", dest="align", action="store_false")
     p.set_defaults(align=None)
     p.add_argument("--align-mode", choices=("all", "core"), default="all",
-                   help="all=掩码内所有人做 Pearson。core=只留 qmax 超过 --qmax 的人，与 c_align 相同")
+                   help="all=掩码内所有人做 Pearson。core=只留 qmax 严格大于 --qmax 的人")
     p.add_argument("--align-method", choices=ALIGN_METHODS, default="greedy",
                    help="greedy=按列顺序逐列取 Pearson 最高的未用列（默认）。hungarian=Pearson 总和最大的一一匹配。pong=允许上一 K 的一列拆成两列（Behr 2016），align.tsv 第三列为 pong 相似度并多一列 split_parent。jaccard=按人的集合算 Jaccard 后一一匹配，见 --jaccard-set")
     p.add_argument("--jaccard-set", choices=JACCARD_SETS, default="dominant",
