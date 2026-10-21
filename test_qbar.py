@@ -940,6 +940,47 @@ class CliTests(unittest.TestCase):
             self.assertEqual(got_1.shape, (1, 1))
             self.assertTrue(np.allclose(got_1, [[0.5]]))
 
+    def test_directory_includes_lowercase_q_after_sorted_upper(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = os.path.join(td, "qs")
+            os.makedirs(folder)
+            for name, text in (
+                ("m.5.Q", "0.2 0.2 0.2 0.2 0.2\n"),
+                ("a.2.Q", "0.4 0.6\n"),
+                ("b.3.q", "0.1 0.2 0.7\n"),
+                ("notes.txt", "nope\n"),
+            ):
+                with open(os.path.join(folder, name), "w") as f:
+                    f.write(text)
+            q_order = [os.path.join(folder, "a.2.Q"), os.path.join(folder, "m.5.Q")]
+            extra = os.path.join(folder, "b.3.q")
+            self.assertEqual(qbar.collect_q([folder]), q_order + [extra])
+            os.symlink(os.path.join(folder, "a.2.Q"), os.path.join(folder, "extra.2.q"))
+            again = qbar.collect_q([folder])
+            self.assertEqual(again, q_order + [extra])
+            self.assertEqual(len(again), len({os.path.realpath(p) for p in again}))
+            lower = os.path.join(td, "lower")
+            os.makedirs(lower)
+            low = os.path.join(lower, "c.2.q")
+            with open(low, "w") as f:
+                f.write("0.3 0.7\n")
+            self.assertEqual(qbar.collect_q([lower]), [low])
+            notes = os.path.join(td, "notes")
+            os.makedirs(notes)
+            with open(os.path.join(notes, "notes.txt"), "w") as f:
+                f.write("x\n")
+            with self.assertRaises(SystemExit) as ctx:
+                qbar.collect_q([notes])
+            self.assertIn("目录里没有 .Q 或 .q", str(ctx.exception.code))
+        help_s = _cli_flag(qbar.build_parser(), "--q").help or ""
+        self.assertIn("读取其中的 .Q 和 .q", help_s)
+        with open("README.md", encoding="utf-8") as f:
+            en = f.read()
+        with open("README.zh.md", encoding="utf-8") as f:
+            zh = f.read()
+        self.assertIn("A directory passed to `--q` includes `.Q` and `.q` files.", en)
+        self.assertIn("`--q` 传入目录时，会读取其中的 `.Q` 和 `.q` 文件。", zh)
+
 
 def _cli_flag(parser, name):
     for action in parser._actions:
