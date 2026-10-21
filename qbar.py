@@ -93,6 +93,8 @@ def next_free(used, start):
 def col_pearson(a, b):
     a = np.asarray(a, dtype=float)
     b = np.asarray(b, dtype=float)
+    if np.ptp(a) == 0.0 or np.ptp(b) == 0.0:
+        return 0.0
     a = a - a.mean()
     b = b - b.mean()
     na = float(np.linalg.norm(a))
