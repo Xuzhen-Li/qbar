@@ -959,10 +959,11 @@ def align_report_rows(aligned, meta, groups, method, perm, low=None):
             row = {"K_to": k_to, "column": "C%d" % (c + 1), "raw_column": perm[k_to][c] + 1, "method": method}
             if c < k_old:
                 sim = info["pearson"][c]
-                row.update(matched_from="C%d" % (c + 1), similarity="%.3f" % sim,
+                shown = "%.3f" % sim
+                row.update(matched_from="C%d" % (c + 1), similarity=shown,
                            pearson="%.3f" % col_pearson(prev[mask, c], new[mask, c]),
                            split_parent="", parent_share="", runner_up="", runner_up_share="",
-                           low_confidence="yes" if sim < cut else "no")
+                           low_confidence="yes" if float(shown) < cut else "no")
             else:
                 mx, mx_share, ru, ru_share = split_parent_of(prev, new[:, c], mask)
                 if method == "pong":
