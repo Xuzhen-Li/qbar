@@ -182,11 +182,9 @@ def read_q(path):
     if not os.path.isfile(path):
         raise SystemExit("找不到 Q：%s" % path)
     try:
-        q = np.loadtxt(path, dtype=float)
+        q = np.loadtxt(path, dtype=float, ndmin=2)
     except ValueError as exc:
         raise SystemExit("Q 只能是空白分隔的数字：%s" % path) from exc
-    if q.ndim == 1:
-        q = q.reshape(-1, 1)
     if q.size == 0 or q.ndim != 2:
         raise SystemExit("Q 是空的或不是矩阵：%s" % path)
     return q
