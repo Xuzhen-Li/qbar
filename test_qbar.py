@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Small checks for qbar. Run: python3 test_qbar.py"""
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -687,6 +689,34 @@ class ColorTests(unittest.TestCase):
         owners = qbar.column_owners(q, ["a", "b"], ["A", "A"], {})
         self.assertEqual(owners[1], [])
         self.assertEqual(qbar.column_label(owners[1], q, ["A", "A"], 1), "A 0.25")
+
+    def test_top_mean_tie_keeps_first_group(self):
+        code = (
+            "import numpy as np, qbar\n"
+            "q = np.array([[0.5, 0.5], [0.5, 0.5]])\n"
+            "g, mu = qbar.top_mean(q, ['A', 'B'], 0)\n"
+            "print('%s %.1f' % (g, mu))\n"
+            "q2 = np.array([[0.2, 0.8], [0.9, 0.1]])\n"
+            "g2, mu2 = qbar.top_mean(q2, ['A', 'B'], 0)\n"
+            "print('%s %.1f' % (g2, mu2))\n"
+        )
+        repo = os.path.dirname(os.path.abspath(qbar.__file__))
+        outs = []
+        for seed in ("0", "2"):
+            env = os.environ.copy()
+            env["PYTHONHASHSEED"] = seed
+            env["PYTHONDONTWRITEBYTECODE"] = "1"
+            proc = subprocess.run(
+                [sys.executable, "-c", code],
+                cwd=repo,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            outs.append(proc.stdout.strip())
+        self.assertEqual(outs[0], outs[1])
+        self.assertEqual(outs[0], "A 0.5\nB 0.9")
 
     def test_half_split_puts_first_column_on_the_bottom(self):
         q = np.array([[0.5, 0.5]])

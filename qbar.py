@@ -769,10 +769,12 @@ def text_wh(font, text):
 
 def top_mean(q, groups, col):
     best_g, best_mu = "", -1.0
-    for g in set(groups):
-        idx = [i for i, x in enumerate(groups) if x == g]
-        if not idx:
+    seen = set()
+    for g in groups:
+        if g in seen:
             continue
+        seen.add(g)
+        idx = [i for i, x in enumerate(groups) if x == g]
         mu = float(q[idx, col].mean())
         if mu > best_mu:
             best_g, best_mu = g, mu
