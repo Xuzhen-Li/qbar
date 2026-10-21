@@ -1193,5 +1193,91 @@ class DocstringTests(unittest.TestCase):
         self.assertTrue(zh_ok, "README.zh.md has no --no-align paragraph for the every-K anchor")
 
 
+def _load_compare_outputs():
+    import importlib.util
+    path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "tools", "compare_outputs.py"
+    )
+    spec = importlib.util.spec_from_file_location("qbar_compare_outputs", path)
+    if spec is None or spec.loader is None:
+        raise AssertionError("cannot load tools/compare_outputs.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class CompareOutputsTests(unittest.TestCase):
+    def _roots(self):
+        parent = tempfile.TemporaryDirectory()
+        left = os.path.join(parent.name, "left", "case")
+        right = os.path.join(parent.name, "right", "case")
+        os.makedirs(left)
+        os.makedirs(right)
+        return parent, os.path.dirname(left), os.path.dirname(right), left, right
+
+    def _run(self, left_root, right_root):
+        import io
+        from contextlib import redirect_stdout
+        mod = _load_compare_outputs()
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = mod.main(["compare_outputs.py", left_root, right_root])
+        return rc, buf.getvalue()
+
+    def test_identical_dirs_exit_zero(self):
+        parent, left_root, right_root, left, right = self._roots()
+        try:
+            payload = b"same\n"
+            for directory in (left, right):
+                with open(os.path.join(directory, "order.tsv"), "wb") as f:
+                    f.write(payload)
+            rc, text = self._run(left_root, right_root)
+        finally:
+            parent.cleanup()
+        self.assertEqual(rc, 0, text)
+        self.assertIn("result IDENTICAL", text)
+
+    def test_changed_byte_exits_nonzero(self):
+        parent, left_root, right_root, left, right = self._roots()
+        try:
+            with open(os.path.join(left, "order.tsv"), "wb") as f:
+                f.write(b"same\n")
+            with open(os.path.join(right, "order.tsv"), "wb") as f:
+                f.write(b"sXme\n")
+            rc, text = self._run(left_root, right_root)
+        finally:
+            parent.cleanup()
+        self.assertNotEqual(rc, 0, text)
+        self.assertIn("result DIFFERENCES", text)
+
+    def test_pdf_creationdate_only_exits_zero(self):
+        parent, left_root, right_root, left, right = self._roots()
+        try:
+            body = b"%PDF-1.4\n1 0 obj\n<< /Length 5 >>\nstream\nhello\nendstream\nendobj\n"
+            with open(os.path.join(left, "bar.pdf"), "wb") as f:
+                f.write(body + b"/CreationDate (D:20200101120000Z)\n")
+            with open(os.path.join(right, "bar.pdf"), "wb") as f:
+                f.write(body + b"/CreationDate (D:20261231235959Z)\n")
+            rc, text = self._run(left_root, right_root)
+        finally:
+            parent.cleanup()
+        self.assertEqual(rc, 0, text)
+        self.assertIn("pdf-identical", text)
+        self.assertIn("result IDENTICAL", text)
+
+    def test_args_program_path_is_not_a_difference(self):
+        parent, left_root, right_root, left, right = self._roots()
+        try:
+            with open(os.path.join(left, "args.txt"), "w", encoding="utf-8") as f:
+                f.write("/opt/qbar/qbar.py --outdir %s\n" % left)
+            with open(os.path.join(right, "args.txt"), "w", encoding="utf-8") as f:
+                f.write("qbar --outdir %s\n" % right)
+            rc, text = self._run(left_root, right_root)
+        finally:
+            parent.cleanup()
+        self.assertEqual(rc, 0, text)
+        self.assertIn("identical-after-path-normalisation", text)
+
+
 if __name__ == "__main__":
     unittest.main()
