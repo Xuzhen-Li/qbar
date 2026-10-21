@@ -527,6 +527,35 @@ class AlignTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             qbar.align_qs(q, ["A", "B"], "", "all", [], 0.75, True)
 
+    def test_match_next_dispatches_pong_and_jaccard(self):
+        # AUD-03 toy, built here. Old C1 correlates perfectly with the small
+        # new column, so greedy Pearson takes that column. pong prefers the
+        # large column. Expected pong and jaccard values are the dedicated
+        # functions, not a copy of match_next.
+        c1 = np.array([0.90, 0.80, 0.70, 0.30, 0.20, 0.10])
+        large = np.array([0.62, 0.58, 0.54, 0.46, 0.40, 0.34])
+        third = np.array([0.335, 0.380, 0.425, 0.525, 0.590, 0.655])
+        q_prev = np.column_stack([c1, 1.0 - c1])
+        q_new = np.column_stack([large, 0.05 * c1, third])
+        self.assertTrue(np.allclose(q_new.sum(axis=1), 1.0))
+        mask = np.ones(q_prev.shape[0], dtype=bool)
+        greedy = qbar.match_next(q_prev, q_new, mask, "greedy")
+        pong = qbar.match_next_pong(q_prev, q_new, mask)
+        self.assertNotEqual(greedy[0], pong[0])
+        self.assertEqual(qbar.match_next(q_prev, q_new, mask, "pong"), pong)
+
+        q2, q3, mask2 = self._greedy_vs_hungarian_case()
+        jac = qbar.match_next_jaccard(q2, q3, mask2, "threshold", 0.5)
+        self.assertNotEqual(qbar.match_next(q2, q3, mask2, "greedy")[0], jac[0])
+        self.assertEqual(
+            qbar.match_next(q2, q3, mask2, "jaccard", "threshold", 0.5),
+            jac,
+        )
+        self.assertEqual(
+            qbar.match_next(q2, q3, mask2, "jaccard"),
+            qbar.match_next_jaccard(q2, q3, mask2),
+        )
+
 
 class ColorTests(unittest.TestCase):
     def test_same_requested_colour_is_not_used_twice(self):
