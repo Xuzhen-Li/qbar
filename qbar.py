@@ -860,6 +860,7 @@ def render(path, rows, spans, bar_w, bar_h, title):
         px0 = left + int(span["start"] * bar_w / n)
         px1 = left + int(span["end"] * bar_w / n)
         if px1 - px0 < 14:
+            print("注意：组 %s 的条宽小于 14 像素，图上没写组名" % span["name"], file=sys.stderr)
             continue
         mid = (px0 + px1) // 2
         if rotate:
