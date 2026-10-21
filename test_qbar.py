@@ -891,6 +891,28 @@ class CliTests(unittest.TestCase):
         self.assertIn("whitespace-separated numeric", en)
         self.assertIn("空白分隔的数字", zh)
 
+    def test_nan_q_exits_and_inf_keeps_range_message(self):
+        with tempfile.TemporaryDirectory() as td:
+            ids = os.path.join(td, "ids.txt")
+            with open(ids, "w") as f:
+                f.write("a\nb\n")
+            qnan = os.path.join(td, "nan.2.Q")
+            with open(qnan, "w") as f:
+                f.write("0.5 nan\n0.2 0.8\n")
+            out_nan = os.path.join(td, "out_nan")
+            with self.assertRaises(SystemExit) as ctx:
+                qbar.main(["--q", qnan, "--ids", ids, "--outdir", out_nan])
+            self.assertEqual(ctx.exception.code, "K=2 的 Q 有 NaN")
+            self.assertFalse(os.path.isfile(os.path.join(out_nan, "bar_K2.png")))
+            qinf = os.path.join(td, "inf.2.Q")
+            with open(qinf, "w") as f:
+                f.write("0.5 inf\n0.2 0.8\n")
+            out_inf = os.path.join(td, "out_inf")
+            with self.assertRaises(SystemExit) as ctx_inf:
+                qbar.main(["--q", qinf, "--ids", ids, "--outdir", out_inf])
+            self.assertEqual(ctx_inf.exception.code, "K=2 的 Q 有超出 [0,1] 的数")
+            self.assertFalse(os.path.isfile(os.path.join(out_inf, "bar_K2.png")))
+
 
 def _cli_flag(parser, name):
     for action in parser._actions:

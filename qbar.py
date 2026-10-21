@@ -220,16 +220,18 @@ def load_q_set(paths):
 
 
 def check_shapes(q_by_k, n):
-    """Reject a row-count mismatch, or a loaded value < -1e-6 or > 1+1e-4.
+    """Reject a row-count mismatch, a NaN, or a loaded value < -1e-6 or > 1+1e-4.
 
-    The endpoints -1e-6 and 1+1e-4 are kept. A row is kept, with a warning,
-    when abs(sum - 1) > 0.05 on the loaded floats.
+    The endpoints -1e-6 and 1+1e-4 are kept. Inf still fails that range check.
+    A row is kept, with a warning, when abs(sum - 1) > 0.05 on the loaded floats.
     """
     for k, q in sorted(q_by_k.items()):
         if q.shape[0] != n:
             raise SystemExit("K=%d 的 Q 有 %d 行，样本名单有 %d 行" % (k, q.shape[0], n))
         if np.any(q < -1e-6) or np.any(q > 1.0 + 1e-4):
             raise SystemExit("K=%d 的 Q 有超出 [0,1] 的数" % k)
+        if np.any(np.isnan(q)):
+            raise SystemExit("K=%d 的 Q 有 NaN" % k)
         bad = np.where(np.abs(q.sum(axis=1) - 1.0) > 0.05)[0]
         if len(bad):
             print("注意：K=%d 有 %d 行人的组分和离 1 超过 0.05，图上多出来的部分留白" % (k, len(bad)), file=sys.stderr)
