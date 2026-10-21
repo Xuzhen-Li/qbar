@@ -89,6 +89,12 @@ order	demo/out/order.tsv
 
 运行生成的所有结果文件都会保存在 `--outdir` 指定的输出目录中。其中 `panel.png` 和 `panel.pdf` 是将所有 K 值拼接在一起的汇总条形图，`bar_K*.png` 和 `bar_K*.pdf` 是单个 K 值的独立条形图。数据表格方面，`order.tsv` 记录了最终的样本排列顺序，`blocks.tsv` 记录了每个分组区块在图中的起止位置，`align.tsv` 记录了不同 K 值之间的列对齐得分，`perm_K*.tsv` 记录了原始列到对齐后列的置换对应关系（即原本的第几列变成了现在的第几列），而 `args.txt` 保存了本次运行的完整命令。此外，`align_report.tsv` 和 `align_report.txt` 这两个对齐报告文件只有在启用了 `--align-report` 选项时才会生成。
 
+* `--align` 强制打开跨 K 对齐。如果 `--align` 和 `--no-align` 都不写，有两个或更多 K 文件时同样会对齐。
+* `--color-file` 是一个文本文件，两列用空白分开：名字和 `#rrggbb`。
+* `--title` 画在图的上方。默认是空字符串，不画标题。
+* `--width` 是条形图宽度，单位是像素。默认 2200。
+* `--bar-height` 是每一行 K 的高度，单位是像素。默认 0，表示只有一个 K 时用 220，有多个 K 时用 120。
+
 如果只输入单个 `.Q` 文件，程序就只会生成对应 K 值的单张图（例如 `bar_K8.png` 和 `bar_K8.pdf`），不会生成汇总图 `panel` 和对齐文件 `align.tsv`：
 
 ```bash

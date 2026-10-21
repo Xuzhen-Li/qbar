@@ -783,6 +783,22 @@ class DocstringTests(unittest.TestCase):
                     "%s missing %s" % (path, token),
                 )
 
+    def test_readmes_name_every_cli_option(self):
+        import re
+        flags = []
+        for action in qbar.build_parser()._actions:
+            for name in action.option_strings:
+                if name in ("-h", "--help"):
+                    continue
+                flags.append(name)
+        for path in ("README.md", "README.zh.md"):
+            text = open(path, encoding="utf-8").read()
+            missing = [
+                name for name in flags
+                if re.search(r"(?<![\w-])" + re.escape(name) + r"(?![\w-])", text) is None
+            ]
+            self.assertEqual(missing, [], path)
+
 
 if __name__ == "__main__":
     unittest.main()
