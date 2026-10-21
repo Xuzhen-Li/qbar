@@ -5,13 +5,19 @@ One command. No R, no CLUMPP. Same-K replicate merging is not done here
 (that is CLUMPP: Jakobsson & Rosenberg 2007 Bioinformatics 23:1801,
 DOI 10.1093/bioinformatics/btm233).
 
-Cross-K column matching is greedy maximum Pearson correlation, K to K+1.
+Cross-K column matching runs from K to K+1. The default --align-method
+is greedy: each old column takes the unused new column with the highest
+Pearson correlation. Other --align-method choices are hungarian, pong,
+and jaccard. --align-report writes align_report.tsv and align_report.txt.
 Label switching itself is described by Alexander, Novembre & Lange 2009
 Genome Res 19:1655, DOI 10.1101/gr.094052.109.
 
-Within-group hclust is average linkage on correlation distance (1 − Pearson),
-the same criterion as scipy.cluster.hierarchy.linkage(method="average",
-metric="correlation"):
+Within-group hclust default is average linkage on correlation distance
+(1 - Pearson): scipy.cluster.hierarchy.linkage(method="average",
+metric="correlation"). --hclust-dist also accepts euclidean and
+braycurtis. --hclust-linkage also accepts ward and complete; ward needs
+--hclust-dist euclidean. --hclust-pre accepts dominant (default none).
+--hclust-olo is off unless set.
 https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.hierarchy.linkage.html
 """
 from __future__ import annotations
