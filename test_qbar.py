@@ -756,6 +756,14 @@ class DocstringTests(unittest.TestCase):
         self.assertIn("--no-align", anchor)
         self.assertIn("每个 K", anchor)
 
+    def test_align_mode_help_states_core_fallback(self):
+        doc = " ".join((qbar.core_mask.__doc__ or "").split())
+        self.assertIn("purest", doc)
+        self.assertIn("lower K", doc)
+        help_s = _cli_flag(qbar.build_parser(), "--align-mode").help or ""
+        self.assertIn("最纯", help_s)
+        self.assertIn("较低 K", help_s)
+
 
 if __name__ == "__main__":
     unittest.main()
