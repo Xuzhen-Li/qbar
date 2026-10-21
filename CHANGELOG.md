@@ -5,6 +5,7 @@
 ### Changed
 
 - A directory given to --q now includes lowercase .q files as well as .Q files. .Q files stay in the same sorted order, and the same file is not added twice.
+- An --ids line with more than one whitespace-separated token still uses the first token as the ID. qbar warns on stderr with how many lines did that, and shows the first example. Output files are unchanged.
 
 ### Fixed
 
