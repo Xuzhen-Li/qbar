@@ -836,7 +836,7 @@ def render(path, rows, spans, bar_w, bar_h, title):
     y = title_h
     n = rows[0]["image"].shape[1]
     for row, pitch in zip(rows, row_pitch):
-        img = Image.fromarray(row["image"], mode="RGB")
+        img = Image.fromarray(row["image"])
         img = img.resize((bar_w, bar_h), Image.Resampling.NEAREST)
         bar_y = y + (pitch - bar_h) // 2
         canvas.paste(img, (left, bar_y))
