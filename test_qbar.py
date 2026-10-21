@@ -438,6 +438,45 @@ class AlignTests(unittest.TestCase):
         self.assertEqual(rows_below[0]["similarity"], "0.494")
         self.assertEqual(rows_below[0]["low_confidence"], "yes")
 
+    def test_tied_or_low_confidence_new_column_is_not_called_a_split(self):
+        # Shares [0.5, 0.5]. The lower column stays in the TSV. The text must not say "split from".
+        prev = np.array([[1.0, 0.0], [0.5, 0.5], [0.0, 1.0]])
+        new_col = np.array([0.0, 1.0, 0.0])
+        parent, share, runner, runner_share = qbar.split_parent_of(prev, new_col, np.ones(3, dtype=bool))
+        self.assertEqual((parent, share, runner, runner_share), (0, 0.5, 1, 0.5))
+        new = np.column_stack([prev, new_col])
+        groups = ["A", "B", "C"]
+        meta = {3: {"n_mask": 3, "pearson": [1.0, 1.0, None], "mask": np.ones(3, dtype=bool)}}
+        with tempfile.TemporaryDirectory() as d:
+            qbar.write_align_report(d, {2: prev, 3: new}, meta, groups, "greedy", {3: [0, 1, 2]})
+            with open(os.path.join(d, "align_report.tsv")) as f:
+                tied_row = f.read().splitlines()[-1].split("\t")
+            with open(os.path.join(d, "align_report.txt")) as f:
+                tied_txt = f.read()
+        self.assertEqual(tied_row[8], "C1")
+        self.assertEqual((tied_row[9], tied_row[11]), ("0.500", "0.500"))
+        self.assertIn("parent not identified", tied_txt)
+        self.assertNotIn("split from", tied_txt)
+
+        # New column is exactly old column 1. A matched similarity of 0 is under the 0.5 cut.
+        prev2 = np.array([[1.0, 0.0], [0.0, 1.0]])
+        new2 = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+        parent2, share2, runner2, runner_share2 = qbar.split_parent_of(
+            prev2, new2[:, 2], np.ones(2, dtype=bool))
+        self.assertEqual((parent2, share2, runner2, runner_share2), (1, 1.0, 0, 0.0))
+        meta2 = {3: {"n_mask": 2, "pearson": [0.0, 1.0, None], "mask": np.ones(2, dtype=bool)}}
+        with tempfile.TemporaryDirectory() as d:
+            rows = qbar.write_align_report(
+                d, {2: prev2, 3: new2}, meta2, ["A", "B"], "greedy", {3: [0, 1, 2]})
+            with open(os.path.join(d, "align_report.tsv")) as f:
+                low_row = f.read().splitlines()[-1].split("\t")
+            with open(os.path.join(d, "align_report.txt")) as f:
+                low_txt = f.read()
+        self.assertEqual(rows[0]["low_confidence"], "yes")
+        self.assertEqual(low_row[8], "C2")
+        self.assertIn("not a split", low_txt)
+        self.assertNotIn("split from", low_txt)
+
     def test_cli_report_is_opt_in(self):
         q2, q3, _ = self._greedy_vs_hungarian_case()
         with tempfile.TemporaryDirectory() as tmp:
