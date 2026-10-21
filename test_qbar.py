@@ -658,5 +658,42 @@ class CliTests(unittest.TestCase):
                 qbar.main(["--q", q, "--fam", fam, "--outdir", os.path.join(td, "out")])
 
 
+def _cli_flag(parser, name):
+    for action in parser._actions:
+        if name in action.option_strings:
+            return action
+    raise AssertionError("missing flag %s" % name)
+
+
+class DocstringTests(unittest.TestCase):
+    def test_module_docstring_names_align_methods(self):
+        # Expectations come from argparse, not from the wording under test.
+        doc = qbar.__doc__ or ""
+        flat = " ".join(doc.split())
+        parser = qbar.build_parser()
+        align = _cli_flag(parser, "--align-method")
+        missing = [name for name in align.choices if name not in flat]
+        self.assertEqual(
+            missing, [],
+            "module docstring is missing --align-method choices",
+        )
+        self.assertEqual(align.default, "greedy")
+        self.assertRegex(flat, r"default --align-method\s+is greedy")
+        self.assertNotIn("column matching is greedy", flat)
+        self.assertIn("--align-report", flat)
+        dist = _cli_flag(parser, "--hclust-dist")
+        link = _cli_flag(parser, "--hclust-linkage")
+        pre = _cli_flag(parser, "--hclust-pre")
+        missing_h = [
+            name for name in list(dist.choices) + list(link.choices) + list(pre.choices)
+            if name not in flat
+        ]
+        self.assertEqual(missing_h, [])
+        self.assertEqual(dist.default, "correlation")
+        self.assertEqual(link.default, "average")
+        self.assertIn("hclust default is average linkage on correlation", flat)
+        self.assertIn("--hclust-olo", flat)
+
+
 if __name__ == "__main__":
     unittest.main()
