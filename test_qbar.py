@@ -764,6 +764,25 @@ class DocstringTests(unittest.TestCase):
         self.assertIn("最纯", help_s)
         self.assertIn("较低 K", help_s)
 
+    def test_q_bounds_are_documented(self):
+        import inspect
+        import re
+        src = inspect.getsource(qbar.check_shapes)
+        self.assertIn("q < -1e-6", src)
+        self.assertIn("q > 1.0 + 1e-4", src)
+        self.assertIn("> 0.05", src)
+        doc = qbar.check_shapes.__doc__ or ""
+        for token in ("-1e-6", "1+1e-4", "0.05"):
+            self.assertIn(token, doc)
+        for path in ("README.md", "README.zh.md"):
+            text = open(path, encoding="utf-8").read()
+            for token in ("-1e-6", "1e-4", "0.05"):
+                self.assertRegex(
+                    text,
+                    r"(?<![\w.])" + re.escape(token) + r"(?![\w])",
+                    "%s missing %s" % (path, token),
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -32,7 +32,7 @@ python3 test_qbar.py
 
 ## Input files
 
-The first input is a Q matrix (`.Q`) with ancestry proportions, which has one row per person. Ancestry proportions are numbers that add up to 1 across each row and tell what fraction of a person's genetic makeup comes from each ancestral group.
+The first input is a Q matrix (`.Q`) with ancestry proportions, which has one row per person. Ancestry proportions are numbers that add up to 1 across each row and tell what fraction of a person's genetic makeup comes from each ancestral group. qbar rejects a loaded value only when it is below -1e-6 or above 1+1e-4. A row is still drawn, with a warning, when abs(sum - 1) > 0.05 on the loaded floats.
 
 ```text
 0.048906 0.126240 0.516154 0.158683 0.000010 0.002808 0.000010 0.147189

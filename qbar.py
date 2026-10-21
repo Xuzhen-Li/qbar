@@ -215,6 +215,11 @@ def load_q_set(paths):
 
 
 def check_shapes(q_by_k, n):
+    """Reject a row-count mismatch, or a loaded value < -1e-6 or > 1+1e-4.
+
+    The endpoints -1e-6 and 1+1e-4 are kept. A row is kept, with a warning,
+    when abs(sum - 1) > 0.05 on the loaded floats.
+    """
     for k, q in sorted(q_by_k.items()):
         if q.shape[0] != n:
             raise SystemExit("K=%d 的 Q 有 %d 行，样本名单有 %d 行" % (k, q.shape[0], n))
