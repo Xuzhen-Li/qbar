@@ -111,6 +111,8 @@ def load_ids(fam, ids_path):
         raise SystemExit("需要 --fam（PLINK .fam）或 --ids（一行一个 IID，顺序与 Q 的行一致）")
     path = fam or ids_path
     iids = []
+    extra_n = 0
+    example = None
     with open(path) as f:
         for line in f:
             parts = line.split()
@@ -119,7 +121,16 @@ def load_ids(fam, ids_path):
             if fam and len(parts) >= 2:
                 iids.append(parts[1])
             else:
+                if not fam and len(parts) > 1:
+                    extra_n += 1
+                    if example is None:
+                        example = line.strip()
                 iids.append(parts[0])
+    if not fam and extra_n:
+        print(
+            "注意：--ids 有 %d 行含有多个字段，只保留了每行第一个。例如：%s" % (extra_n, example),
+            file=sys.stderr,
+        )
     if len(iids) != len(set(iids)):
         raise SystemExit("样本名有重复：%s" % path)
     if not iids:
@@ -1073,7 +1084,7 @@ def build_parser():
     )
     p.add_argument("--q", nargs="+", required=True, help="一个或多个 .Q 或 .q，或带引号的通配符，或一个目录（读取其中的 .Q 和 .q）。只读空白分隔的数字 .Q 或 .q")
     p.add_argument("--fam", help="PLINK .fam，IID 在第 2 列，行序与 Q 相同")
-    p.add_argument("--ids", help="一行一个 IID，行序与 Q 相同。与 --fam 二选一")
+    p.add_argument("--ids", help="一行一个 IID，行序与 Q 相同。与 --fam 二选一。多出来的字段只保留第一个，并在 stderr 警告")
     p.add_argument("--groups", help="分组表，tsv 或 csv，要有表头")
     p.add_argument("--id-col", default="analysis_IID")
     p.add_argument("--group-col", default="Dong_Grp")

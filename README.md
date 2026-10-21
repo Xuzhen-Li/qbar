@@ -42,7 +42,7 @@ The first input is a Q matrix (`.Q`) with ancestry proportions, which has one ro
 0.129499 0.643154 0.000010 0.000010 0.019487 0.091643 0.000010 0.116187
 ```
 
-The second input gives sample IDs either from a PLINK `.fam` file (where the IID is in column 2) via `--fam`, or from a plain list with one IID per line via `--ids`; use one of these options, not both. A PLINK `.fam` file is a standard genetics table of sample information, and an IID (individual identifier) is the unique name for one sample.
+The second input gives sample IDs either from a PLINK `.fam` file (where the IID is in column 2) via `--fam`, or from a plain list with one IID per line via `--ids`; use one of these options, not both. A PLINK `.fam` file is a standard genetics table of sample information, and an IID (individual identifier) is the unique name for one sample. If an `--ids` line has more than one whitespace-separated token, qbar keeps the first token and writes a warning to stderr.
 
 ```text
 1 1 0 0 0 -9
