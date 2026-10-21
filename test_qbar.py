@@ -733,6 +733,11 @@ class DocstringTests(unittest.TestCase):
         self.assertNotIn("c_align", help_s)
         self.assertIn("严格大于", help_s)
 
+    def test_align_mode_help_names_every_method(self):
+        help_s = _cli_flag(qbar.build_parser(), "--align-mode").help or ""
+        missing = [name for name in qbar.ALIGN_METHODS if name not in help_s]
+        self.assertEqual(missing, [], "align-mode help must name every ALIGN_METHODS entry")
+
 
 if __name__ == "__main__":
     unittest.main()
