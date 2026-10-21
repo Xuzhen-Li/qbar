@@ -708,6 +708,36 @@ class CliTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 qbar.main(["--q", q, "--fam", fam, "--outdir", os.path.join(td, "out")])
 
+    def test_non_numeric_q_names_the_file(self):
+        # loadtxt cannot parse a comma or a header. The exit must name the file.
+        # A whitespace-separated numeric matrix is the format that is read.
+        with tempfile.TemporaryDirectory() as td:
+            comma = os.path.join(td, "bad.2.Q")
+            with open(comma, "w") as f:
+                f.write("0.2,0.8\n0.3,0.7\n")
+            with self.assertRaises(SystemExit) as cm:
+                qbar.read_q(comma)
+            self.assertIn(comma, str(cm.exception.code))
+            self.assertIn("空白分隔", str(cm.exception.code))
+            header = os.path.join(td, "head.2.Q")
+            with open(header, "w") as f:
+                f.write("sample a\n0.2 0.8\n")
+            with self.assertRaises(SystemExit) as cmh:
+                qbar.read_q(header)
+            self.assertIn(header, str(cmh.exception.code))
+            good = os.path.join(td, "ok.2.Q")
+            with open(good, "w") as f:
+                f.write("0.2 0.8\n0.4 0.6\n")
+            got = qbar.read_q(good)
+            self.assertTrue(np.allclose(got, [[0.2, 0.8], [0.4, 0.6]]))
+        help_s = _cli_flag(qbar.build_parser(), "--q").help or ""
+        self.assertIn("空白分隔", help_s)
+        self.assertIn(".q", help_s)
+        en = open("README.md", encoding="utf-8").read()
+        zh = open("README.zh.md", encoding="utf-8").read()
+        self.assertIn("whitespace-separated numeric", en)
+        self.assertIn("空白分隔的数字", zh)
+
 
 def _cli_flag(parser, name):
     for action in parser._actions:
