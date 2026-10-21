@@ -414,6 +414,30 @@ class AlignTests(unittest.TestCase):
         self.assertEqual([r["low_confidence"] for r in rows], ["yes", "no", "NA"])
         self.assertNotEqual(rows[0]["similarity"], rows[0]["pearson"])
 
+    def test_low_confidence_matches_printed_similarity(self):
+        # 0.4996 prints as 0.500. The stored flag must follow that printed number.
+        sim = 0.4996
+        self.assertEqual("%.3f" % sim, "0.500")
+        self.assertLess(sim, 0.5)
+        prev = np.array([[1.0, 0.0], [1.0, 0.0], [0.0, 1.0], [0.0, 1.0]])
+        new = np.array([[1.0, 0.0, 0.0], [0.8, 0.2, 0.0], [0.0, 1.0, 0.0], [0.0, 0.2, 0.8]])
+        mask = np.ones(4, dtype=bool)
+        aligned = {2: prev, 3: new}
+        perm = {3: [0, 1, 2]}
+        groups = ["A", "A", "B", "B"]
+        meta = {3: {"n_mask": 4, "pearson": [sim, 0.9, None], "mask": mask}}
+        rows, cut = qbar.align_report_rows(aligned, meta, groups, "greedy", perm, 0.5)
+        self.assertEqual(cut, 0.5)
+        self.assertEqual(rows[0]["similarity"], "0.500")
+        self.assertEqual(rows[0]["low_confidence"], "no")
+        below = 0.4944
+        self.assertEqual("%.3f" % below, "0.494")
+        self.assertLess(below, 0.5)
+        meta_below = {3: {"n_mask": 4, "pearson": [below, 0.9, None], "mask": mask}}
+        rows_below, _cut = qbar.align_report_rows(aligned, meta_below, groups, "greedy", perm, 0.5)
+        self.assertEqual(rows_below[0]["similarity"], "0.494")
+        self.assertEqual(rows_below[0]["low_confidence"], "yes")
+
     def test_cli_report_is_opt_in(self):
         q2, q3, _ = self._greedy_vs_hungarian_case()
         with tempfile.TemporaryDirectory() as tmp:
