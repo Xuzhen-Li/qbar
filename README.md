@@ -42,7 +42,7 @@ qbar was tested on Python 3.13.5, numpy 2.5.4, Pillow 12.3.0, and scipy 1.18.1. 
 python3 test_qbar.py
 ```
 
-74 tests pass. New features do not change defaults: with no new options, results are the same as before.
+75 tests pass. New features do not change defaults: with no new options, results are the same as before.
 
 ## Input files
 
@@ -260,7 +260,7 @@ When you provide 2 or more K values, columns are aligned across K (this is on by
 
 ### Choosing an alignment method
 
-`--align-method` accepts `greedy`, `hungarian`, `pong`, or `jaccard`. `greedy` is the default, and all methods use the same set of people.
+`--align-method` accepts `greedy`, `hungarian`, `pong`, or `jaccard`. `greedy` is the default, and all methods use the same set of people. [Choosing an alignment method](docs/choosing-alignment-method.md) states what each method compares.
 
 * `greedy`: goes through `C1`, `C2`, ... in order and picks the unused new column with the highest Pearson r, breaking ties by picking the lower column index, and warns on `stderr` when Pearson is less than 0.5. Pearson r (correlation coefficient) is a number from -1 to 1 that measures how closely two columns of numbers follow the same pattern, and `stderr` (standard error) is the terminal text stream used for warning messages. It is fast and works fine when columns clearly match, though the starting column order can affect the result.
 * `hungarian`: finds the best overall one-to-one Pearson match across all columns at once. A one-to-one match pairs each old column with a unique new column to maximize the total correlation score. Use it when `greedy` warns about a low Pearson score or when two columns compete for the same match; it gives the same order as `greedy` on the demo.
