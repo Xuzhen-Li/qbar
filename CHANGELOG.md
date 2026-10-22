@@ -15,6 +15,7 @@ The package version is 0.2.0.dev0. No git tag exists.
 - `docs/choosing-alignment-method.md` describes the four alignment methods. Speed and agreement are not filled in.
 - `CONTRIBUTING.md`, the Contributor Covenant 2.1 code of conduct, a bug-report template, and a pull-request template.
 - `CITATION.cff` and `.zenodo.json` describe version 0.2.0.dev0. No release date is set, because there is no release.
+- GitHub Actions also runs on Python 3.15, on the same two operating systems.
 - GitHub Actions installs the package and runs the tests on ubuntu-latest and macos-latest for Python 3.9 and 3.14. The workflow does not compare PNG or PDF bytes (58369c4).
 - The unit tests can import an installed qbar when `QBAR_TEST_INSTALLED` is `1` (93951eb).
 - The pip distribution name is qbar-plot. The `qbar` command runs the same program (a2a83d8).
