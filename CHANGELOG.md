@@ -5,6 +5,7 @@
 ### Added
 
 - qbar can be imported. The implementation lives under src/qbar. `python qbar.py` still runs the same command.
+- The pip distribution name is qbar-plot. The `qbar` command runs the same program.
 
 ### Changed
 

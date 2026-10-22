@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "qbar-plot"
+description = "Read ADMIXTURE Q matrices, align columns across K, and draw population structure bar plots."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Xuzhen Li", email = "jasonlixuzhen@gmail.com" }]
+dependencies = [
+    "numpy>=1.21.0",
+    "scipy>=1.7.3",
+    "Pillow>=9.1.0",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/Xuzhen-Li/qbar"
+Source = "https://github.com/Xuzhen-Li/qbar"
+Issues = "https://github.com/Xuzhen-Li/qbar/issues"
+
+[project.scripts]
+qbar = "qbar.cli:main"
+
+[tool.hatch.version]
+path = "src/qbar/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/qbar"]
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "/paper",
+    "/tools",
+    "/.venv-audit",
+    "/demo/out",
+]
