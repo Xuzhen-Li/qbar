@@ -22,13 +22,27 @@ python3 -m venv .venv
 python3 -m pip install -r requirements.txt
 ```
 
+After the first PyPI release, install the package with:
+
+```bash
+pip install qbar-plot
+```
+
+That command is not available before the first PyPI release. From a checkout of this repository, install the same package with:
+
+```bash
+pip install .
+```
+
+The installed command is `qbar`. `python3 qbar.py` still runs the program from a checkout.
+
 qbar was tested on Python 3.13.5, numpy 2.5.4, Pillow 12.3.0, and scipy 1.18.1. You can run the self-check to verify that the program works on your machine:
 
 ```bash
 python3 test_qbar.py
 ```
 
-44 tests pass. New features do not change defaults: with no new options, results are the same as before.
+74 tests pass. New features do not change defaults: with no new options, results are the same as before.
 
 ## Input files
 
