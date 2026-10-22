@@ -18,7 +18,7 @@ show this help message and exit
 
 ### `--q`
 
-一个或多个 .Q 或 .q，或带引号的通配符，或一个目录（读取其中的 .Q 和 .q）。只读空白分隔的数字 .Q 或 .q
+一个或多个矩阵文件，或带引号的通配符，或一个目录。默认读取 .Q 和 .q。目录里读哪些扩展名由 --q-format 决定。文件内容是空白分隔的数字。
 
 - Required: yes
 - Arguments: +
@@ -39,7 +39,7 @@ PLINK .fam，IID 在第 2 列，行序与 Q 相同
 
 ### `--ids`
 
-一行一个 IID，行序与 Q 相同。与 --fam 二选一。多出来的字段只保留第一个，并在 stderr 警告
+一行一个 IID，行序与 Q 相同。与 --fam、--ind 只能留一个。多出来的字段只保留第一个，并在 stderr 警告
 
 - Default: not set
 

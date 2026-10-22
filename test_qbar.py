@@ -1010,7 +1010,10 @@ class CliTests(unittest.TestCase):
                 qbar.collect_q([notes])
             self.assertIn("目录里没有 .Q 或 .q", str(ctx.exception.code))
         help_s = _cli_flag(qbar.build_parser(), "--q").help or ""
-        self.assertIn("读取其中的 .Q 和 .q", help_s)
+        self.assertEqual(
+            help_s,
+            "一个或多个矩阵文件，或带引号的通配符，或一个目录。默认读取 .Q 和 .q。目录里读哪些扩展名由 --q-format 决定。文件内容是空白分隔的数字。",
+        )
         en = _read_checkout("README.md")
         zh = _read_checkout("README.zh.md")
         self.assertIn("A directory passed to `--q` includes `.Q` and `.q` files.", en)
