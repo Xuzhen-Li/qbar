@@ -223,3 +223,9 @@ core 模式的 qmax 阈值。默认 0.75
 
 - Required: yes
 - Default: not set
+
+### `--provenance`
+
+另写 run.json，记下版本、选项、输入哈希和依赖版本
+
+- Default: false

@@ -10,6 +10,7 @@ The package version is 0.2.0.dev0. No git tag exists.
 
 ### Added
 
+- `--provenance` writes `run.json`. It is off by default. Other outputs are unchanged.
 - `qbar.api.run` returns `RunResult`.
 - The install notes in `README.md` and `README.zh.md` include `pip install qbar-plot` after the first PyPI release, and `pip install .` from a checkout. The installed command is `qbar`. `python3 qbar.py` still works.
 - `docs/cli.md` is generated from the argument parser by `tools/gen_cli_docs.py`.

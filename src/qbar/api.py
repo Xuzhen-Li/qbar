@@ -7,9 +7,14 @@ the TSV files.
 from __future__ import annotations
 
 import argparse
+import datetime
+import hashlib
+import json
 import os
+import platform
+import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 
 import numpy as np
 
@@ -79,6 +84,170 @@ class RunResult:
     paths: list[str]
 
 
+def _json_ready(value):
+    """Return a JSON value. Namespace and dataclass keys are sorted."""
+    if value is None or isinstance(value, (bool, str, int, float)):
+        return value
+    if isinstance(value, os.PathLike):
+        return os.fspath(value)
+    if isinstance(value, argparse.Namespace):
+        return {key: _json_ready(item) for key, item in sorted(vars(value).items())}
+    if is_dataclass(value) and not isinstance(value, type):
+        raw = asdict(value)
+        return {key: _json_ready(raw[key]) for key in sorted(raw)}
+    if isinstance(value, dict):
+        return {str(key): _json_ready(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_ready(item) for item in value]
+    raise TypeError("run.json cannot store %s" % type(value).__name__)
+
+
+def write_run_json(path, payload):
+    """Write ``payload`` as UTF-8 JSON, indent 2, with a trailing newline.
+
+    Keys stay in the given order. ``sort_keys`` is not used. Namespace
+    and dataclass values are stored as objects.
+    """
+    data = _json_ready(payload)
+    text = json.dumps(data, indent=2, ensure_ascii=False, sort_keys=False, allow_nan=False)
+    if not text.endswith("\n"):
+        text += "\n"
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(text)
+
+
+def _git_stdout(root, cmd, env):
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=root,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        return proc.stdout.decode("ascii")
+    except UnicodeError:
+        return None
+
+
+def _git_commit():
+    """HEAD if this file is tracked in the checkout that contains it.
+
+    Otherwise ``unknown``. The hash is the stdout of ``git rev-parse HEAD``
+    and is kept only when it is 40 hex characters.
+    """
+    code_path = os.path.realpath(__file__)
+    directory = os.path.dirname(code_path)
+    root = None
+    while True:
+        if os.path.exists(os.path.join(directory, ".git")):
+            root = directory
+            break
+        parent = os.path.dirname(directory)
+        if parent == directory:
+            return "unknown"
+        directory = parent
+    rel = os.path.relpath(code_path, root)
+    if rel == ".." or rel.startswith(".." + os.sep):
+        return "unknown"
+    env = os.environ.copy()
+    for key in (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_NAMESPACE",
+    ):
+        env.pop(key, None)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    if _git_stdout(root, ["git", "ls-files", "--error-unmatch", "--", rel], env) is None:
+        return "unknown"
+    text = _git_stdout(root, ["git", "rev-parse", "HEAD"], env)
+    if text is None:
+        return "unknown"
+    commit = text.strip()
+    if len(commit) == 40 and all(ch in "0123456789abcdef" for ch in commit):
+        return commit
+    return "unknown"
+
+
+def _file_record(path):
+    digest = hashlib.sha256()
+    size = 0
+    with open(path, "rb") as handle:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+            size += len(chunk)
+    return {"path": path if isinstance(path, str) else os.fspath(path), "sha256": digest.hexdigest(), "nbytes": size}
+
+
+def _input_records(q_paths, args):
+    paths = list(q_paths)
+    for path in (args.fam, args.ids, args.groups, args.order_file, args.color_file):
+        if path:
+            paths.append(path)
+    return [_file_record(path) for path in paths]
+
+
+def _resolved_options(args):
+    ready = {}
+    for key in sorted(vars(args)):
+        ready[key] = _json_ready(getattr(args, key))
+    return ready
+
+
+def _qbar_version():
+    module = sys.modules.get("qbar")
+    version = getattr(module, "__version__", None) if module is not None else None
+    if isinstance(version, str):
+        return version
+    from . import __version__
+    return __version__
+
+
+def _dependency_versions():
+    import PIL
+    import scipy
+    return {
+        "numpy": np.__version__,
+        "scipy": scipy.__version__,
+        "pillow": PIL.__version__,
+        "python": platform.python_version(),
+    }
+
+
+def _provenance_payload(args, argv, q_paths, started):
+    versions = _dependency_versions()
+    if argv is None:
+        used = list(sys.argv[1:])
+    else:
+        used = list(argv)
+    return {
+        "qbar_version": _qbar_version(),
+        "git_commit": _git_commit(),
+        "argv": [str(item) for item in used],
+        "resolved_options": _resolved_options(args),
+        "inputs": _input_records(q_paths, args),
+        "numpy": versions["numpy"],
+        "scipy": versions["scipy"],
+        "pillow": versions["pillow"],
+        "python": versions["python"],
+        "started": started,
+        "platform": platform.platform(),
+    }
+
+
 def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     """Run one plot from a parsed command line.
 
@@ -92,7 +261,14 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     ``argv`` is what ``args.txt`` records. ``None`` uses ``sys.argv``,
     the same choice ``main`` makes when it is called without argv.
     A list is written as the word ``qbar`` followed by that list.
+    When ``args.provenance`` is true, ``run.json`` is written after
+    ``args.txt``. Its ``argv`` is the list passed in, or ``sys.argv[1:]``
+    when ``argv`` is ``None``.
     """
+    if args.provenance:
+        started = datetime.datetime.now().astimezone().isoformat()
+    else:
+        started = None
     # Imported on call so this module can be imported without the drawing code.
     from .plot_static import ancestry_image, assign_colors, render
 
@@ -165,6 +341,14 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         f.write(" ".join(sys.argv if argv is None else ["qbar"] + list(argv)) + "\n")
         for k in ks:
             f.write("K%d\t%s\n" % (k, src[k]))
+    run_json = None
+    if args.provenance:
+        payload = _provenance_payload(args, argv, files, started)
+        plat = payload.pop("platform")
+        payload["finished"] = datetime.datetime.now().astimezone().isoformat()
+        payload["platform"] = plat
+        run_json = os.path.join(args.outdir, "run.json")
+        write_run_json(run_json, payload)
     print("order\t%s" % os.path.join(args.outdir, "order.tsv"))
     paths = []
     if len(rows) == 1:
@@ -189,6 +373,8 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         paths.append(os.path.join(args.outdir, "align_report.tsv"))
         paths.append(os.path.join(args.outdir, "align_report.txt"))
     paths.append(os.path.join(args.outdir, "args.txt"))
+    if run_json is not None:
+        paths.append(run_json)
     return RunResult(
         aligned=aligned,
         permutations=perm,
