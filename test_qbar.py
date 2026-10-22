@@ -1175,13 +1175,15 @@ class DocstringTests(unittest.TestCase):
                 )
 
     def test_readmes_name_every_cli_option(self):
-        """Every flag except ``--provenance`` is named in both READMEs.
+        """Every flag except ``--provenance``, ``--q-format``, and ``--ind`` is named in both READMEs.
 
         ``--provenance`` is documented in ``docs/cli.md`` and
-        ``docs/factpacks/S10.md``. The README files are unchanged here.
+        ``docs/factpacks/S10.md``. ``--q-format`` and ``--ind`` are
+        documented in ``docs/cli.md`` and ``docs/factpacks/S2.md``.
+        This PR does not edit the READMEs.
         """
         import re
-        later = {"--provenance"}
+        later = {"--provenance", "--q-format", "--ind"}
         flags = []
         for action in qbar.build_parser()._actions:
             for name in action.option_strings:
@@ -1654,6 +1656,254 @@ class ProvenanceTests(unittest.TestCase):
                 list(loaded["resolved_options"]),
                 ["align_method", "width"],
             )
+
+
+class InputFormatTests(unittest.TestCase):
+    def test_meanq_roundtrip_and_filename_k(self):
+        """A 4 by 2 matrix written here is read back as that array.
+
+        ``toy.3.meanQ`` with 2 columns raises ``SystemExit``. A non-numeric
+        token raises the same message as a bad ``.Q`` file.
+        """
+        text_rows = [
+            ["0.1", "0.9"],
+            ["0.2", "0.8"],
+            ["0.3", "0.7"],
+            ["0.4", "0.6"],
+        ]
+        built = np.array([[float(cell) for cell in row] for row in text_rows])
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "toy.2.meanQ")
+            with open(path, "w", encoding="utf-8", newline="\n") as handle:
+                for row in text_rows:
+                    handle.write(" ".join(row) + " \n")
+            got = qbar.read_q(path, format="meanq")
+            self.assertEqual(got.shape, (4, 2))
+            self.assertTrue(np.array_equal(got, built))
+            self.assertEqual(qbar.k_of(path, got, format="meanq"), built.shape[1])
+            bad = os.path.join(td, "toy.3.meanQ")
+            with open(bad, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("0.1 0.9\n")
+            with self.assertRaises(SystemExit) as ctx:
+                qbar.load_q_set([bad], format="meanq")
+            self.assertEqual(
+                ctx.exception.code,
+                "%s 文件名是 K=%d，列数是 %d" % (bad, 3, 2),
+            )
+            text = os.path.join(td, "text.2.meanQ")
+            with open(text, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("0.1 x\n")
+            with self.assertRaises(SystemExit) as ctx_text:
+                qbar.read_q(text, format="meanq")
+            self.assertEqual(
+                ctx_text.exception.code,
+                "Q 只能是空白分隔的数字：%s" % text,
+            )
+
+    def test_meanq_opened_first_line(self):
+        """The opened fastStructure first line is one row and three columns.
+
+        Expected values are ``float()`` of the tokens in this string.
+        """
+        line = "0.771684  0.227893  0.000423"
+        expected = np.array([[float(tok) for tok in line.split()]])
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "opened.3.meanQ")
+            with open(path, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(line + "\n")
+            got = qbar.read_q(path, format="meanq")
+            self.assertEqual(got.shape, (1, 3))
+            self.assertTrue(np.array_equal(got, expected))
+            self.assertEqual(int(got.shape[1]), qbar.k_of(path, got, format="meanq"))
+
+    def test_qopt_fprintf_rows(self):
+        """Three rows written with ``%.20f `` and a newline.
+
+        ``myoutfiles.qopt`` has no filename K. The column count is K.
+        """
+        rows = [
+            [0.25, 0.75],
+            [0.5, 0.5],
+            [0.125, 0.875],
+        ]
+        lines = []
+        for row in rows:
+            lines.append("".join("%.20f " % value for value in row) + "\n")
+        for line in lines:
+            self.assertTrue(line.endswith(" \n"))
+        expected = np.array([[float(tok) for tok in line.split()] for line in lines])
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "myoutfiles.qopt")
+            with open(path, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("".join(lines))
+            got = qbar.read_q(path, format="qopt")
+            self.assertEqual(got.shape, (3, 2))
+            self.assertTrue(np.array_equal(got, expected))
+            self.assertEqual(qbar.k_of(path, got, format="qopt"), 2)
+
+    def test_ind_first_column_and_fam_conflict(self):
+        """Column 1 of an EIGENSTRAT .ind line is the sample ID.
+
+        The first line begins with a tab. ``F`` is not the ID. A second
+        line is the second ID, including when its label is ``Ignore``.
+        ``--ind`` with ``--fam`` raises ``SystemExit``.
+        """
+        import io
+        from contextlib import redirect_stderr
+
+        first = "\t     SAMPLE0 F       Case"
+        second = "SAMPLE1 U Ignore"
+        long_id = "N" * 40
+        self.assertEqual(len(long_id), 40)
+        self.assertEqual(first.split()[0], "SAMPLE0")
+        self.assertNotEqual(first.split()[0], "F")
+        with tempfile.TemporaryDirectory() as td:
+            ind = os.path.join(td, "toy.ind")
+            with open(ind, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(first + "\n")
+                handle.write(second + "\n")
+            buf = io.StringIO()
+            with redirect_stderr(buf):
+                got = qbar.load_ids(None, None, ind=ind)
+            self.assertEqual(got, ["SAMPLE0", "SAMPLE1"])
+            self.assertNotIn("多个字段", buf.getvalue())
+            self.assertEqual(buf.getvalue(), "")
+            long_path = os.path.join(td, "long.ind")
+            with open(long_path, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(long_id + " X Pop\n")
+            self.assertEqual(qbar.load_ids(None, None, ind=long_path), [long_id])
+            qpath = os.path.join(td, "t.2.Q")
+            with open(qpath, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("0.2 0.8\n0.4 0.6\n")
+            fam = os.path.join(td, "t.fam")
+            with open(fam, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("F SAMPLE0 0 0 0 -9\nF SAMPLE1 0 0 0 -9\n")
+            out = os.path.join(td, "out")
+            qbar.main(["--q", qpath, "--ind", ind, "--outdir", out])
+            with open(os.path.join(out, "order.tsv"), encoding="utf-8") as handle:
+                rows = [line.split("\t")[1] for line in handle.read().splitlines()[1:]]
+            self.assertEqual(rows, ["SAMPLE0", "SAMPLE1"])
+            with self.assertRaises(SystemExit) as ctx:
+                qbar.main([
+                    "--q", qpath, "--fam", fam, "--ind", ind,
+                    "--outdir", os.path.join(td, "both"),
+                ])
+            self.assertEqual(ctx.exception.code, "--fam 和 --ind 只留一个")
+            with self.assertRaises(SystemExit) as ctx_ids:
+                qbar.load_ids(None, "ids.txt", ind=ind)
+            self.assertEqual(ctx_ids.exception.code, "--ids 和 --ind 只留一个")
+            with self.assertRaises(SystemExit) as ctx_fam_ids:
+                qbar.load_ids("a.fam", "ids.txt")
+            self.assertEqual(ctx_fam_ids.exception.code, "--fam 和 --ids 只留一个")
+            with self.assertRaises(SystemExit) as ctx_all:
+                qbar.load_ids("a.fam", "ids.txt", ind=ind)
+            self.assertEqual(ctx_all.exception.code, "--fam 和 --ids 和 --ind 只留一个")
+            with self.assertRaises(SystemExit) as ctx_none:
+                qbar.load_ids(None, None)
+            self.assertEqual(
+                ctx_none.exception.code,
+                "需要 --fam（PLINK .fam）或 --ids（一行一个 IID，顺序与 Q 的行一致）",
+            )
+
+    def test_directory_glob_follows_format(self):
+        """Default admixture skips a .meanQ that sits in the directory.
+
+        meanq globs ``*.meanQ`` then ``*.meanq``. qopt globs ``*.qopt``
+        then ``*.QOPT``. An explicit path is accepted when the format matches.
+        ``load_q_set`` with one argument still reads a ``.Q`` file.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            folder = os.path.join(td, "qs")
+            os.makedirs(folder)
+            q_path = os.path.join(folder, "a.2.Q")
+            mean_path = os.path.join(folder, "b.2.meanQ")
+            low_path = os.path.join(folder, "c.2.meanq")
+            qopt_path = os.path.join(folder, "d.2.qopt")
+            upper_path = os.path.join(folder, "e.2.QOPT")
+            for path, text in (
+                (q_path, "0.2 0.8\n"),
+                (mean_path, "0.3 0.7\n"),
+                (low_path, "0.4 0.6\n"),
+                (qopt_path, "0.1 0.9 \n"),
+                (upper_path, "0.6 0.4\n"),
+            ):
+                with open(path, "w", encoding="utf-8", newline="\n") as handle:
+                    handle.write(text)
+            self.assertEqual(qbar.collect_q([folder]), [q_path])
+            self.assertEqual(
+                qbar.collect_q([folder], format="meanq"),
+                [mean_path, low_path],
+            )
+            self.assertEqual(
+                qbar.collect_q([folder], format="qopt"),
+                [qopt_path, upper_path],
+            )
+            os.symlink(mean_path, os.path.join(folder, "alias.2.meanq"))
+            again = qbar.collect_q([folder], format="meanq")
+            self.assertEqual(again, [mean_path, low_path])
+            self.assertEqual(len(again), len({os.path.realpath(p) for p in again}))
+            only = os.path.join(td, "only_mean")
+            os.makedirs(only)
+            lonely = os.path.join(only, "z.2.meanQ")
+            with open(lonely, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("0.2 0.8\n")
+            with self.assertRaises(SystemExit) as ctx:
+                qbar.collect_q([only])
+            self.assertIn("目录里没有 .Q 或 .q", str(ctx.exception.code))
+            q_by_k, src = qbar.load_q_set([mean_path], format="meanq")
+            self.assertEqual(list(q_by_k), [2])
+            self.assertTrue(np.array_equal(q_by_k[2], np.array([[float("0.3"), float("0.7")]])))
+            self.assertEqual(src[2], mean_path)
+            plain = os.path.join(td, "plain.2.Q")
+            with open(plain, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("0.2 0.8\n")
+            one, one_src = qbar.load_q_set([plain])
+            self.assertEqual(list(one), [2])
+            self.assertEqual(one_src[2], plain)
+            self.assertTrue(np.array_equal(one[2], np.array([[float("0.2"), float("0.8")]])))
+
+    def test_wrong_extension_names_path_and_format(self):
+        matrix = np.array([[0.2, 0.8]])
+        with tempfile.TemporaryDirectory() as td:
+            matching = {
+                "toy.2.meanQ": "meanq",
+                "toy.2.Q": "admixture",
+                "toy.2.qopt": "qopt",
+            }
+            for name, good in matching.items():
+                path = os.path.join(td, name)
+                with open(path, "w", encoding="utf-8", newline="\n") as handle:
+                    handle.write("0.2 0.8\n")
+                self.assertEqual(qbar.k_of(path, matrix, format=good), 2)
+                for fmt in ("admixture", "meanq", "qopt"):
+                    if fmt == good:
+                        continue
+                    with self.assertRaises(SystemExit) as ctx:
+                        qbar.k_of(path, matrix, format=fmt)
+                    self.assertEqual(
+                        ctx.exception.code,
+                        "%s 的扩展名不符合格式 %s" % (path, fmt),
+                    )
+            missing = os.path.join(td, "toy.2.Q")
+            with self.assertRaises(SystemExit) as ctx_bad:
+                qbar.read_q(missing, format="nope")
+            self.assertEqual(
+                ctx_bad.exception.code,
+                "Q 格式只能是 admixture、meanq、qopt，收到 %s" % "nope",
+            )
+
+    def test_q_format_and_ind_help(self):
+        parser = qbar.build_parser()
+        q_format = _cli_flag(parser, "--q-format")
+        self.assertEqual(q_format.help, "指定读取的矩阵排版")
+        self.assertEqual(q_format.default, "admixture")
+        self.assertEqual(list(q_format.choices), ["admixture", "meanq", "qopt"])
+        ind = _cli_flag(parser, "--ind")
+        self.assertEqual(ind.help, "EIGENSTRAT 的 .ind，三列，样本号在第 1 列")
+        self.assertIsNone(ind.default)
+        args = parser.parse_args(["--q", "a.Q", "--outdir", "o"])
+        self.assertEqual(args.q_format, "admixture")
+        self.assertIsNone(args.ind)
 
 
 if __name__ == "__main__":

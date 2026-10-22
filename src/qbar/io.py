@@ -1,4 +1,8 @@
 """Read Q matrices, sample ids, groups, an order file, and colour text.
+
+``.Q`` is the default. ``.meanQ`` and ``.qopt`` are the same numeric
+matrix with a different extension. An EIGENSTRAT ``.ind`` file supplies
+sample ids from its first column.
 """
 from __future__ import annotations
 
@@ -8,6 +12,20 @@ import os
 import sys
 
 import numpy as np
+
+_Q_FORMATS = ("admixture", "meanq", "qopt")
+_Q_EXT = {"admixture": ".q", "meanq": ".meanq", "qopt": ".qopt"}
+_Q_DIR = {
+    "admixture": ("*.Q", "*.q", "目录里没有 .Q 或 .q：%s"),
+    "meanq": ("*.meanQ", "*.meanq", "目录里没有 .meanQ 或 .meanq：%s"),
+    "qopt": ("*.qopt", "*.QOPT", "目录里没有 .qopt 或 .QOPT：%s"),
+}
+
+
+def _q_format(format):
+    if format not in _Q_FORMATS:
+        raise SystemExit("Q 格式只能是 admixture、meanq、qopt，收到 %s" % format)
+    return format
 
 def norm_hex(text):
     h = text.strip()
@@ -19,12 +37,19 @@ def norm_hex(text):
     return h.lower()
 
 
-def load_ids(fam, ids_path):
-    if fam and ids_path:
-        raise SystemExit("--fam 和 --ids 只留一个")
-    if not fam and not ids_path:
+def load_ids(fam, ids_path, ind=None):
+    chosen = []
+    if fam:
+        chosen.append("--fam")
+    if ids_path:
+        chosen.append("--ids")
+    if ind:
+        chosen.append("--ind")
+    if len(chosen) > 1:
+        raise SystemExit("%s 只留一个" % " 和 ".join(chosen))
+    if not chosen:
         raise SystemExit("需要 --fam（PLINK .fam）或 --ids（一行一个 IID，顺序与 Q 的行一致）")
-    path = fam or ids_path
+    path = fam or ids_path or ind
     iids = []
     extra_n = 0
     example = None
@@ -36,7 +61,8 @@ def load_ids(fam, ids_path):
             if fam and len(parts) >= 2:
                 iids.append(parts[1])
             else:
-                if not fam and len(parts) > 1:
+                # --ind keeps column 1 and does not warn. --ids still warns.
+                if ids_path and len(parts) > 1:
                     extra_n += 1
                     if example is None:
                         example = line.strip()
@@ -79,21 +105,28 @@ def load_groups(path, iids, id_col, group_col, rest_name):
     return out
 
 
-def collect_q(items):
+def _dir_q(item, first_pat, second_pat):
+    first = sorted(glob.glob(os.path.join(item, first_pat)))
+    hits = list(first)
+    seen_real = {os.path.realpath(f) for f in first}
+    for f in sorted(glob.glob(os.path.join(item, second_pat))):
+        key = os.path.realpath(f)
+        if key in seen_real:
+            continue
+        seen_real.add(key)
+        hits.append(f)
+    return hits
+
+
+def collect_q(items, format="admixture"):
+    format = _q_format(format)
+    first_pat, second_pat, empty_msg = _Q_DIR[format]
     files = []
     for item in items:
         if os.path.isdir(item):
-            upper = sorted(glob.glob(os.path.join(item, "*.Q")))
-            hits = list(upper)
-            seen_real = {os.path.realpath(f) for f in upper}
-            for f in sorted(glob.glob(os.path.join(item, "*.q"))):
-                key = os.path.realpath(f)
-                if key in seen_real:
-                    continue
-                seen_real.add(key)
-                hits.append(f)
+            hits = _dir_q(item, first_pat, second_pat)
             if not hits:
-                raise SystemExit("目录里没有 .Q 或 .q：%s" % item)
+                raise SystemExit(empty_msg % item)
         else:
             hits = sorted(glob.glob(item))
             if not hits:
@@ -112,7 +145,9 @@ def collect_q(items):
     return uniq
 
 
-def read_q(path):
+def read_q(path, format="admixture"):
+    # admixture, meanq, and qopt share this numeric read, including trailing spaces.
+    format = _q_format(format)
     if not os.path.isfile(path):
         raise SystemExit("找不到 Q：%s" % path)
     try:
@@ -124,12 +159,15 @@ def read_q(path):
     return q
 
 
-def k_of(path, q):
+def k_of(path, q, format="admixture"):
+    # Filename K is the digit token immediately before the extension.
+    # prefix.8.Q -> 8. toy.3.meanQ -> 3. myoutfiles.qopt -> none.
+    # It must equal the column count. The returned K is the column count.
+    format = _q_format(format)
     base = os.path.basename(path)
-    # prefix.8.Q -> 8, and it must equal the column count.
     stem, ext = os.path.splitext(base)
-    if ext.lower() != ".q":
-        raise SystemExit("需要 .Q 文件：%s" % path)
+    if ext.lower() != _Q_EXT[format]:
+        raise SystemExit("%s 的扩展名不符合格式 %s" % (path, format))
     tail = stem.rsplit(".", 1)[-1] if "." in stem else ""
     k_file = int(tail) if tail.isdigit() else None
     k_col = int(q.shape[1])
@@ -138,12 +176,13 @@ def k_of(path, q):
     return k_col
 
 
-def load_q_set(paths):
+def load_q_set(paths, format="admixture"):
+    format = _q_format(format)
     q_by_k = {}
     src = {}
     for path in paths:
-        q = read_q(path)
-        k = k_of(path, q)
+        q = read_q(path, format=format)
+        k = k_of(path, q, format=format)
         if k in q_by_k:
             raise SystemExit("K=%d 有两个 Q：%s 和 %s" % (k, src[k], path))
         q_by_k[k] = q

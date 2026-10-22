@@ -10,6 +10,7 @@ The package version is 0.2.0.dev0. No git tag exists.
 
 ### Added
 
+- `--q-format` selects `admixture` (the default), `meanq`, or `qopt`. `--ind` reads sample IDs from column 1 of an EIGENSTRAT `.ind` file and is off by default. The default remains `.Q`. Other outputs are unchanged.
 - `--provenance` writes `run.json`. It is off by default. Other outputs are unchanged.
 - `qbar.api.run` returns `RunResult`.
 - The install notes in `README.md` and `README.zh.md` include `pip install qbar-plot` after the first PyPI release, and `pip install .` from a checkout. The installed command is `qbar`. `python3 qbar.py` still works.

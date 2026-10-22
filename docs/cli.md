@@ -24,6 +24,13 @@ show this help message and exit
 - Arguments: +
 - Default: not set
 
+### `--q-format`
+
+指定读取的矩阵排版
+
+- Choices: admixture, meanq, qopt
+- Default: admixture
+
 ### `--fam`
 
 PLINK .fam，IID 在第 2 列，行序与 Q 相同
@@ -33,6 +40,12 @@ PLINK .fam，IID 在第 2 列，行序与 Q 相同
 ### `--ids`
 
 一行一个 IID，行序与 Q 相同。与 --fam 二选一。多出来的字段只保留第一个，并在 stderr 警告
+
+- Default: not set
+
+### `--ind`
+
+EIGENSTRAT 的 .ind，三列，样本号在第 1 列
 
 - Default: not set
 

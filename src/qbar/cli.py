@@ -111,8 +111,11 @@ def build_parser():
         "多个 K 默认做 Pearson 贪心对齐，新列放在最上面。--no-align 保持每个 Q 自己的列顺序；若同时给了 --anchor-group，每个 K 仍把该组最纯的人的主列放到 C1。",
     )
     p.add_argument("--q", nargs="+", required=True, help="一个或多个 .Q 或 .q，或带引号的通配符，或一个目录（读取其中的 .Q 和 .q）。只读空白分隔的数字 .Q 或 .q")
+    p.add_argument("--q-format", choices=("admixture", "meanq", "qopt"), default="admixture",
+                   help="指定读取的矩阵排版")
     p.add_argument("--fam", help="PLINK .fam，IID 在第 2 列，行序与 Q 相同")
     p.add_argument("--ids", help="一行一个 IID，行序与 Q 相同。与 --fam 二选一。多出来的字段只保留第一个，并在 stderr 警告")
+    p.add_argument("--ind", help="EIGENSTRAT 的 .ind，三列，样本号在第 1 列")
     p.add_argument("--groups", help="分组表，tsv 或 csv，要有表头")
     p.add_argument("--id-col", default="analysis_IID")
     p.add_argument("--group-col", default="Dong_Grp")
