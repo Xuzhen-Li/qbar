@@ -1232,6 +1232,12 @@ class DocstringTests(unittest.TestCase):
         self.assertTrue(en_ok, "README.md has no --no-align paragraph for the every-K anchor")
         self.assertTrue(zh_ok, "README.zh.md has no --no-align paragraph for the every-K anchor")
 
+    def test_readmes_link_alignment_method_page(self):
+        link = "](docs/choosing-alignment-method.md)"
+        for path in ("README.md", "README.zh.md"):
+            text = _read_checkout(path)
+            self.assertIn(link, text, path)
+
 
 def _load_compare_outputs():
     import importlib.util
