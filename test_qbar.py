@@ -614,8 +614,8 @@ class AlignTests(unittest.TestCase):
 
         from unittest import mock
         import inspect
-        # main() looks up ancestry_image in the module that defined it.
-        impl = inspect.getmodule(qbar.main)
+        # run() imports ancestry_image from the module that defined it.
+        impl = inspect.getmodule(qbar.ancestry_image)
         with tempfile.TemporaryDirectory() as tmp:
             paths = []
             for k in (2, 3, 4):
@@ -1341,6 +1341,128 @@ class CliDocTests(unittest.TestCase):
         with open(doc, encoding="utf-8") as handle:
             found = handle.read()
         self.assertEqual(found, module.render_cli_markdown())
+
+
+class ApiRunTests(unittest.TestCase):
+    def test_hungarian_perm_matches_bruteforce_corrcoef(self):
+        """Hungarian perm maximises summed Pearson r on the rows align_qs uses.
+
+        K=2 and K=3, eight samples. ``qbar.api.run`` is called with
+        ``--align-method hungarian``, no anchor group, no ``--align-groups``,
+        and the default align mode ``all``. In ``align_qs`` that mode with an
+        empty align-groups list keeps every row (a mask of ones). An empty
+        anchor leaves the K=2 permutation as ``range(2)``, so the matrix
+        correlated against K=3 is the raw K=2 matrix.
+
+        ``match_next_hungarian`` maximises the sum of Pearson correlations
+        between each aligned K=2 column and a distinct raw K=3 column. The
+        unmatched K=3 column is placed last. This test scores every
+        permutation of the three raw columns with ``numpy.corrcoef`` on the
+        eight loaded rows, summing only the two matched columns. The maximum
+        must be unique by more than 0.2. The K=3 permutation from ``run``
+        must equal that maximum. K is the column count. The returned
+        permutation is 0-based.
+        """
+        import itertools
+        q2 = np.array([
+            [0.90, 0.10],
+            [0.88, 0.12],
+            [0.86, 0.14],
+            [0.84, 0.16],
+            [0.12, 0.88],
+            [0.10, 0.90],
+            [0.14, 0.86],
+            [0.11, 0.89],
+        ], dtype=float)
+        raw0 = q2[:, 1] * 0.82 + 0.02
+        raw2 = q2[:, 0] * 0.80 + 0.03
+        raw1 = np.array([0.16, 0.04, 0.15, 0.05, 0.14, 0.03, 0.13, 0.06], dtype=float)
+        q3 = np.column_stack([raw0, raw1, raw2])
+        q3 = np.clip(q3, 0.01, None)
+        q3 = q3 / q3.sum(axis=1, keepdims=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            path2 = os.path.join(tmp, "t.2.Q")
+            path3 = os.path.join(tmp, "t.3.Q")
+            np.savetxt(path2, q2, fmt="%.10f")
+            np.savetxt(path3, q3, fmt="%.10f")
+            ids = os.path.join(tmp, "ids.txt")
+            with open(ids, "w") as handle:
+                handle.write("".join("s%d\n" % i for i in range(q2.shape[0])))
+            loaded2 = np.loadtxt(path2)
+            loaded3 = np.loadtxt(path3)
+            scores = {}
+            for perm in itertools.permutations(range(3)):
+                score = 0.0
+                for col in range(2):
+                    score += float(np.corrcoef(loaded2[:, col], loaded3[:, perm[col]])[0, 1])
+                scores[perm] = score
+            ranked = sorted(scores.values(), reverse=True)
+            winners = [perm for perm, score in scores.items() if score == ranked[0]]
+            self.assertEqual(len(winners), 1)
+            self.assertGreater(ranked[0] - ranked[1], 0.2)
+            out = os.path.join(tmp, "out")
+            argv = [
+                "--q", path2, path3,
+                "--ids", ids,
+                "--align-method", "hungarian",
+                "--outdir", out,
+            ]
+            args = qbar.build_parser().parse_args(argv)
+            result = qbar.api.run(args, argv)
+        self.assertEqual(list(result.permutations[2]), [0, 1])
+        self.assertEqual(list(result.permutations[3]), list(winners[0]))
+        basenames = [os.path.basename(path) for path in result.paths]
+        self.assertIn("perm_K3.tsv", basenames)
+        self.assertIn("order.tsv", basenames)
+
+    def test_core_modules_do_not_import_pil(self):
+        """Importing align, order, report, io, and api must not import PIL.
+
+        Checkout puts the repository ``src`` directory first on sys.path.
+        Installed mode uses the interpreter's installed package. The active
+        mode is the one selected by ``QBAR_TEST_INSTALLED``.
+        """
+        src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src")
+        if os.environ.get("QBAR_TEST_INSTALLED") == "1":
+            code = (
+                "import qbar.align\n"
+                "import qbar.order\n"
+                "import qbar.report\n"
+                "import qbar.io\n"
+                "import qbar.api\n"
+                "import sys\n"
+                "raise SystemExit(0 if 'PIL' not in sys.modules else 1)\n"
+            )
+        else:
+            code = (
+                "import sys\n"
+                "sys.path.insert(0, %r)\n"
+                "import qbar.align\n"
+                "import qbar.order\n"
+                "import qbar.report\n"
+                "import qbar.io\n"
+                "import qbar.api\n"
+                "raise SystemExit(0 if 'PIL' not in sys.modules else 1)\n"
+            ) % src
+        env = os.environ.copy()
+        env.pop("PYTHONPATH", None)
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env["PYTHONHASHSEED"] = "0"
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=tempfile.mkdtemp(),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+
+    def test_run_and_main_are_reachable(self):
+        """``qbar.api.run`` and ``qbar.main`` exist in the active import mode."""
+        import qbar.api
+        self.assertTrue(callable(qbar.api.run))
+        self.assertTrue(callable(qbar.main))
+        self.assertIs(qbar.run, qbar.api.run)
 
 
 if __name__ == "__main__":

@@ -1,64 +1,30 @@
 #!/usr/bin/env python3
 """Checkout launcher for qbar.
 
-When the repository root is on sys.path, `import qbar` loads this file
-instead of the src/qbar package. Loading src/qbar/cli.py with
-`import qbar.cli` would fail for that reason. This module loads cli.py
-under a private module name and re-exports its namespace. __file__ stays
-this path so a checkout import still points at the repository root.
+When the repository root is on sys.path, ``import qbar`` loads this file
+instead of the package under src/qbar. A repo-root module named qbar.py
+would otherwise hide that package. This file points ``__path__`` at
+src/qbar and executes that package's ``__init__.py`` here, so checkout
+imports and ``python qbar.py`` use the same modules. ``__file__`` stays
+this path, which checkout tests compare against the repository root.
 """
-
 import ast
 import importlib.util
 import os
 import sys
 
 _ROOT = os.path.dirname(os.path.abspath(__file__))
-_CLI_PATH = os.path.join(_ROOT, "src", "qbar", "cli.py")
-_INIT_PATH = os.path.join(_ROOT, "src", "qbar", "__init__.py")
-_SKIP = {
-    "__name__",
-    "__loader__",
-    "__package__",
-    "__spec__",
-    "__file__",
-    "__cached__",
-    "__builtins__",
-}
+_SRC_PKG = os.path.join(_ROOT, "src", "qbar")
 
+# Make this module the qbar package before the package init runs.
+__path__ = [_SRC_PKG]
+__package__ = "qbar"
+if __name__ == "__main__" and "qbar" not in sys.modules:
+    sys.modules["qbar"] = sys.modules["__main__"]
 
-def _load_cli():
-    spec = importlib.util.spec_from_file_location("_qbar_cli", _CLI_PATH)
-    if spec is None or spec.loader is None:
-        raise ImportError("cannot load %s" % _CLI_PATH)
-    module = importlib.util.module_from_spec(spec)
-    # Register before exec so functions can see their own module.
-    sys.modules["_qbar_cli"] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-def _read_version(path):
-    with open(path, encoding="utf-8") as handle:
-        tree = ast.parse(handle.read(), filename=path)
-    for node in tree.body:
-        if not isinstance(node, ast.Assign):
-            continue
-        for target in node.targets:
-            if isinstance(target, ast.Name) and target.id == "__version__":
-                value = node.value
-                if isinstance(value, ast.Constant) and isinstance(value.value, str):
-                    return value.value
-    raise RuntimeError("__version__ is missing from %s" % path)
-
-
-_cli = _load_cli()
-for _name, _value in vars(_cli).items():
-    if _name in _SKIP:
-        continue
-    globals()[_name] = _value
-__version__ = _read_version(_INIT_PATH)
-del _name, _value, _cli
+_init_path = os.path.join(_SRC_PKG, "__init__.py")
+with open(_init_path, encoding="utf-8") as _handle:
+    exec(compile(_handle.read(), _init_path, "exec"), globals())
 
 if __name__ == "__main__":
     sys.exit(main())

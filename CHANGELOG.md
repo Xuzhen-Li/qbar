@@ -10,6 +10,7 @@ The package version is 0.2.0.dev0. No git tag exists.
 
 ### Added
 
+- `qbar.api.run` returns `RunResult`.
 - The install notes in `README.md` and `README.zh.md` include `pip install qbar-plot` after the first PyPI release, and `pip install .` from a checkout. The installed command is `qbar`. `python3 qbar.py` still works.
 - `docs/cli.md` is generated from the argument parser by `tools/gen_cli_docs.py`.
 - `docs/choosing-alignment-method.md` describes the four alignment methods. Speed and agreement are not filled in.
@@ -29,6 +30,7 @@ The package version is 0.2.0.dev0. No git tag exists.
 
 ### Changed
 
+- Implementation is split into modules `io`, `align`, `order`, `report`, `plot_static`, `api`, and `cli`. Outputs are unchanged.
 - An --ids line with more than one whitespace-separated token still uses the first token as the ID. qbar warns on stderr with how many lines did that, and shows the first example. Output files are unchanged (584b084).
 - A directory given to --q now includes lowercase .q files as well as .Q files. .Q files stay in the same sorted order, and the same file is not added twice (6471e3b).
 - Both READMEs state the no-align anchor exception (76c8d62).
