@@ -790,7 +790,12 @@ class ColorTests(unittest.TestCase):
         src = inspect.getsource(qbar.render)
         self.assertNotIn("mode=", src)
         arr = np.arange(48, dtype=np.uint8).reshape(4, 4, 3)
-        with_mode = Image.fromarray(arr, mode="RGB")
+        # Pillow 11 warns that mode= is deprecated. Catch that warning so
+        # -W error::DeprecationWarning still reaches the comparison below.
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            with_mode = Image.fromarray(arr, mode="RGB")
         plain = Image.fromarray(arr)
         self.assertEqual(with_mode.mode, "RGB")
         self.assertEqual(plain.mode, "RGB")
