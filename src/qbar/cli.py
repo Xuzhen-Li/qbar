@@ -155,6 +155,8 @@ def build_parser():
     p.add_argument("--width", type=int, default=2200, help="条形图宽度，像素")
     p.add_argument("--bar-height", type=int, default=0, help="每一行条的高度。单个 K 默认 220，多个 K 默认 120")
     p.add_argument("--outdir", required=True)
+    p.add_argument("--provenance", action="store_true",
+                   help="另写 run.json，记下版本、选项、输入哈希和依赖版本")
     return p
 
 
