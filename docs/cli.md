@@ -249,3 +249,16 @@ Language for help, errors, and warnings. en or zh
 
 - Choices: en, zh
 - Default: en
+
+### `--logs`
+
+ADMIXTURE stdout files, a quoted wildcard, or a directory. A directory reads .out and .log. Default is off.
+
+- Arguments: +
+- Default: not set
+
+### `--logs-map`
+
+Two columns, log path and Q path, no header. Each log must be one of the --logs files, and each Q path must exist.
+
+- Default: not set

@@ -27,6 +27,12 @@ from .io import (
     load_q_set,
     parse_colors,
 )
+from .logs import (
+    check_logs_map,
+    collect_logs,
+    parse_admixture_log,
+    write_cv_loglik_tsv,
+)
 from .messages import text as _msg
 from .order import WITHIN, build_order, check_hclust_opts
 from .report import column_label, write_align_report, write_tables
@@ -194,11 +200,15 @@ def _file_record(path):
     return {"path": path if isinstance(path, str) else os.fspath(path), "sha256": digest.hexdigest(), "nbytes": size}
 
 
-def _input_records(q_paths, args):
+def _input_records(q_paths, args, extra_paths=None):
     paths = list(q_paths)
     for path in (args.fam, args.ids, args.ind, args.groups, args.order_file, args.color_file):
         if path:
             paths.append(path)
+    if extra_paths:
+        for path in extra_paths:
+            if path:
+                paths.append(path)
     return [_file_record(path) for path in paths]
 
 
@@ -229,7 +239,7 @@ def _dependency_versions():
     }
 
 
-def _provenance_payload(args, argv, q_paths, started):
+def _provenance_payload(args, argv, q_paths, started, extra_paths=None):
     versions = _dependency_versions()
     if argv is None:
         used = list(sys.argv[1:])
@@ -240,7 +250,7 @@ def _provenance_payload(args, argv, q_paths, started):
         "git_commit": _git_commit(),
         "argv": [str(item) for item in used],
         "resolved_options": _resolved_options(args),
-        "inputs": _input_records(q_paths, args),
+        "inputs": _input_records(q_paths, args, extra_paths),
         "numpy": versions["numpy"],
         "scipy": versions["scipy"],
         "pillow": versions["pillow"],
@@ -271,16 +281,34 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     or ``qopt``. ``args.ind`` is an optional EIGENSTRAT .ind path. At most
     one of fam, ids, and ind is set. ``args.language`` is ``en`` or ``zh``.
     Help, errors, and warnings use ``en`` unless it is ``zh``.
+
+    When ``args.logs`` is set, ADMIXTURE stdout is parsed and
+    ``cv_loglik.tsv``, ``cv_loglik.png``, and ``cv_loglik.pdf`` are written.
+    When it is omitted, those files are not written. ``args.logs_map``
+    checks log and Q pairs and does not add a column.
     """
     if args.provenance:
         started = datetime.datetime.now().astimezone().isoformat()
     else:
         started = None
     # Imported on call so this module can be imported without the drawing code.
-    from .plot_static import ancestry_image, assign_colors, render
+    from .plot_static import ancestry_image, assign_colors, render, write_cv_loglik_plot
 
     language = args.language
     check_hclust_opts(args.hclust_dist, args.hclust_linkage, language=language)
+    logs = getattr(args, "logs", None)
+    logs_map = getattr(args, "logs_map", None)
+    log_paths = None
+    log_rows = None
+    if logs_map and not logs:
+        raise SystemExit(_msg("logs_map_requires", language))
+    if logs:
+        log_paths = collect_logs(logs, language=language)
+        if logs_map:
+            check_logs_map(logs_map, log_paths, language=language)
+        log_rows = []
+        for log_path in log_paths:
+            log_rows.extend(parse_admixture_log(log_path, language=language))
     files = collect_q(args.q, format=args.q_format, language=language)
     q_by_k, src = load_q_set(files, format=args.q_format, language=language)
     iids = load_ids(args.fam, args.ids, ind=args.ind, language=language)
@@ -346,13 +374,21 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     write_tables(args.outdir, iids, groups, order, spans, perm, owners, hexes, meta, aligned)
     if args.align_report and meta:
         write_align_report(args.outdir, aligned, meta, groups, args.align_method, perm, args.align_report_low)
+    if log_paths is not None:
+        write_cv_loglik_tsv(os.path.join(args.outdir, "cv_loglik.tsv"), log_rows)
+        write_cv_loglik_plot(os.path.join(args.outdir, "cv_loglik.png"), log_rows)
     with open(os.path.join(args.outdir, "args.txt"), "w") as f:
         f.write(" ".join(sys.argv if argv is None else ["qbar"] + list(argv)) + "\n")
         for k in ks:
             f.write("K%d\t%s\n" % (k, src[k]))
     run_json = None
     if args.provenance:
-        payload = _provenance_payload(args, argv, files, started)
+        extra_paths = None
+        if log_paths is not None:
+            extra_paths = list(log_paths)
+            if logs_map:
+                extra_paths.append(logs_map)
+        payload = _provenance_payload(args, argv, files, started, extra_paths)
         plat = payload.pop("platform")
         payload["finished"] = datetime.datetime.now().astimezone().isoformat()
         payload["platform"] = plat
@@ -381,6 +417,10 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     if args.align_report and meta:
         paths.append(os.path.join(args.outdir, "align_report.tsv"))
         paths.append(os.path.join(args.outdir, "align_report.txt"))
+    if log_paths is not None:
+        paths.append(os.path.join(args.outdir, "cv_loglik.tsv"))
+        paths.append(os.path.join(args.outdir, "cv_loglik.png"))
+        paths.append(os.path.join(args.outdir, "cv_loglik.pdf"))
     paths.append(os.path.join(args.outdir, "args.txt"))
     if run_json is not None:
         paths.append(run_json)
