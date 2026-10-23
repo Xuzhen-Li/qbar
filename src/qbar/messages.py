@@ -96,12 +96,12 @@ _CATALOG = {
         "zh": "叶序用 scipy optimal_leaf_ordering",
     },
     "help_align_mode": {
-        "en": "all: everyone in the mask is used for alignment, and greedy, hungarian, pong, and jaccard use the same people. Pearson is used only for greedy and hungarian. core: keep only people whose qmax is strictly greater than --qmax at both adjacent K; if a group has nobody above that cut, keep that group's purest person at the lower K",
-        "zh": "all=掩码内所有人参与对齐，greedy、hungarian、pong、jaccard 用同一批人。Pearson 只用于 greedy 和 hungarian。core=只留相邻两个 K 的 qmax 都严格大于 --qmax 的人；某一组没有人超过时，留下该组在较低 K 上最纯的一个人",
+        "en": "all: everyone in the mask is used for alignment, and greedy, hungarian, pong, jaccard, and clumpp-full use the same people. Pearson is used only for greedy and hungarian. core: keep only people whose qmax is strictly greater than --qmax at both adjacent K; if a group has nobody above that cut, keep that group's purest person at the lower K",
+        "zh": "all=掩码内所有人参与对齐，greedy、hungarian、pong、jaccard、clumpp-full 用同一批人。Pearson 只用于 greedy 和 hungarian。core=只留相邻两个 K 的 qmax 都严格大于 --qmax 的人；某一组没有人超过时，留下该组在较低 K 上最纯的一个人",
     },
     "help_align_method": {
-        "en": "greedy takes the unused column with the highest Pearson value, one old column at a time (default). hungarian is the one-to-one match with the largest sum of Pearson values. pong allows one column from the previous K to split into two (Behr 2016); column 3 of align.tsv is the pong similarity and an extra split_parent column is written. jaccard matches one-to-one on sets of people; see --jaccard-set",
-        "zh": "greedy=按列顺序逐列取 Pearson 最高的未用列（默认）。hungarian=Pearson 总和最大的一一匹配。pong=允许上一 K 的一列拆成两列（Behr 2016），align.tsv 第三列为 pong 相似度并多一列 split_parent。jaccard=按人的集合算 Jaccard 后一一匹配，见 --jaccard-set",
+        "en": "greedy takes the unused column with the highest Pearson value, one old column at a time (default). hungarian is the one-to-one match with the largest sum of Pearson values. pong allows one column from the previous K to split into two (Behr 2016); column 3 of align.tsv is the pong similarity and an extra split_parent column is written. jaccard matches one-to-one on sets of people; see --jaccard-set. clumpp-full pads the previous Q with one zero column and searches every permutation of the next Q to maximize G', keeping the lexicographically smallest permutation on a tie, and stops when K+1 is above 8.",
+        "zh": "greedy=按列顺序逐列取 Pearson 最高的未用列（默认）。hungarian=Pearson 总和最大的一一匹配。pong=允许上一 K 的一列拆成两列（Behr 2016），align.tsv 第三列为 pong 相似度并多一列 split_parent。jaccard=按人的集合算 Jaccard 后一一匹配，见 --jaccard-set。clumpp-full 在上一份 Q 右侧补一列 0，枚举下一份 Q 的全部列排列使 G' 最大，并列时取字典序最小的排列，并且在 K+1 大于 8 时停止。",
     },
     "help_jaccard_set": {
         "en": "Set used by jaccard. dominant: this column is the person's highest column. threshold: this person's value in the column is >= --jaccard-cut. Default dominant",
@@ -354,6 +354,10 @@ _CATALOG = {
     "align_empty_check": {
         "en": "Nobody is left for alignment. Check --align-groups and --qmax",
         "zh": "对齐用的人是空的。检查 --align-groups 和 --qmax",
+    },
+    "clumpp_perm_limit": {
+        "en": "--align-method %(method)s searches every permutation and stops when K+1 > 8 (here K+1 = %(k1)s). Use clumpp-largek or clumppling-ilp.",
+        "zh": "--align-method %(method)s 会枚举所有排列，K+1 > 8 时停止（这里 K+1 = %(k1)s）。请用 clumpp-largek 或 clumppling-ilp。",
     },
     "align_needs_scipy": {
         "en": "--align-method %(method)s requires scipy (scipy.optimize)",

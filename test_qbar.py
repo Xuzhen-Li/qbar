@@ -3179,5 +3179,256 @@ class ReplicateModeTests(unittest.TestCase):
             self.assertIn(path_b, got)
 
 
+def _independent_column_gprime(a, b):
+    """Column G' from the definition, not from qbar.column_gprime."""
+    diff = np.asarray(a, dtype=float) - np.asarray(b, dtype=float)
+    n_rows = diff.shape[0]
+    dist = np.sqrt(np.sum(diff * diff))
+    return float(1.0 - dist / np.sqrt(2.0 * n_rows))
+
+
+def _independent_matrix_gprime(left, right):
+    """Matrix G' = 1 - ||left - right||_F / sqrt(2C)."""
+    diff = np.asarray(left, dtype=float) - np.asarray(right, dtype=float)
+    n_rows = diff.shape[0]
+    dist = np.sqrt(np.sum(diff * diff))
+    return float(1.0 - dist / np.sqrt(2.0 * n_rows))
+
+
+def _lex_smallest_gprime_perm(q_prev, q_new, mask):
+    """Every permutation. Keep the lex-smallest maximiser of matrix G'."""
+    import itertools
+    q = np.asarray(q_prev, dtype=float)[mask]
+    p = np.asarray(q_new, dtype=float)[mask]
+    qhat = np.concatenate([q, np.zeros((q.shape[0], 1), dtype=float)], axis=1)
+    best_g = None
+    best = None
+    for perm in itertools.permutations(range(p.shape[1])):
+        g = _independent_matrix_gprime(qhat, p[:, list(perm)])
+        if best_g is None or g > best_g:
+            best_g = g
+            best = perm
+    return list(best)
+
+
+class ClumppFullTests(unittest.TestCase):
+    def test_lex_smallest_maximiser_on_invented_matrices(self):
+        # Invented matrices. The expected perm is enumerated here.
+        rng = np.random.default_rng(20261023)
+        cases = []
+        for k1, n_rows in ((2, 5), (3, 6), (4, 7)):
+            for _draw in range(3):
+                q = rng.random((n_rows, k1 - 1))
+                p = rng.random((n_rows, k1))
+                mask = np.ones(n_rows, dtype=bool)
+                if n_rows > 3 and int(rng.integers(0, 2)) == 1:
+                    mask[int(rng.integers(0, n_rows))] = False
+                cases.append((q, p, mask))
+        # Invented tie: the two P columns are the same vector, so both
+        # permutations share one G'. The lex-smallest perm is [0, 1].
+        q_tie = np.array([[1.0], [0.0], [0.4]])
+        p_tie = np.array([[1.0, 1.0], [0.0, 0.0], [0.4, 0.4]])
+        cases.append((q_tie, p_tie, np.ones(3, dtype=bool)))
+        for q, p, mask in cases:
+            expect = _lex_smallest_gprime_perm(q, p, mask)
+            got, scores = qbar.match_next(q, p, mask, "clumpp-full")
+            self.assertEqual(got, expect)
+            self.assertEqual(sorted(got), list(range(p.shape[1])))
+            self.assertIsNone(scores[-1])
+            q_m = np.asarray(q, dtype=float)[mask]
+            p_m = np.asarray(p, dtype=float)[mask]
+            qhat = np.concatenate([q_m, np.zeros((q_m.shape[0], 1))], axis=1)
+            for c in range(q.shape[1]):
+                self.assertAlmostEqual(
+                    scores[c],
+                    _independent_column_gprime(qhat[:, c], p_m[:, got[c]]),
+                )
+
+    def test_planted_column_swap_is_recovered(self):
+        # Invented block. Raw P columns are old C1, a small extra column, old C2.
+        n = 12
+        q = np.zeros((n, 2))
+        q[:6, 0] = 1.0
+        q[6:, 1] = 1.0
+        p = np.zeros((n, 3))
+        p[:6, 2] = 1.0
+        p[6:, 0] = 1.0
+        p[:, 1] = 0.05
+        mask = np.ones(n, dtype=bool)
+        expect = _lex_smallest_gprime_perm(q, p, mask)
+        self.assertEqual(expect, [2, 0, 1])
+        got, _scores = qbar.match_next(q, p, mask, "clumpp-full")
+        self.assertEqual(got, [2, 0, 1])
+
+    def test_k_plus_one_above_8_refuses_and_8_runs(self):
+        english = (
+            "--align-method clumpp-full searches every permutation and stops "
+            "when K+1 > 8 (here K+1 = 9). Use clumpp-largek or clumppling-ilp."
+        )
+        chinese = (
+            "--align-method clumpp-full 会枚举所有排列，K+1 > 8 时停止"
+            "（这里 K+1 = 9）。请用 clumpp-largek 或 clumppling-ilp。"
+        )
+        q8 = np.zeros((2, 8))
+        q8[:, 0] = 1.0
+        p9 = np.zeros((2, 9))
+        p9[:, 0] = 1.0
+        mask = np.ones(2, dtype=bool)
+        with self.assertRaises(SystemExit) as caught:
+            qbar.match_next(q8, p9, mask, "clumpp-full")
+        self.assertEqual(caught.exception.code, english)
+        with self.assertRaises(SystemExit) as caught_zh:
+            qbar.match_next(q8, p9, mask, "clumpp-full", language="zh")
+        self.assertEqual(caught_zh.exception.code, chinese)
+        groups = ["A", "A"]
+        with self.assertRaises(SystemExit) as caught_align:
+            qbar.align_qs(
+                {8: q8, 9: p9}, groups, "", "all", [], 0.75, True,
+                "clumpp-full", language="zh",
+            )
+        self.assertEqual(caught_align.exception.code, chinese)
+        # K+1 = 8 is the last size that still searches. Invented, two rows.
+        q7 = np.zeros((2, 7))
+        q7[:, 0] = 1.0
+        p8 = np.zeros((2, 8))
+        p8[:, 3] = 1.0
+        got, scores = qbar.match_next(q7, p8, mask, "clumpp-full")
+        self.assertEqual(got, _lex_smallest_gprime_perm(q7, p8, mask))
+        self.assertEqual(len(got), 8)
+        self.assertIsNone(scores[-1])
+
+    def test_core_mask_changes_the_perm_and_score_uses_c(self):
+        # Invented. Person 2 fails qmax at K=2, so core drops that row.
+        # Dropping it changes the maximiser. Numbers do not sum to 1.
+        q = np.array([[0.8], [0.8], [0.9]])
+        p = np.array([
+            [0.8, 0.75],
+            [0.8, 0.75],
+            [0.1, 0.7],
+        ])
+        full = np.ones(3, dtype=bool)
+        drop = np.array([True, True, False])
+        perm_full, _scores_full = qbar.match_next(q, p, full, "clumpp-full")
+        perm_drop, scores_drop = qbar.match_next(q, p, drop, "clumpp-full")
+        self.assertEqual(perm_full, _lex_smallest_gprime_perm(q, p, full))
+        self.assertEqual(perm_drop, _lex_smallest_gprime_perm(q, p, drop))
+        self.assertNotEqual(perm_full, perm_drop)
+        dist = np.sqrt(np.sum((q[drop, 0] - p[drop, perm_drop[0]]) ** 2))
+        expect = float(1.0 - dist / np.sqrt(2.0 * 2))
+        self.assertAlmostEqual(scores_drop[0], expect)
+        groups = ["A", "A", "A"]
+        _a_all, perm_all, meta_all = qbar.align_qs(
+            {1: q, 2: p}, groups, "", "all", ["A"], 0.75, True, "clumpp-full",
+        )
+        _a_core, perm_core, meta_core = qbar.align_qs(
+            {1: q, 2: p}, groups, "", "core", ["A"], 0.75, True, "clumpp-full",
+        )
+        self.assertEqual(meta_all[2]["n_mask"], 3)
+        self.assertEqual(meta_core[2]["n_mask"], 2)
+        self.assertEqual(perm_all[2], perm_full)
+        self.assertEqual(perm_core[2], perm_drop)
+        self.assertNotEqual(perm_all[2], perm_core[2])
+
+    def test_no_pearson_warning_and_report_low_is_na(self):
+        q2, q3, _mask = AlignTests()._greedy_vs_hungarian_case()
+        groups = ["A"] * q2.shape[0]
+        import io
+        from contextlib import redirect_stderr
+        err_g = io.StringIO()
+        with redirect_stderr(err_g):
+            qbar.align_qs({2: q2, 3: q3}, groups, "", "all", [], 0.75, True, "greedy")
+        self.assertIn("Pearson < 0.5", err_g.getvalue())
+        err_c = io.StringIO()
+        with redirect_stderr(err_c):
+            aligned, perm, meta = qbar.align_qs(
+                {2: q2, 3: q3}, groups, "", "all", [], 0.75, True, "clumpp-full",
+            )
+        self.assertNotIn("Pearson", err_c.getvalue())
+        rows, cut = qbar.align_report_rows(aligned, meta, groups, "clumpp-full", perm)
+        self.assertIsNone(cut)
+        self.assertEqual(qbar.REPORT_LOW, {
+            "greedy": 0.5, "hungarian": 0.5, "pong": 0.8, "jaccard": 0.5,
+        })
+        self.assertTrue(all(row["low_confidence"] == "NA" for row in rows))
+        rows_low, cut_low = qbar.align_report_rows(
+            aligned, meta, groups, "clumpp-full", perm, low=0.2,
+        )
+        self.assertEqual(cut_low, 0.2)
+        self.assertIn(rows_low[0]["low_confidence"], ("yes", "no"))
+
+    def test_align_tsv_header_is_gprime(self):
+        q = np.array([[1.0, 0.0], [0.0, 1.0], [0.2, 0.8]])
+        p = np.array([[0.0, 1.0, 0.1], [1.0, 0.0, 0.1], [0.7, 0.2, 0.1]])
+        with tempfile.TemporaryDirectory() as tmp:
+            for k, matrix in ((2, q), (3, p)):
+                np.savetxt(os.path.join(tmp, "t.%d.Q" % k), matrix, fmt="%.6f")
+            ids = os.path.join(tmp, "ids.txt")
+            with open(ids, "w") as handle:
+                handle.write("a\nb\nc\n")
+            out = os.path.join(tmp, "o")
+            qbar.main([
+                "--q", os.path.join(tmp, "t.2.Q"), os.path.join(tmp, "t.3.Q"),
+                "--ids", ids, "--align-method", "clumpp-full", "--outdir", out,
+            ])
+            with open(os.path.join(out, "align.tsv")) as handle:
+                lines = handle.read().splitlines()
+        self.assertEqual(lines[0], "K_to\tn_mask\tgprime")
+        mask = np.ones(3, dtype=bool)
+        _perm, scores = qbar.match_next(q, p, mask, "clumpp-full")
+        shown = " ".join("%.3f" % value for value in scores[:-1])
+        self.assertEqual(lines[1], "3\t3\t" + shown)
+
+    def test_help_has_one_sentence_and_replicate_pairs_use_pearson(self):
+        en = _cli_flag(qbar.build_parser(), "--align-method").help or ""
+        self.assertIn(
+            "clumpp-full pads the previous Q with one zero column and searches "
+            "every permutation of the next Q to maximize G', keeping the "
+            "lexicographically smallest permutation on a tie, and stops when "
+            "K+1 is above 8.",
+            en,
+        )
+        self.assertTrue(all(ord(ch) < 128 for ch in en))
+        zh = _cli_flag(qbar.build_parser(language="zh"), "--align-method").help or ""
+        self.assertIn("clumpp-full 在上一份 Q 右侧补一列 0", zh)
+        self.assertIn("字典序最小", zh)
+        from qbar.modes import modes_for_k
+        # Invented same-K pair. The expected mean is the better Pearson assignment.
+        left = np.array([
+            [0.9, 0.1],
+            [0.8, 0.2],
+            [0.2, 0.8],
+            [0.1, 0.9],
+        ])
+        right = np.array([
+            [0.15, 0.85],
+            [0.25, 0.75],
+            [0.7, 0.3],
+            [0.95, 0.05],
+        ])
+
+        def col_r(a, b):
+            if np.ptp(a) == 0.0 or np.ptp(b) == 0.0:
+                return 0.0
+            a = a - a.mean()
+            b = b - b.mean()
+            return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+
+        sim = np.array([
+            [col_r(left[:, c], right[:, j]) for j in range(2)]
+            for c in range(2)
+        ])
+        expect = max(
+            (sim[0, 0] + sim[1, 1]) / 2.0,
+            (sim[0, 1] + sim[1, 0]) / 2.0,
+        )
+        got = modes_for_k([("a.2.Q", left), ("b.2.Q", right)], "clumpp-full", 0.0)
+        greedy = modes_for_k([("a.2.Q", left), ("b.2.Q", right)], "greedy", 0.0)
+        self.assertAlmostEqual(got["pair_similarity"]["a.2.Q"]["b.2.Q"], expect)
+        self.assertAlmostEqual(
+            got["pair_similarity"]["a.2.Q"]["b.2.Q"],
+            greedy["pair_similarity"]["a.2.Q"]["b.2.Q"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
