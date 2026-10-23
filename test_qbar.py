@@ -3488,5 +3488,119 @@ class ClumppGreedyTests(unittest.TestCase):
         self.assertEqual(qbar.build_parser().parse_args(["--q", "x.Q", "--outdir", "o"]).align_method, "greedy")
 
 
+def _independent_largek_perm(q_prev, q_new, mask):
+    """Replay the column-pair locks. Ties: smaller b, then smaller a."""
+    q = np.asarray(q_prev, dtype=float)[mask]
+    p = np.asarray(q_new, dtype=float)[mask]
+    qhat = np.concatenate([q, np.zeros((q.shape[0], 1), dtype=float)], axis=1)
+    k1 = p.shape[1]
+    score = np.empty((k1, k1), dtype=float)
+    for a in range(k1):
+        for b in range(k1):
+            score[a, b] = _independent_column_gprime(qhat[:, a], p[:, b])
+    remaining_a = set(range(k1))
+    remaining_b = set(range(k1))
+    locked = {}
+    saw_tie = False
+    while remaining_a:
+        best_score = None
+        best_key = None
+        best_pair = None
+        n_at_best = 0
+        for a in remaining_a:
+            for b in remaining_b:
+                value = float(score[a, b])
+                key = (value, -int(b), -int(a))
+                if best_score is None or value > best_score:
+                    best_score = value
+                    n_at_best = 1
+                    best_key = key
+                    best_pair = (a, b)
+                elif value == best_score:
+                    n_at_best += 1
+                    if key > best_key:
+                        best_key = key
+                        best_pair = (a, b)
+        if n_at_best > 1:
+            saw_tie = True
+        a, b = best_pair
+        locked[a] = int(b)
+        remaining_a.remove(a)
+        remaining_b.remove(b)
+    return [locked[a] for a in range(k1)], saw_tie
+
+
+class ClumppLargekTests(unittest.TestCase):
+    def test_replay_includes_ties(self):
+        # Invented. Old columns 0 and 1 are the same vector, so several
+        # column pairs share G' = 1. Smaller b, then smaller a, locks
+        # (0, 0) first and the perm is [0, 1, 2].
+        q = np.array([[1.0, 1.0], [0.0, 0.0]])
+        p = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+        mask = np.ones(2, dtype=bool)
+        expect, saw_tie = _independent_largek_perm(q, p, mask)
+        self.assertTrue(saw_tie)
+        self.assertEqual(expect, [0, 1, 2])
+        got, scores = qbar.match_next(q, p, mask, "clumpp-largek")
+        self.assertEqual(got, expect)
+        self.assertIsNone(scores[-1])
+        qhat = np.concatenate([q, np.zeros((2, 1))], axis=1)
+        for c in range(2):
+            self.assertAlmostEqual(
+                scores[c],
+                _independent_column_gprime(qhat[:, c], p[:, got[c]]),
+            )
+
+    def test_replay_on_random_pairs_and_a_full_search_disagreement(self):
+        rng = np.random.default_rng(20261023)
+        # First draw at K+1 = 3. largek and clumpp-full disagree here.
+        q_diff = rng.random((6, 2))
+        p_diff = rng.random((6, 3))
+        mask6 = np.ones(6, dtype=bool)
+        large, _scores = qbar.match_next(q_diff, p_diff, mask6, "clumpp-largek")
+        full, _full_scores = qbar.match_next(q_diff, p_diff, mask6, "clumpp-full")
+        replay, _tie = _independent_largek_perm(q_diff, p_diff, mask6)
+        self.assertEqual(large, replay)
+        self.assertEqual(large, [0, 2, 1])
+        self.assertEqual(full, [0, 1, 2])
+        self.assertNotEqual(large, full)
+        for k1 in (2, 3, 4):
+            for _draw in range(3):
+                n_rows = 7
+                q = rng.random((n_rows, k1 - 1))
+                p = rng.random((n_rows, k1))
+                mask = np.ones(n_rows, dtype=bool)
+                got, _scores = qbar.match_next(q, p, mask, "clumpp-largek")
+                expect, _saw = _independent_largek_perm(q, p, mask)
+                self.assertEqual(got, expect)
+                self.assertEqual(sorted(got), list(range(k1)))
+
+    def test_k_plus_one_9_does_not_refuse(self):
+        q = np.zeros((3, 8))
+        q[:, 0] = 1.0
+        p = np.zeros((3, 9))
+        p[:, 4] = 1.0
+        mask = np.ones(3, dtype=bool)
+        with self.assertRaises(SystemExit):
+            qbar.match_next(q, p, mask, "clumpp-full")
+        got, _scores = qbar.match_next(q, p, mask, "clumpp-largek")
+        expect, _saw = _independent_largek_perm(q, p, mask)
+        self.assertEqual(got, expect)
+        self.assertEqual(len(got), 9)
+
+    def test_help_describes_the_lock_rule(self):
+        sentence = (
+            "clumpp-largek pads the previous Q with one zero column and "
+            "repeatedly locks the highest remaining column pair by column G', "
+            "breaking ties by the smaller new-column index and then the "
+            "smaller old-column index."
+        )
+        en = _cli_flag(qbar.build_parser(), "--align-method").help or ""
+        self.assertIn(sentence, en)
+        self.assertTrue(all(ord(ch) < 128 for ch in en))
+        zh = _cli_flag(qbar.build_parser(language="zh"), "--align-method").help or ""
+        self.assertIn("clumpp-largek 同样补一列 0", zh)
+
+
 if __name__ == "__main__":
     unittest.main()

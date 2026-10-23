@@ -15,11 +15,12 @@ from .messages import text as _msg
 CLUMPP_PERM_LIMIT = 8
 
 ALIGN_METHODS = (
-    "greedy", "hungarian", "pong", "jaccard", "clumpp-full", "clumpp-greedy",
+    "greedy", "hungarian", "pong", "jaccard",
+    "clumpp-full", "clumpp-greedy", "clumpp-largek",
 )
 
 # Methods whose align.tsv score is column G', not Pearson, pong, or Jaccard.
-GPRIME_METHODS = ("clumpp-full", "clumpp-greedy")
+GPRIME_METHODS = ("clumpp-full", "clumpp-greedy", "clumpp-largek")
 
 # Same-K replicate pairs use Pearson for these methods.
 REPLICATE_PEARSON_METHODS = ("greedy", "hungarian") + GPRIME_METHODS
@@ -323,6 +324,44 @@ def match_next_clumpp_greedy(q_prev, q_new, mask, seed=None, repeats=None, *, la
     return _match_clumpp_full_search(q_prev, q_new, mask, "clumpp-greedy", language)
 
 
+def match_next_clumpp_largek(q_prev, q_new, mask, *, language="en"):
+    """Lock column pairs by column G' after the same zero padding.
+
+    Repeatedly lock the highest remaining pair that reuses no column,
+    until K+1 pairs are locked. Ties: smaller new-column index b, then
+    smaller old-column index a. The P column locked to the pad is last.
+    There is no stop at K+1 = 8. This is not a claim that matrix G' is
+    maximised.
+    """
+    _require_one_new_column(q_prev, q_new, language)
+    q, p = _masked_pair(q_prev, q_new, mask)
+    qhat = _pad_zero_column(q)
+    k1 = int(p.shape[1])
+    score = np.empty((k1, k1), dtype=float)
+    for a in range(k1):
+        for b in range(k1):
+            score[a, b] = column_gprime(qhat[:, a], p[:, b])
+    remaining_a = set(range(k1))
+    remaining_b = set(range(k1))
+    locked = {}
+    while remaining_a:
+        best_key = None
+        best_pair = None
+        for a in remaining_a:
+            for b in remaining_b:
+                # Highest column G', then smaller b, then smaller a.
+                key = (float(score[a, b]), -b, -a)
+                if best_key is None or key > best_key:
+                    best_key = key
+                    best_pair = (a, b)
+        a, b = best_pair
+        locked[a] = b
+        remaining_a.remove(a)
+        remaining_b.remove(b)
+    perm = [locked[a] for a in range(k1)]
+    return perm, _old_column_gprime(qhat, p, perm)
+
+
 def match_next(q_prev, q_new, mask, method="greedy", jaccard_set="dominant", jaccard_cut=0.5, *, language="en"):
     """q_prev is already aligned. Return raw-column order for q_new.
 
@@ -339,6 +378,8 @@ def match_next(q_prev, q_new, mask, method="greedy", jaccard_set="dominant", jac
         return match_next_clumpp_full(q_prev, q_new, mask, language=language)
     if method == "clumpp-greedy":
         return match_next_clumpp_greedy(q_prev, q_new, mask, language=language)
+    if method == "clumpp-largek":
+        return match_next_clumpp_largek(q_prev, q_new, mask, language=language)
     k_new = q_new.shape[1]
     k_old = q_prev.shape[1]
     if k_new != k_old + 1:

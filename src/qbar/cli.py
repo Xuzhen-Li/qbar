@@ -9,7 +9,7 @@ Bioinformatics 23:1801, DOI 10.1093/bioinformatics/btm233.
 Cross-K column matching runs from K to K+1. The default --align-method
 is greedy: each old column takes the unused new column with the highest
 Pearson correlation. Other --align-method choices are hungarian, pong,
-jaccard, clumpp-full, and clumpp-greedy. --align-report writes align_report.tsv and
+jaccard, clumpp-full, clumpp-greedy, and clumpp-largek. --align-report writes align_report.tsv and
 align_report.txt.
 Label switching itself is described by Alexander, Novembre & Lange 2009
 Genome Res 19:1655, DOI 10.1101/gr.094052.109.
@@ -44,6 +44,7 @@ from .align import (
     match_next,
     match_next_clumpp_full,
     match_next_clumpp_greedy,
+    match_next_clumpp_largek,
     match_next_hungarian,
     match_next_jaccard,
     match_next_pong,
