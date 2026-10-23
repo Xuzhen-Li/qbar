@@ -41,6 +41,11 @@ from .messages import text as _msg
 from .modes import assemble_replicates, require_replicate_flags, write_replicate_outputs
 from .selectk import select_k_table, write_select_k_tsv, write_select_k_txt
 from .order import WITHIN, build_order, check_hclust_opts
+from .parentshare import (
+    check_parent_alpha,
+    parent_interval_rows,
+    write_parent_share_ci,
+)
 from .report import column_label, write_align_compare, write_align_report, write_tables
 
 
@@ -299,6 +304,24 @@ def _perm_request(args, language):
     return n_perm, int(seed), null
 
 
+def _parent_request(args, language, n_boot, n_perm):
+    """Return ``(parent_ci, parent_test, alpha)``.
+
+    Alpha is checked even when both flags are off. The default 0.05
+    passes. ``--parent-ci`` requires ``n_boot`` > 0. ``--parent-test``
+    requires ``n_perm`` > 0. A missing ``--perm-null`` is still reported
+    by ``_perm_request`` before this function runs.
+    """
+    parent_ci = bool(getattr(args, "parent_ci", False))
+    parent_test = bool(getattr(args, "parent_test", False))
+    alpha = check_parent_alpha(getattr(args, "parent_alpha", 0.05), language)
+    if parent_ci and n_boot <= 0:
+        raise SystemExit(_msg("parent_ci_needs_bootstrap", language))
+    if parent_test and n_perm <= 0:
+        raise SystemExit(_msg("parent_test_needs_perm", language))
+    return parent_ci, parent_test, alpha
+
+
 def _na_support_rows(perm, meta, method):
     """ST1 columns when bootstrap did not run. Counts and the bootstrap seed are NA."""
     rows = []
@@ -408,6 +431,25 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     ``n_empty_mask`` are NA. ``rows`` shuffles the K+1 matrix and reruns
     that one match. ``column`` shuffles the matched new column and
     recomputes its similarity. The null name is written on every row.
+
+    When ``args.parent_ci`` is set, ``parent_share_ci.tsv`` carries a
+    percentile interval for the largest parent share of each new column.
+    The default is off. The flag requires ``args.bootstrap`` greater
+    than 0. The interval uses the row-index vectors that bootstrap
+    already drew. It does not draw another set and does not align
+    again. ``args.parent_alpha`` defaults to 0.05 and must lie strictly
+    between 0 and 1.
+
+    When ``args.parent_test`` is set, the same file carries
+    ``p_one_parent``. The default is off. The flag requires
+    ``args.perm`` greater than 0 and uses ``args.perm`` and
+    ``args.perm_seed``. ``args.perm_null`` is still required whenever
+    ``args.perm`` is greater than 0, because that rule belongs to the
+    match permutation. The parent test does not use the null. Columns
+    for a flag that is off are NA. Either flag writes the file when
+    this run aligned at least one K to K+1 step. Both off writes no
+    ``parent_share_ci.tsv``. ``match_support.tsv`` is unchanged by
+    these flags except through the bootstrap or permutation they require.
     """
     if args.provenance:
         started = datetime.datetime.now().astimezone().isoformat()
@@ -421,6 +463,7 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     language = args.language
     n_boot, boot_seed = _bootstrap_request(args, language)
     n_perm, perm_seed, perm_null = _perm_request(args, language)
+    parent_ci, parent_test, parent_alpha = _parent_request(args, language, n_boot, n_perm)
     check_hclust_opts(args.hclust_dist, args.hclust_linkage, language=language)
     logs = getattr(args, "logs", None)
     logs_map = getattr(args, "logs_map", None)
@@ -533,6 +576,8 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         )
     support_path = None
     support_rows = []
+    # None leaves the bootstrap loop unchanged. A list receives its index vectors.
+    boot_indices = [] if parent_ci else None
     if n_boot > 0 and meta:
         support_rows = bootstrap_support(
             q_by_k,
@@ -547,6 +592,7 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
             jaccard_set=args.jaccard_set,
             jaccard_cut=args.jaccard_cut,
             language=language,
+            indices_out=boot_indices,
         )
     if n_perm > 0 and meta:
         if not support_rows:
@@ -565,6 +611,22 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     if support_rows:
         support_path = os.path.join(args.outdir, "match_support.tsv")
         write_match_support(support_path, support_rows)
+    parent_path = None
+    if (parent_ci or parent_test) and meta:
+        parent_rows = parent_interval_rows(
+            aligned,
+            meta,
+            boot_indices,
+            parent_alpha,
+            n_boot,
+            n_perm,
+            perm_seed,
+            want_ci=parent_ci,
+            want_test=parent_test,
+            language=language,
+        )
+        parent_path = os.path.join(args.outdir, "parent_share_ci.tsv")
+        write_parent_share_ci(parent_path, parent_rows)
     if log_paths is not None:
         write_cv_loglik_tsv(os.path.join(args.outdir, "cv_loglik.tsv"), log_rows)
         write_cv_loglik_plot(os.path.join(args.outdir, "cv_loglik.png"), log_rows)
@@ -625,6 +687,8 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         paths.append(os.path.join(args.outdir, "align_compare.txt"))
     if support_path is not None:
         paths.append(support_path)
+    if parent_path is not None:
+        paths.append(parent_path)
     if log_paths is not None:
         paths.append(os.path.join(args.outdir, "cv_loglik.tsv"))
         paths.append(os.path.join(args.outdir, "cv_loglik.png"))

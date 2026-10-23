@@ -103,7 +103,7 @@ def write_match_support(path, rows):
 def bootstrap_support(q_by_k, method, n_boot, seed, mask=None, *,
                       groups=None, anchor="", align_mode="all", align_groups=None,
                       qmax=0.75, jaccard_set="dominant", jaccard_cut=0.5,
-                      language="en"):
+                      language="en", indices_out=None):
     """Return one dict per aligned column at each K to K+1 step.
 
     ``mask``, when given, is a boolean vector of length N. It is combined
@@ -112,6 +112,12 @@ def bootstrap_support(q_by_k, method, n_boot, seed, mask=None, *,
     A replicate whose mask is empty increments ``n_empty_mask`` and is
     not counted in ``n_same``. Any other qbar error inside a replicate
     stops the run.
+
+    ``indices_out``, when a list, receives one copy of each row-index
+    vector in draw order. A replicate whose align mask was empty is
+    included. The vector is that replicate's ``integers(0, n, size=n)``
+    draw. Callers that need those vectors reuse this list. They do not
+    draw a second set. ``None`` leaves the draws unchanged.
     """
     n_boot = _nonneg_int(n_boot, "bootstrap_negative", language, "n")
     if n_boot == 0:
@@ -153,6 +159,9 @@ def bootstrap_support(q_by_k, method, n_boot, seed, mask=None, *,
     for replicate in range(n_boot):
         # One draw. Every K in this replicate uses these row positions.
         idx = rng.integers(0, n, size=n)
+        if indices_out is not None:
+            # Saved before align, including a replicate that later has an empty mask.
+            indices_out.append(idx.copy())
         q_b = {k: np.asarray(q_by_k[k], dtype=float)[idx] for k in ks}
         groups_b = [groups[int(i)] for i in idx]
         row_mask = None if base_mask is None else base_mask[idx]

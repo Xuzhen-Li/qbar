@@ -603,6 +603,50 @@ _CATALOG = {
         "en": "Permutation row count does not match the alignment",
         "zh": "置换行数和对齐结果不一致",
     },
+    "help_parent_ci": {
+        "en": "Write parent_share_ci.tsv with a percentile interval for the largest parent share. Off by default. Requires --bootstrap greater than 0. Uses the same row resamples as --bootstrap.",
+        "zh": "写 parent_share_ci.tsv，给出最大父列份额的百分位区间。默认关闭。需要 --bootstrap 大于 0。",
+    },
+    "help_parent_alpha": {
+        "en": "Two-sided alpha for --parent-ci. Default 0.05. Must be greater than 0 and less than 1.",
+        "zh": "--parent-ci 的 alpha。默认 0.05。必须大于 0 且小于 1。",
+    },
+    "help_parent_test": {
+        "en": "Add a residual test of one parent versus two to parent_share_ci.tsv. Off by default. Requires --perm greater than 0. Uses --perm and --perm-seed.",
+        "zh": "在 parent_share_ci.tsv 里检验一个父列还是两个。默认关闭。需要 --perm 大于 0。",
+    },
+    "parent_ci_needs_bootstrap": {
+        "en": "--parent-ci requires --bootstrap greater than 0. Set --bootstrap.",
+        "zh": "--parent-ci 需要设置 --bootstrap。",
+    },
+    "parent_test_needs_perm": {
+        "en": "--parent-test requires --perm greater than 0. Set --perm.",
+        "zh": "--parent-test 需要设置 --perm。",
+    },
+    "parent_alpha_range": {
+        "en": "--parent-alpha must be greater than 0 and less than 1, got %(alpha)s",
+        "zh": "--parent-alpha 必须大于 0 且小于 1，收到 %(alpha)s",
+    },
+    "parent_shape": {
+        "en": "one_vs_two needs a 2-d previous matrix, a 1-d new column, and the same row count",
+        "zh": "one_vs_two 需要二维上一矩阵和一维新列，且行数相同",
+    },
+    "parent_mask_shape": {
+        "en": "Parent-share mask has %(got)s entries, expected %(rows)s rows",
+        "zh": "父列份额掩码有 %(got)s 项，应为 %(rows)s 行",
+    },
+    "parent_perm_negative": {
+        "en": "n_perm must be an integer greater than or equal to 0, got %(n)s",
+        "zh": "n_perm 必须是大于或等于 0 的整数，收到 %(n)s",
+    },
+    "parent_seed_negative": {
+        "en": "seed must be an integer greater than or equal to 0, got %(seed)s",
+        "zh": "seed 必须是大于或等于 0 的整数，收到 %(seed)s",
+    },
+    "parent_index_count": {
+        "en": "Parent-share interval expected %(n)s bootstrap index vectors, got %(got)s",
+        "zh": "父列份额区间需要 %(n)s 个 bootstrap 行下标，收到 %(got)s",
+    },
 }
 
 
