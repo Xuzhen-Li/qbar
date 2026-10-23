@@ -3602,5 +3602,156 @@ class ClumppLargekTests(unittest.TestCase):
         self.assertIn("clumpp-largek 同样补一列 0", zh)
 
 
+def _independent_clumppling_cost(q, p):
+    """Paper C_ij on already masked matrices. i is a column of P."""
+    q = np.asarray(q, dtype=float)
+    p = np.asarray(p, dtype=float)
+    n_rows = q.shape[0]
+    k_old = q.shape[1]
+    k_new = p.shape[1]
+    cost = np.empty((k_new, k_old), dtype=float)
+    for i in range(k_new):
+        for j in range(k_old):
+            diff = p[:, i] - q[:, j]
+            cost[i, j] = float(np.dot(diff, diff)) / (2.0 * float(n_rows))
+    return cost
+
+
+def _independent_min_surjection_cost(cost):
+    """Minimum paper cost over surjections from K+1 columns onto K labels."""
+    import itertools
+    k_new, k_old = cost.shape
+    best = None
+    for assign in itertools.product(range(k_old), repeat=k_new):
+        if len(set(assign)) != k_old:
+            continue
+        total = 0.0
+        for i, j in enumerate(assign):
+            total += float(cost[i, j])
+        if best is None or total < best:
+            best = total
+    return best
+
+
+class ClumpplingIlpTests(unittest.TestCase):
+    def test_milp_cost_matches_every_surjection(self):
+        from qbar.align import clumppling_ilp_objective
+        rng = np.random.default_rng(20261023)
+        for k_old in (1, 2, 3, 4):
+            q = rng.random((6, k_old))
+            p = rng.random((6, k_old + 1))
+            mask = np.ones(6, dtype=bool)
+            if k_old == 3:
+                mask[0] = False
+            got = clumppling_ilp_objective(q, p, mask)
+            expect = _independent_min_surjection_cost(
+                _independent_clumppling_cost(q[mask], p[mask]),
+            )
+            self.assertAlmostEqual(got, expect, places=8)
+            perm, scores = qbar.match_next(q, p, mask, "clumppling-ilp")
+            self.assertEqual(sorted(perm), list(range(k_old + 1)))
+            self.assertIsNone(scores[-1])
+            q_m = q[mask]
+            p_m = p[mask]
+            for col in range(k_old):
+                self.assertAlmostEqual(
+                    scores[col],
+                    _independent_column_gprime(q_m[:, col], p_m[:, perm[col]]),
+                )
+
+    def test_conversion_keeps_the_cheaper_child(self):
+        from qbar.align import clumppling_perm_from_w
+        # j=0 receives i=0 and i=2. i=0 is cheaper, so it stays and i=2 is last.
+        cost = np.array([
+            [0.2, 0.9],
+            [0.5, 0.1],
+            [0.4, 0.3],
+        ])
+        w = np.array([
+            [1, 0],
+            [0, 1],
+            [1, 0],
+        ])
+        self.assertEqual(clumppling_perm_from_w(cost, w), [0, 1, 2])
+        # The same column, but i=2 is cheaper, so i=2 stays and i=0 is last.
+        cost_flip = np.array([
+            [0.5, 0.9],
+            [0.4, 0.1],
+            [0.1, 0.3],
+        ])
+        self.assertEqual(clumppling_perm_from_w(cost_flip, w), [2, 1, 0])
+        # Equal costs: the smaller i stays.
+        cost_tie = np.array([
+            [0.4, 0.9],
+            [0.2, 0.1],
+            [0.4, 0.3],
+        ])
+        self.assertEqual(clumppling_perm_from_w(cost_tie, w), [0, 1, 2])
+
+    def test_status_2_refuses(self):
+        from unittest.mock import patch
+
+        class _Result:
+            status = 2
+            message = "problem is infeasible"
+            x = None
+            fun = None
+
+        q = np.array([[0.2], [0.8]])
+        p = np.array([[0.2, 0.1], [0.8, 0.7]])
+        mask = np.ones(2, dtype=bool)
+        with patch("scipy.optimize.milp", return_value=_Result()):
+            with self.assertRaises(SystemExit) as ctx:
+                qbar.match_next(q, p, mask, "clumppling-ilp")
+        self.assertEqual(
+            str(ctx.exception),
+            "clumppling-ilp did not reach an optimal solution "
+            "(status 2: problem is infeasible)",
+        )
+        with patch("scipy.optimize.milp", return_value=_Result()):
+            with self.assertRaises(SystemExit) as ctx_zh:
+                qbar.match_next(q, p, mask, "clumppling-ilp", language="zh")
+        self.assertEqual(
+            str(ctx_zh.exception),
+            "clumppling-ilp 没有得到最优解（status 2：problem is infeasible）",
+        )
+
+    def test_missing_milp_refuses(self):
+        import scipy.optimize as so
+        q = np.array([[0.2], [0.8]])
+        p = np.array([[0.2, 0.1], [0.8, 0.7]])
+        mask = np.ones(2, dtype=bool)
+        saved = so.milp
+        try:
+            del so.milp
+            with self.assertRaises(SystemExit) as ctx:
+                qbar.match_next(q, p, mask, "clumppling-ilp")
+            self.assertEqual(
+                str(ctx.exception),
+                "clumppling-ilp needs scipy>=1.9.0 (scipy.optimize.milp)",
+            )
+            with self.assertRaises(SystemExit) as ctx_zh:
+                qbar.match_next(q, p, mask, "clumppling-ilp", language="zh")
+            self.assertEqual(
+                str(ctx_zh.exception),
+                "clumppling-ilp 需要 scipy>=1.9.0（scipy.optimize.milp）",
+            )
+        finally:
+            so.milp = saved
+
+    def test_help_describes_the_assignment(self):
+        sentence = (
+            "clumppling-ilp assigns each column of the next Q to one column "
+            "of the previous Q, requires every previous column to receive at "
+            "least one, minimizes that squared-difference cost, and places "
+            "the extra column last."
+        )
+        en = _cli_flag(qbar.build_parser(), "--align-method").help or ""
+        self.assertIn(sentence, en)
+        self.assertTrue(all(ord(ch) < 128 for ch in en))
+        zh = _cli_flag(qbar.build_parser(language="zh"), "--align-method").help or ""
+        self.assertIn("clumppling-ilp 把下一份 Q 的每一列分给上一份 Q 的一列", zh)
+
+
 if __name__ == "__main__":
     unittest.main()
