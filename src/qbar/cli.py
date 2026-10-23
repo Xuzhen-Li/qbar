@@ -180,6 +180,8 @@ def build_parser(language="en"):
     p.add_argument("--jaccard-cut", type=float, default=0.5, help=say("help_jaccard_cut"))
     p.add_argument("--align-report", action="store_true",
                    help=say("help_align_report"))
+    p.add_argument("--align-compare", action="store_true",
+                   help=say("help_align_compare"))
     p.add_argument("--align-report-low", type=float,
                    help=say("help_align_report_low"))
     p.add_argument("--align-groups", default="", help=say("help_align_groups"))
