@@ -459,6 +459,50 @@ _CATALOG = {
         "en": "--select-k requires --logs",
         "zh": "--select-k 需要 --logs",
     },
+    "help_replicates": {
+        "en": "Accept several Q files at one K, group them into modes, and align the major-mode mean across K. Off by default.",
+        "zh": "同一个 K 接受多份 Q，分成模式，用主模式的均值做跨 K 对齐。默认关闭。",
+    },
+    "help_mode_sim_cut": {
+        "en": "Similarity at or above which two replicates are linked into one mode. Required with --replicates. Not calibrated.",
+        "zh": "两份重复的相似度达到或超过这个值就归入同一模式。使用 --replicates 时必填。未校准。",
+    },
+    "replicates_requires_cut": {
+        "en": "--replicates requires --mode-sim-cut. No default cut is shipped because none has been calibrated.",
+        "zh": "--replicates 需要 --mode-sim-cut。尚未校准，所以不提供默认阈值。",
+    },
+    "mode_sim_cut_requires": {
+        "en": "--mode-sim-cut requires --replicates",
+        "zh": "--mode-sim-cut 需要 --replicates",
+    },
+    "mode_sim_cut_range": {
+        "en": "--mode-sim-cut must be between 0 and 1, got %(cut)s",
+        "zh": "--mode-sim-cut 必须在 0 和 1 之间，收到 %(cut)s",
+    },
+    "mode_mean_zero_row": {
+        "en": "Mode %(mode)s at K=%(k)s has a row whose mean sums to 0",
+        "zh": "K=%(k)s 的模式 %(mode)s 有一行均值和为 0",
+    },
+    "replicate_needs_scipy": {
+        "en": "Replicate alignment requires scipy (scipy.optimize)",
+        "zh": "重复对齐需要 scipy（scipy.optimize）",
+    },
+    "replicate_method": {
+        "en": "Alignment method must be one of %(methods)s, got %(method)s",
+        "zh": "对齐方法只能是 %(methods)s，收到 %(method)s",
+    },
+    "replicate_jaccard_set": {
+        "en": "--jaccard-set must be one of %(choices)s, got %(kind)s",
+        "zh": "--jaccard-set 只能是 %(choices)s，收到 %(kind)s",
+    },
+    "replicate_shape": {
+        "en": "Replicates at one K must have the same shape, got %(path)s",
+        "zh": "同一个 K 的重复必须形状相同，收到 %(path)s",
+    },
+    "replicate_empty": {
+        "en": "modes_for_k needs at least one matrix",
+        "zh": "modes_for_k 至少需要一个矩阵",
+    },
 }
 
 

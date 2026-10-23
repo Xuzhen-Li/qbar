@@ -115,6 +115,8 @@ Optional `--logs` and `--logs-map` read ADMIXTURE CV error and log-likelihood fr
 
 Optional `--select-k` and `--plateau-fraction` write select-K heuristics from the CV and log-likelihood table, and the default run does not set them.
 
+Optional `--replicates` and `--mode-sim-cut` group several Q files at one K into modes, and the default run does not set them.
+
 If you give a single `.Q` file, qbar writes only `bar_K8.png` and `bar_K8.pdf` for that K, with no panel image and no `align.tsv`:
 
 ```bash
