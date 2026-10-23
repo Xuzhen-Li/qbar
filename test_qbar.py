@@ -3430,5 +3430,63 @@ class ClumppFullTests(unittest.TestCase):
         )
 
 
+class ClumppGreedyTests(unittest.TestCase):
+    def test_same_perm_as_clumpp_full_on_random_pairs(self):
+        # Invented pairs. numpy Generator seed is fixed.
+        from qbar.align import match_next_clumpp_greedy
+        rng = np.random.default_rng(20261023)
+        for k1 in (2, 3, 4):
+            for _draw in range(4):
+                n_rows = 8
+                q = rng.random((n_rows, k1 - 1))
+                p = rng.random((n_rows, k1))
+                mask = np.ones(n_rows, dtype=bool)
+                if int(rng.integers(0, 2)) == 1:
+                    mask[int(rng.integers(0, n_rows))] = False
+                full, full_scores = qbar.match_next(q, p, mask, "clumpp-full")
+                got, got_scores = qbar.match_next(q, p, mask, "clumpp-greedy")
+                ignored, ignored_scores = match_next_clumpp_greedy(
+                    q, p, mask, seed=11, repeats=5,
+                )
+                self.assertEqual(got, full)
+                self.assertEqual(ignored, full)
+                self.assertEqual(len(got_scores), len(full_scores))
+                for left, right in zip(got_scores, full_scores):
+                    if left is None:
+                        self.assertIsNone(right)
+                    else:
+                        self.assertAlmostEqual(left, right)
+                for left, right in zip(ignored_scores, full_scores):
+                    if left is None:
+                        self.assertIsNone(right)
+                    else:
+                        self.assertAlmostEqual(left, right)
+
+    def test_refuses_with_its_own_name(self):
+        q = np.zeros((2, 8))
+        p = np.zeros((2, 9))
+        mask = np.ones(2, dtype=bool)
+        with self.assertRaises(SystemExit) as caught:
+            qbar.match_next(q, p, mask, "clumpp-greedy")
+        self.assertEqual(
+            caught.exception.code,
+            "--align-method clumpp-greedy searches every permutation and stops "
+            "when K+1 > 8 (here K+1 = 9). Use clumpp-largek or clumppling-ilp.",
+        )
+
+    def test_help_states_the_two_run_agreement(self):
+        sentence = (
+            "clumpp-greedy returns the same permutation as clumpp-full on one "
+            "K to K+1 pair; the published Greedy differs only with more than "
+            "two runs at one K."
+        )
+        en = _cli_flag(qbar.build_parser(), "--align-method").help or ""
+        self.assertIn(sentence, en)
+        self.assertTrue(all(ord(ch) < 128 for ch in en))
+        zh = _cli_flag(qbar.build_parser(language="zh"), "--align-method").help or ""
+        self.assertIn("clumpp-greedy 在单个 K 到 K+1 的一对矩阵上与 clumpp-full 返回同一排列", zh)
+        self.assertEqual(qbar.build_parser().parse_args(["--q", "x.Q", "--outdir", "o"]).align_method, "greedy")
+
+
 if __name__ == "__main__":
     unittest.main()
