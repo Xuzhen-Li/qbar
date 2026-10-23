@@ -56,8 +56,16 @@ def write_tables(outdir, iids, groups, order, spans, perm, owners, hexes, meta, 
         with open(os.path.join(outdir, "align.tsv"), "w") as f:
             pong = any("split_parent" in info for info in meta.values())
             jac = any("jaccard" in info for info in meta.values())
-            f.write("K_to\tn_mask\tpong_sim\tsplit_parent\n" if pong else
-                    "K_to\tn_mask\tjaccard\n" if jac else "K_to\tn_mask\tpearson\n")
+            gprime = any(info.get("gprime") for info in meta.values())
+            if pong:
+                header = "K_to\tn_mask\tpong_sim\tsplit_parent\n"
+            elif jac:
+                header = "K_to\tn_mask\tjaccard\n"
+            elif gprime:
+                header = "K_to\tn_mask\tgprime\n"
+            else:
+                header = "K_to\tn_mask\tpearson\n"
+            f.write(header)
             for k, info in sorted(meta.items()):
                 rs = " ".join("%.3f" % r for r in info["pearson"][:-1])
                 if pong:
@@ -106,8 +114,28 @@ def dominant_groups(q, groups, col, n=3):
     return int((top == col).sum()), out[:n]
 
 
+def _report_cut(method, low):
+    """Return the low-confidence cut, or None when this method has no default.
+
+    The four original methods keep REPORT_LOW. Methods added later are
+    absent from that dict, so the default cut is None unless the caller
+    passes one.
+    """
+    if low is not None:
+        return low
+    if method in REPORT_LOW:
+        return REPORT_LOW[method]
+    return None
+
+
+def _low_confidence(shown, cut):
+    if cut is None:
+        return "NA"
+    return "yes" if float(shown) < cut else "no"
+
+
 def align_report_rows(aligned, meta, groups, method, perm, low=None):
-    cut = REPORT_LOW[method] if low is None else low
+    cut = _report_cut(method, low)
     rows = []
     for k_to in sorted(meta):
         info = meta[k_to]
@@ -121,7 +149,7 @@ def align_report_rows(aligned, meta, groups, method, perm, low=None):
                 row.update(matched_from="C%d" % (c + 1), similarity=shown,
                            pearson="%.3f" % col_pearson(prev[mask, c], new[mask, c]),
                            split_parent="", parent_share="", runner_up="", runner_up_share="",
-                           low_confidence="yes" if float(shown) < cut else "no")
+                           low_confidence=_low_confidence(shown, cut))
             else:
                 mx, mx_share, ru, ru_share = split_parent_of(prev, new[:, c], mask)
                 top_tied = mx is not None and ru_share is not None and mx_share == ru_share
@@ -155,9 +183,19 @@ def write_align_report(outdir, aligned, meta, groups, method, perm, low=None):
         f.write("\t".join(REPORT_COLS) + "\n")
         for r in rows:
             f.write("\t".join(str(r[c]) for c in REPORT_COLS) + "\n")
-    measure = {"greedy": "Pearson r", "hungarian": "Pearson r", "pong": "pong similarity", "jaccard": "Jaccard"}[method]
+    measure = {
+        "greedy": "Pearson r",
+        "hungarian": "Pearson r",
+        "pong": "pong similarity",
+        "jaccard": "Jaccard",
+        "clumpp-full": "column G'",
+    }[method]
     with open(os.path.join(outdir, "align_report.txt"), "w") as f:
-        f.write("Alignment report\nmethod: %s (similarity = %s)\nlow confidence: similarity < %g\n" % (method, measure, cut))
+        if cut is None:
+            low_line = "low confidence: NA"
+        else:
+            low_line = "low confidence: similarity < %g" % cut
+        f.write("Alignment report\nmethod: %s (similarity = %s)\n%s\n" % (method, measure, low_line))
         f.write("split parent: %s\n" % ("pong split pair" if method == "pong" else
                 "K-1 column with the largest membership-weighted mean over the new column"))
         for k_to in sorted(meta):

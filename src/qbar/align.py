@@ -2,13 +2,25 @@
 """
 from __future__ import annotations
 
+import itertools
 import sys
 
 import numpy as np
 
 from .messages import text as _msg
 
-ALIGN_METHODS = ("greedy", "hungarian", "pong", "jaccard")
+# qbar stops clumpp-full and clumpp-greedy when K+1 is above this.
+# The number is qbar's own. CLUMPAK uses MAX_K 8 to switch to a greedy
+# search. CLUMPP does not define a hard stop at 8.
+CLUMPP_PERM_LIMIT = 8
+
+ALIGN_METHODS = ("greedy", "hungarian", "pong", "jaccard", "clumpp-full")
+
+# Methods whose align.tsv score is column G', not Pearson, pong, or Jaccard.
+GPRIME_METHODS = ("clumpp-full",)
+
+# Same-K replicate pairs use Pearson for these methods.
+REPLICATE_PEARSON_METHODS = ("greedy", "hungarian") + GPRIME_METHODS
 
 
 JACCARD_SETS = ("dominant", "threshold")
@@ -205,12 +217,104 @@ def match_next_jaccard(q_prev, q_new, mask, kind="dominant", cut=0.5, *, languag
     return perm, sims
 
 
+def _require_one_new_column(q_prev, q_new, language):
+    if q_new.shape[1] != q_prev.shape[1] + 1:
+        raise SystemExit(_msg("k_columns_differ", language))
+
+
+def _masked_pair(q_prev, q_new, mask):
+    """Rows kept by the alignment mask. C in the G' formulas is this row count."""
+    q = np.asarray(q_prev, dtype=float)[mask]
+    p = np.asarray(q_new, dtype=float)[mask]
+    return q, p
+
+
+def _pad_zero_column(q):
+    """Q-hat: Q with one zero column on the right."""
+    pad = np.zeros((q.shape[0], 1), dtype=float)
+    return np.concatenate([np.asarray(q, dtype=float), pad], axis=1)
+
+
+def _gprime(sum_sq, n_rows):
+    """G' = 1 - ||diff|| / sqrt(2C), with ||diff|| the Frobenius or L2 norm."""
+    return float(1.0 - np.sqrt(sum_sq) / np.sqrt(2.0 * float(n_rows)))
+
+
+def column_gprime(a, b):
+    """Column G' of two length-C vectors: 1 - ||a - b||_2 / sqrt(2C)."""
+    diff = np.asarray(a, dtype=float) - np.asarray(b, dtype=float)
+    return _gprime(float(np.dot(diff, diff)), diff.shape[0])
+
+
+def matrix_gprime(left, right):
+    """Matrix G' = 1 - ||left - right||_F / sqrt(2C)."""
+    diff = np.asarray(left, dtype=float) - np.asarray(right, dtype=float)
+    return _gprime(float(np.sum(diff * diff)), diff.shape[0])
+
+
+def _old_column_gprime(reference, p, perm):
+    """Column G' for each old column. The leftover P column is None.
+
+    reference[:, c] for c < K is the column the score is taken against.
+    For the clumpp methods that column is Q-hat[:, c]. For clumppling-ilp
+    it is the unpadded Q column. Those two agree for c < K.
+    """
+    k_old = len(perm) - 1
+    scores = [column_gprime(reference[:, c], p[:, perm[c]]) for c in range(k_old)]
+    scores.append(None)
+    return scores
+
+
+def _best_gprime_perm(qhat, p):
+    """Lexicographically smallest permutation of P that maximises matrix G'.
+
+    itertools.permutations(range(k)) is lexicographic order. A later
+    permutation replaces the current one only when its G' is strictly larger.
+    """
+    k1 = p.shape[1]
+    best_g = None
+    best_perm = None
+    for perm in itertools.permutations(range(k1)):
+        ordered = p[:, list(perm)]
+        g = matrix_gprime(qhat, ordered)
+        if best_g is None or g > best_g:
+            best_g = g
+            best_perm = perm
+    return list(best_perm)
+
+
+def _refuse_clumpp_perm_search(k1, method, language):
+    if k1 > CLUMPP_PERM_LIMIT:
+        raise SystemExit(_msg("clumpp_perm_limit", language, method=method, k1=k1))
+
+
+def _match_clumpp_full_search(q_prev, q_new, mask, method, language):
+    """Pad Q and maximise matrix G' over permutations of P."""
+    _require_one_new_column(q_prev, q_new, language)
+    k1 = int(q_new.shape[1])
+    _refuse_clumpp_perm_search(k1, method, language)
+    q, p = _masked_pair(q_prev, q_new, mask)
+    qhat = _pad_zero_column(q)
+    perm = _best_gprime_perm(qhat, p)
+    # The P column on the padded zero column is last in perm.
+    return perm, _old_column_gprime(qhat, p, perm)
+
+
+def match_next_clumpp_full(q_prev, q_new, mask, *, language="en"):
+    """qbar adaptation of CLUMPP FullSearch for one K to one K+1.
+
+    Q is padded with one zero column. The permutation of P maximises
+    G' = 1 - ||Q-hat - P[:, perm]||_F / sqrt(2C). Ties keep the
+    lexicographically smallest perm. K+1 above 8 is refused.
+    """
+    return _match_clumpp_full_search(q_prev, q_new, mask, "clumpp-full", language)
+
+
 def match_next(q_prev, q_new, mask, method="greedy", jaccard_set="dominant", jaccard_cut=0.5, *, language="en"):
     """q_prev is already aligned. Return raw-column order for q_new.
 
-    "hungarian", "pong", and "jaccard" call those matchers and return the
-    same value. "pong" includes the split dict. Any other method, including
-    the default "greedy", is greedy Pearson.
+    Named methods call those matchers. "pong" includes the split dict.
+    Any other method, including the default "greedy", is greedy Pearson.
     """
     if method == "hungarian":
         return match_next_hungarian(q_prev, q_new, mask, language=language)
@@ -218,6 +322,8 @@ def match_next(q_prev, q_new, mask, method="greedy", jaccard_set="dominant", jac
         return match_next_pong(q_prev, q_new, mask, language=language)
     if method == "jaccard":
         return match_next_jaccard(q_prev, q_new, mask, jaccard_set, jaccard_cut, language=language)
+    if method == "clumpp-full":
+        return match_next_clumpp_full(q_prev, q_new, mask, language=language)
     k_new = q_new.shape[1]
     k_old = q_prev.shape[1]
     if k_new != k_old + 1:
@@ -290,6 +396,10 @@ def align_qs(q_by_k, groups, anchor, mode, align_groups, qmax_cut, do_align, met
         if method == "jaccard":
             meta[k + 1]["jaccard"] = True
             continue
+        if method in GPRIME_METHODS:
+            meta[k + 1]["gprime"] = True
+            continue
+        # Pearson < 0.5 on stderr is only for greedy and hungarian.
         low = [r for r in rs[:-1] if r is not None and r < 0.5]
         if low:
             print(
