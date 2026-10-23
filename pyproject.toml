@@ -12,7 +12,7 @@ license-files = ["LICENSE"]
 authors = [{ name = "Xuzhen Li", email = "jasonlixuzhen@gmail.com" }]
 dependencies = [
     "numpy>=1.21.0",
-    "scipy>=1.7.3",
+    "scipy>=1.9.0",
     "Pillow>=9.1.0",
 ]
 classifiers = [
