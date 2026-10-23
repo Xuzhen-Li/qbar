@@ -1208,6 +1208,9 @@ class DocstringTests(unittest.TestCase):
         ``--order-mode``, ``--group-order``, ``--dendrogram``, and
         ``--hclust-max-bytes`` are documented in ``docs/cli.md`` and
         ``docs/factpacks/F1.md``.
+        ``--auto-groups``, ``--auto-k``, ``--admix-cut``, ``--auto-g``,
+        ``--auto-seed``, ``--pca``, and ``--pca-n`` are documented in
+        ``docs/cli.md`` and ``docs/factpacks/F8.md``.
         """
         import re
         # --select-k and --plateau-fraction are documented in docs/cli.md
@@ -1227,6 +1230,9 @@ class DocstringTests(unittest.TestCase):
         # and docs/factpacks/F7.md.
         # --order-mode, --group-order, --dendrogram, and --hclust-max-bytes
         # are documented in docs/cli.md and docs/factpacks/F1.md.
+        # --auto-groups, --auto-k, --admix-cut, --auto-g, --auto-seed,
+        # --pca, and --pca-n are documented in docs/cli.md and
+        # docs/factpacks/F8.md.
         later = {
             "--provenance", "--q-format", "--ind", "--logs", "--logs-map",
             "--select-k", "--plateau-fraction",
@@ -1238,6 +1244,8 @@ class DocstringTests(unittest.TestCase):
             "--low-confidence-table",
             "--cluster-flow", "--flow-weight",
             "--order-mode", "--group-order", "--dendrogram", "--hclust-max-bytes",
+            "--auto-groups", "--auto-k", "--admix-cut", "--auto-g",
+            "--auto-seed", "--pca", "--pca-n",
         }
         flags = []
         for action in qbar.build_parser()._actions:
@@ -6683,6 +6691,427 @@ class GlobalHclustTests(unittest.TestCase):
             with Image.open(os.path.join(plain, "bar_K3.png")) as base, Image.open(os.path.join(topped, "bar_K3.png")) as drawn:
                 self.assertEqual(drawn.size[0], base.size[0])
                 self.assertGreater(drawn.size[1], base.size[1])
+
+
+class AutoGroupsTests(unittest.TestCase):
+    SENTENCE = (
+        "Groups derived from Q are for display and ordering. "
+        "Using them as evidence for the same Q is circular."
+    )
+
+    def _hand(self):
+        return np.array([
+            [0.9, 0.1],
+            [0.2, 0.8],
+            [0.5, 0.5],
+        ], dtype=float)
+
+    def _write_case(self, tmp, rows, ids=None, groups=None, name=None):
+        rows = np.asarray(rows, dtype=float)
+        if ids is None:
+            ids = ["s%02d" % i for i in range(len(rows))]
+        if name is None:
+            name = "t.%d.Q" % rows.shape[1]
+        qpath = os.path.join(tmp, name)
+        with open(qpath, "w", encoding="utf-8", newline="\n") as handle:
+            for row in rows:
+                handle.write(" ".join("%.6f" % float(value) for value in row) + "\n")
+        idpath = os.path.join(tmp, "ids.txt")
+        with open(idpath, "w", encoding="utf-8", newline="\n") as handle:
+            for iid in ids:
+                handle.write(iid + "\n")
+        cmd = ["--q", qpath, "--ids", idpath]
+        if groups is not None:
+            gpath = os.path.join(tmp, "groups.tsv")
+            with open(gpath, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("analysis_IID\tDong_Grp\n")
+                for iid, group in zip(ids, groups):
+                    handle.write("%s\t%s\n" % (iid, group))
+            cmd.extend(["--groups", gpath, "--id-col", "analysis_IID", "--group-col", "Dong_Grp"])
+        return cmd, ids
+
+    def _groups(self, rows):
+        return [row[1] for row in rows]
+
+    def test_help_defaults_are_ascii_and_id_columns_stay(self):
+        parser = qbar.build_parser()
+        self.assertEqual(_cli_flag(parser, "--auto-groups").default, "none")
+        self.assertIsNone(_cli_flag(parser, "--auto-k").default)
+        self.assertEqual(_cli_flag(parser, "--admix-cut").default, 0.5)
+        self.assertIsNone(_cli_flag(parser, "--auto-g").default)
+        self.assertEqual(_cli_flag(parser, "--auto-seed").default, 0)
+        self.assertIsNone(_cli_flag(parser, "--pca").default)
+        self.assertIsNone(_cli_flag(parser, "--pca-n").default)
+        self.assertEqual(_cli_flag(parser, "--id-col").default, "analysis_IID")
+        self.assertEqual(_cli_flag(parser, "--group-col").default, "Dong_Grp")
+        for name in (
+            "--auto-groups", "--auto-k", "--admix-cut", "--auto-g",
+            "--auto-seed", "--pca", "--pca-n",
+        ):
+            help_s = _cli_flag(parser, name).help or ""
+            self.assertTrue(all(ord(ch) < 128 for ch in help_s), name)
+            self.assertNotIn("\u2013", help_s)
+            self.assertNotIn("\u2014", help_s)
+        import qbar.autogroups as auto_mod
+        with open(auto_mod.__file__, encoding="utf-8") as handle:
+            blob = handle.read()
+        for line in blob.splitlines():
+            stripped = line.strip()
+            self.assertFalse(stripped.startswith("import PIL"))
+            self.assertFalse(stripped.startswith("from PIL"))
+            self.assertFalse(stripped.startswith("import matplotlib"))
+        zh = qbar.build_parser(language="zh")
+        self.assertNotEqual(
+            _cli_flag(parser, "--auto-groups").help,
+            _cli_flag(zh, "--auto-groups").help,
+        )
+
+    def test_major_and_strict_threshold_on_the_hand_matrix(self):
+        from qbar.autogroups import auto_groups
+        q = self._hand()
+        ids = ["a", "b", "c"]
+        major = auto_groups(q, ids, "major", k=2)
+        self.assertEqual(self._groups(major), ["C1", "C2", "C1"])
+        self.assertEqual(["%.6f" % row[4] for row in major], ["0.900000", "0.800000", "0.500000"])
+        self.assertEqual([row[5] for row in major], ["C1", "C2", "C1"])
+        at_half = auto_groups(q, ids, "threshold", cut=0.5, k=2)
+        self.assertEqual(self._groups(at_half), ["C1", "C2", "C1"])
+        self.assertNotIn("admixed", self._groups(at_half))
+        at_six = auto_groups(q, ids, "threshold", cut=0.6, k=2)
+        self.assertEqual(at_six[2][1], "admixed")
+        self.assertEqual(at_six[0][1], "C1")
+        self.assertEqual(at_six[1][1], "C2")
+        self.assertEqual(at_six[2][5], "C1")
+        # 0 is outside (0, 1]. 1 is inside, so a maximum of 1 is not admixed.
+        with self.assertRaises(SystemExit) as low:
+            auto_groups(q, ids, "threshold", cut=0, k=2)
+        self.assertIn("above 0", low.exception.code)
+        with self.assertRaises(SystemExit) as high:
+            auto_groups(q, ids, "threshold", cut=1.5, k=2)
+        self.assertIn("at most 1", high.exception.code)
+        ones = np.array([[1.0, 0.0], [0.4, 0.6]], dtype=float)
+        at_one = auto_groups(ones, ["a", "b"], "threshold", cut=1, k=2)
+        self.assertEqual(self._groups(at_one), ["C1", "admixed"])
+
+    def test_kmeans_seed_and_separated_blobs(self):
+        from qbar.autogroups import auto_groups
+        left = np.array([[0.0, 0.0], [0.1, -0.05], [-0.05, 0.1], [0.05, 0.05]], dtype=float)
+        right = np.array([[10.0, 10.0], [10.2, 9.9], [9.8, 10.1], [10.05, 10.15]], dtype=float)
+        data = np.vstack([left, right])
+        ids = ["p%d" % i for i in range(len(data))]
+        first = auto_groups(data, ids, "kmeans", g=2, seed=0, k=2)
+        second = auto_groups(data, ids, "kmeans", g=2, seed=0, k=2)
+        labels = self._groups(first)
+        self.assertEqual(labels, self._groups(second))
+        self.assertEqual(len(set(labels[:4])), 1)
+        self.assertEqual(len(set(labels[4:])), 1)
+        self.assertNotEqual(labels[0], labels[4])
+        self.assertEqual(labels[0], "G1")
+        self.assertEqual(labels[4], "G2")
+        self.assertIn("restarts=10", first[0][3])
+        self.assertIn("input=q", first[0][3])
+        self.assertNotIn("whiten", first[0][3])
+
+    def test_hclust_matches_scipy_fcluster_relabelled_in_the_test(self):
+        from scipy.cluster.hierarchy import fcluster, linkage
+        from qbar.autogroups import auto_groups
+        q = np.array([
+            [0.0, 0.0],
+            [0.2, 0.1],
+            [5.0, 5.0],
+            [5.2, 4.8],
+            [4.9, 5.1],
+        ], dtype=float)
+        ids = ["h%d" % i for i in range(len(q))]
+        z = linkage(q, method="average", metric="euclidean")
+        raw = [int(label) for label in fcluster(z, t=2, criterion="maxclust")]
+        names = {}
+        want = []
+        next_id = 1
+        for label in raw:
+            if label not in names:
+                names[label] = "G%d" % next_id
+                next_id += 1
+            want.append(names[label])
+        self.assertEqual(len(set(want)), 2)
+        got = auto_groups(
+            q, ids, "hclust", g=2, dist="euclidean", link="average", olo=False, k=2,
+        )
+        self.assertEqual(self._groups(got), want)
+        tied = np.array([[0.2, 0.8], [0.2, 0.8], [0.2, 0.8]], dtype=float)
+        with self.assertRaises(SystemExit) as ctx:
+            auto_groups(tied, ["a", "b", "c"], "hclust", g=2, dist="euclidean", link="average", k=2)
+        self.assertIn("1", ctx.exception.code)
+        self.assertIn("2", ctx.exception.code)
+        self.assertIn("maxclust", ctx.exception.code)
+
+    def test_hclust_byte_cap_refuses_before_pdist(self):
+        import scipy.spatial.distance as distance
+        from qbar.autogroups import auto_groups, auto_hclust_cap
+        self.assertEqual(auto_hclust_cap(None, 4), 4294967296)
+        self.assertIsNone(auto_hclust_cap(0, 4))
+        q = np.array([
+            [0.1, 0.9],
+            [0.2, 0.8],
+            [0.8, 0.2],
+            [0.7, 0.3],
+        ], dtype=float)
+        calls = {"n": 0}
+        real = distance.pdist
+
+        def wrapped(*args, **kwargs):
+            calls["n"] += 1
+            return real(*args, **kwargs)
+
+        distance.pdist = wrapped
+        try:
+            with self.assertRaises(SystemExit) as ctx:
+                auto_groups(
+                    q, ["a", "b", "c", "d"], "hclust",
+                    g=2, dist="euclidean", link="average", max_bytes=1, k=2,
+                )
+            self.assertEqual(calls["n"], 0)
+            self.assertIn("N=4", ctx.exception.code)
+            self.assertIn("48", ctx.exception.code)
+            self.assertIn("above --hclust-max-bytes 1", ctx.exception.code)
+            calls["n"] = 0
+            with self.assertRaises(SystemExit) as too_many:
+                auto_groups(q, ["a", "b", "c", "d"], "hclust", g=5, dist="euclidean", k=2)
+            self.assertEqual(calls["n"], 0)
+            self.assertIn("greater than the number of rows", too_many.exception.code)
+        finally:
+            distance.pdist = real
+
+    def test_round_trip_contingency_and_default_writes_nothing(self):
+        from qbar.autogroups import CIRCULAR_SENTENCE
+        q = self._hand()
+        self.assertEqual(CIRCULAR_SENTENCE, self.SENTENCE)
+        with tempfile.TemporaryDirectory() as tmp:
+            cmd, ids = self._write_case(tmp, q, groups=["A", "B", ""])
+            plain = os.path.join(tmp, "plain")
+            named = os.path.join(tmp, "named")
+            qbar.main(cmd + ["--outdir", plain])
+            self.assertTrue(os.path.isfile(os.path.join(plain, "order.tsv")))
+            self.assertFalse(os.path.exists(os.path.join(plain, "groups_auto.tsv")))
+            self.assertFalse(os.path.exists(os.path.join(plain, "groups_auto_summary.txt")))
+            qbar.main(cmd + [
+                "--auto-groups", "none", "--admix-cut", "0.5", "--auto-seed", "0",
+                "--outdir", named,
+            ])
+            self.assertFalse(os.path.exists(os.path.join(named, "groups_auto.tsv")))
+            out = os.path.join(tmp, "major")
+            qbar.main(cmd + ["--auto-groups", "major", "--outdir", out])
+            path = os.path.join(out, "groups_auto.tsv")
+            with open(path, encoding="utf-8", newline="\n") as handle:
+                text = handle.read()
+            self.assertEqual(text, "\n".join([
+                "id\tgroup\tmethod\tparameters\tmax_q\ttop_column",
+                "s00\tC1\tmajor\tk=2;input=q\t0.900000\tC1",
+                "s01\tC2\tmajor\tk=2;input=q\t0.800000\tC2",
+                "s02\tC1\tmajor\tk=2;input=q\t0.500000\tC1",
+            ]) + "\n")
+            loaded = qbar.load_groups(path, ids, "id", "group", "NA")
+            self.assertEqual(loaded, ["C1", "C2", "C1"])
+            with open(os.path.join(out, "groups_auto_summary.txt"), encoding="utf-8") as handle:
+                summary = handle.read().splitlines()
+            self.assertIn(self.SENTENCE, summary)
+            self.assertNotIn("Rand", "\n".join(summary))
+            self.assertIn("C1\t2", summary)
+            self.assertIn("C2\t1", summary)
+            self.assertEqual(summary[summary.index("auto\tA\tB\tNA") + 1], "C1\t1\t0\t1")
+            self.assertEqual(summary[summary.index("auto\tA\tB\tNA") + 2], "C2\t0\t1\t0")
+            self.assertIn("rest name is included and is last when absent", "\n".join(summary))
+            with open(os.path.join(out, "order.tsv"), encoding="utf-8") as handle:
+                order_lines = handle.read().splitlines()
+            self.assertEqual(
+                [line.split("\t")[2] for line in order_lines[1:]],
+                ["A", "B", "NA"],
+            )
+            with open(os.path.join(plain, "order.tsv"), "rb") as left, open(os.path.join(out, "order.tsv"), "rb") as right:
+                self.assertEqual(left.read(), right.read())
+            bare = os.path.join(tmp, "bare")
+            cmd_only, _ids = self._write_case(tmp, q)
+            qbar.main(cmd_only + ["--auto-groups", "major", "--outdir", bare])
+            with open(os.path.join(bare, "groups_auto_summary.txt"), encoding="utf-8") as handle:
+                bare_summary = handle.read()
+            self.assertIn(self.SENTENCE, bare_summary)
+            self.assertNotIn("contingency", bare_summary)
+
+    def test_auto_k_uses_the_selected_aligned_matrix(self):
+        q2 = self._hand()
+        q3 = np.array([
+            [0.1, 0.1, 0.8],
+            [0.2, 0.7, 0.1],
+            [0.3, 0.3, 0.4],
+        ], dtype=float)
+        with tempfile.TemporaryDirectory() as tmp:
+            cmd2, _ids = self._write_case(tmp, q2, name="t.2.Q")
+            qpath = os.path.join(tmp, "t.3.Q")
+            with open(qpath, "w", encoding="utf-8", newline="\n") as handle:
+                for row in q3:
+                    handle.write(" ".join("%.6f" % float(value) for value in row) + "\n")
+            cmd = ["--q", cmd2[1], qpath, "--ids", cmd2[3], "--no-align"]
+            out_hi = os.path.join(tmp, "hi")
+            out_lo = os.path.join(tmp, "lo")
+            qbar.main(cmd + ["--auto-groups", "major", "--outdir", out_hi])
+            qbar.main(cmd + ["--auto-groups", "major", "--auto-k", "2", "--outdir", out_lo])
+            with open(os.path.join(out_hi, "groups_auto.tsv"), encoding="utf-8") as handle:
+                hi = [line.split("\t")[1] for line in handle.read().splitlines()[1:]]
+            with open(os.path.join(out_lo, "groups_auto.tsv"), encoding="utf-8") as handle:
+                lo = handle.read()
+            self.assertEqual(hi, ["C3", "C2", "C3"])
+            self.assertIn("k=2;input=q", lo)
+            self.assertIn("s00\tC1\t", lo)
+            self.assertIn("s01\tC2\t", lo)
+            self.assertIn("s02\tC1\t", lo)
+
+    def test_flag_combinations_and_chinese_threshold_message(self):
+        q = self._hand()
+        with tempfile.TemporaryDirectory() as tmp:
+            cmd, _ids = self._write_case(tmp, q)
+            blocked = os.path.join(tmp, "blocked")
+            with self.assertRaises(SystemExit) as ctx:
+                qbar.main(cmd + ["--auto-groups", "none", "--admix-cut", "0.6", "--outdir", blocked])
+            self.assertEqual(
+                ctx.exception.code,
+                "--admix-cut 0.6 requires --auto-groups threshold.",
+            )
+            self.assertFalse(os.path.exists(blocked))
+            with self.assertRaises(SystemExit) as zh:
+                qbar.main(cmd + [
+                    "--language", "zh", "--auto-groups", "none", "--admix-cut", "0.6",
+                    "--outdir", os.path.join(tmp, "zh"),
+                ])
+            self.assertEqual(zh.exception.code, "--admix-cut 0.6 需要 --auto-groups threshold。")
+            with self.assertRaises(SystemExit) as missing_g:
+                qbar.main(cmd + ["--auto-groups", "kmeans", "--outdir", os.path.join(tmp, "nog")])
+            self.assertIn("requires --auto-g", missing_g.exception.code)
+            with self.assertRaises(SystemExit) as seed:
+                qbar.main(cmd + [
+                    "--auto-groups", "hclust", "--auto-g", "2", "--auto-seed", "4",
+                    "--outdir", os.path.join(tmp, "seed"),
+                ])
+            self.assertIn("requires --auto-groups kmeans", seed.exception.code)
+            with self.assertRaises(SystemExit) as only_n:
+                qbar.main(cmd + ["--pca-n", "2", "--outdir", os.path.join(tmp, "n")])
+            self.assertEqual(only_n.exception.code, "--pca-n requires --pca.")
+            too_big = os.path.join(tmp, "toobig")
+            with self.assertRaises(SystemExit) as above:
+                qbar.main(cmd + ["--auto-groups", "kmeans", "--auto-g", "5", "--outdir", too_big])
+            self.assertIn("greater than the number of rows 3", above.exception.code)
+            self.assertFalse(os.path.exists(too_big))
+            cap = os.path.join(tmp, "cap")
+            with self.assertRaises(SystemExit) as capped:
+                qbar.main(cmd + [
+                    "--auto-groups", "hclust", "--auto-g", "2",
+                    "--hclust-max-bytes", "1", "--outdir", cap,
+                ])
+            self.assertIn("N=3", capped.exception.code)
+            self.assertIn("24", capped.exception.code)
+            self.assertFalse(os.path.exists(cap))
+
+    def test_pca_reader_and_major_rejects_pca(self):
+        from qbar.autogroups import auto_groups, read_plink19_eigenvec
+        ids = ["aa", "bb", "cc"]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "toy.eigenvec")
+            with open(path, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("\n".join([
+                    "fam1 aa 0.10 0.20 0.30",
+                    "fam2 bb -0.40 0.50 0.60",
+                    "fam3 cc 0.70 -0.80 0.90",
+                    "fam9 zz 1.00 2.00 3.00",
+                ]) + "\n")
+            scores, ignored = read_plink19_eigenvec(path, ["bb", "aa"], 2)
+            self.assertEqual(ignored, 2)
+            self.assertTrue(np.allclose(scores, [[-0.40, 0.50], [0.10, 0.20]]))
+            dup = os.path.join(tmp, "dup.eigenvec")
+            with open(dup, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("fam1 aa 0.1 0.2\nfam2 aa 0.3 0.4\n")
+            with self.assertRaises(SystemExit) as dup_err:
+                read_plink19_eigenvec(dup, ["aa"], 1)
+            self.assertIn("duplicate IID aa", dup_err.exception.code)
+            missing = os.path.join(tmp, "miss.eigenvec")
+            with open(missing, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("fam1 aa 0.1 0.2\nfam2 bb 0.3 0.4\n")
+            with self.assertRaises(SystemExit) as miss_err:
+                read_plink19_eigenvec(missing, ["aa", "gone"], 1)
+            self.assertIn("gone", miss_err.exception.code)
+            header = os.path.join(tmp, "header.eigenvec")
+            with open(header, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("FID IID PC1 PC2\nfam1 aa 0.1 0.2\n")
+            with self.assertRaises(SystemExit) as header_err:
+                read_plink19_eigenvec(header, ["aa"], 2)
+            self.assertIn("only the PLINK 1.9 eigenvec layout is read", header_err.exception.code)
+            hashed = os.path.join(tmp, "hash.eigenvec")
+            with open(hashed, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("#eigvals: 1.0 2.0\nfam1 aa 0.1 0.2\n")
+            with self.assertRaises(SystemExit) as hash_err:
+                read_plink19_eigenvec(hashed, ["aa"], 1)
+            self.assertIn("PLINK 1.9", hash_err.exception.code)
+            bad = os.path.join(tmp, "bad.eigenvec")
+            with open(bad, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("fam1 aa 0.1 0.2\nfam2 bb zz 0.4\n")
+            with self.assertRaises(SystemExit) as bad_err:
+                read_plink19_eigenvec(bad, ["aa", "bb"], 2)
+            self.assertIn("non-numeric score", bad_err.exception.code)
+            self.assertNotIn("only the PLINK 1.9", bad_err.exception.code)
+            with self.assertRaises(SystemExit) as wide:
+                read_plink19_eigenvec(path, ids, 4)
+            self.assertIn("got 4", wide.exception.code)
+            self.assertIn("3 score columns", wide.exception.code)
+            q = np.array([
+                [0.9, 0.1],
+                [0.8, 0.2],
+                [0.1, 0.9],
+                [0.2, 0.8],
+            ], dtype=float)
+            blob = os.path.join(tmp, "blob.eigenvec")
+            with open(blob, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("\n".join([
+                    "f a 0.0 0.0",
+                    "f b 0.1 0.0",
+                    "f c 10.0 10.0",
+                    "f d 10.1 10.0",
+                    "f z 3.0 3.0",
+                ]) + "\n")
+            pca_ids = ["a", "b", "c", "d"]
+            pca, n_ignored = read_plink19_eigenvec(blob, pca_ids, 2)
+            self.assertEqual(n_ignored, 1)
+            labels = self._groups(auto_groups(
+                q, pca_ids, "kmeans", g=2, seed=1, data=pca, pca_n=2, k=2,
+            ))
+            self.assertEqual(labels, ["G1", "G1", "G2", "G2"])
+            self.assertTrue(auto_groups(
+                q, pca_ids, "kmeans", g=2, seed=1, data=pca, pca_n=2, k=2,
+            )[0][3].startswith("g=2;seed=1;restarts=10;input=pca;pca_n=2"))
+            cmd, _file_ids = self._write_case(tmp, q, ids=pca_ids, name="blob.2.Q")
+            out = os.path.join(tmp, "out")
+            qbar.main(cmd + [
+                "--auto-groups", "kmeans", "--auto-g", "2", "--auto-seed", "1",
+                "--pca", blob, "--pca-n", "2", "--outdir", out,
+            ])
+            with open(os.path.join(out, "groups_auto_summary.txt"), encoding="utf-8") as handle:
+                summary = handle.read()
+            self.assertIn("eigenvec_rows_ignored\t1", summary)
+            self.assertIn(self.SENTENCE, summary)
+            self.assertIn("kmeans_whiten\tno", summary)
+            refused = os.path.join(tmp, "refused")
+            with self.assertRaises(SystemExit) as major_pca:
+                qbar.main(cmd + [
+                    "--auto-groups", "major", "--pca", blob, "--pca-n", "2",
+                    "--outdir", refused,
+                ])
+            self.assertIn("--pca requires --auto-groups hclust or kmeans.", major_pca.exception.code)
+            self.assertFalse(os.path.exists(refused))
+            beyond = os.path.join(tmp, "beyond")
+            with self.assertRaises(SystemExit) as n_err:
+                qbar.main(cmd + [
+                    "--auto-groups", "hclust", "--auto-g", "2",
+                    "--pca", blob, "--pca-n", "5", "--outdir", beyond,
+                ])
+            self.assertIn("got 5", n_err.exception.code)
+            self.assertFalse(os.path.exists(beyond))
 
 
 if __name__ == "__main__":
