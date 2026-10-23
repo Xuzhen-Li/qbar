@@ -205,6 +205,9 @@ def build_parser(language="en"):
     p.add_argument("--replicates", action="store_true", help=say("help_replicates"))
     p.add_argument("--mode-sim-cut", type=float, default=None,
                    help=say("help_mode_sim_cut"))
+    p.add_argument("--bootstrap", type=int, default=0, help=say("help_bootstrap"))
+    p.add_argument("--bootstrap-seed", type=int, default=0,
+                   help=say("help_bootstrap_seed"))
     return p
 
 

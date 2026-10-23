@@ -19,6 +19,7 @@ from dataclasses import asdict, dataclass, is_dataclass
 import numpy as np
 
 from .align import align_qs
+from .bootstrap import bootstrap_support, write_match_support
 from .io import (
     check_shapes,
     collect_q,
@@ -264,6 +265,20 @@ def _provenance_payload(args, argv, q_paths, started, extra_paths=None):
     }
 
 
+def _bootstrap_request(args, language):
+    """Return ``(n_boot, seed)``. Seed is checked only when ``n_boot`` > 0."""
+    n_boot = getattr(args, "bootstrap", 0)
+    if isinstance(n_boot, bool) or not isinstance(n_boot, (int, np.integer)) or int(n_boot) < 0:
+        raise SystemExit(_msg("bootstrap_negative", language, n=n_boot))
+    n_boot = int(n_boot)
+    if n_boot == 0:
+        return 0, 0
+    seed = getattr(args, "bootstrap_seed", 0)
+    if isinstance(seed, bool) or not isinstance(seed, (int, np.integer)) or int(seed) < 0:
+        raise SystemExit(_msg("bootstrap_seed_negative", language, seed=seed))
+    return n_boot, int(seed)
+
+
 def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     """Run one plot from a parsed command line.
 
@@ -308,6 +323,14 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     When ``args.align_compare`` is set and there is at least one alignment
     step, ``align_compare.tsv`` and ``align_compare.txt`` are written.
     The chosen alignment is unchanged. The text does not declare a better method.
+
+    When ``args.bootstrap`` is greater than 0 and this run aligned at least
+    one K to K+1 step, individuals are resampled and ``match_support.tsv``
+    is written. The default 0 writes no file and does not draw a seed.
+    ``args.bootstrap_seed`` is used only when the count is greater than 0.
+    The matrices are the ones alignment used. With ``args.replicates``,
+    that is one matrix per K: the major-mode mean when that K had two or
+    more files, otherwise the loaded matrix.
     """
     if args.provenance:
         started = datetime.datetime.now().astimezone().isoformat()
@@ -319,6 +342,7 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     )
 
     language = args.language
+    n_boot, boot_seed = _bootstrap_request(args, language)
     check_hclust_opts(args.hclust_dist, args.hclust_linkage, language=language)
     logs = getattr(args, "logs", None)
     logs_map = getattr(args, "logs_map", None)
@@ -429,6 +453,25 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
             args.outdir, q_by_k, aligned, meta, perm, args.align_method,
             args.jaccard_set, args.jaccard_cut,
         )
+    support_path = None
+    if n_boot > 0 and meta:
+        support_rows = bootstrap_support(
+            q_by_k,
+            args.align_method,
+            n_boot,
+            boot_seed,
+            groups=groups,
+            anchor=args.anchor_group.strip(),
+            align_mode=args.align_mode,
+            align_groups=align_groups,
+            qmax=args.qmax,
+            jaccard_set=args.jaccard_set,
+            jaccard_cut=args.jaccard_cut,
+            language=language,
+        )
+        if support_rows:
+            support_path = os.path.join(args.outdir, "match_support.tsv")
+            write_match_support(support_path, support_rows)
     if log_paths is not None:
         write_cv_loglik_tsv(os.path.join(args.outdir, "cv_loglik.tsv"), log_rows)
         write_cv_loglik_plot(os.path.join(args.outdir, "cv_loglik.png"), log_rows)
@@ -487,6 +530,8 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     if getattr(args, "align_compare", False) and meta:
         paths.append(os.path.join(args.outdir, "align_compare.tsv"))
         paths.append(os.path.join(args.outdir, "align_compare.txt"))
+    if support_path is not None:
+        paths.append(support_path)
     if log_paths is not None:
         paths.append(os.path.join(args.outdir, "cv_loglik.tsv"))
         paths.append(os.path.join(args.outdir, "cv_loglik.png"))
