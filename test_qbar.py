@@ -1193,16 +1193,20 @@ class DocstringTests(unittest.TestCase):
         ``docs/cli.md`` and ``docs/factpacks/F6.md``.
         ``--replicates`` and ``--mode-sim-cut`` are documented in
         ``docs/cli.md`` and ``docs/factpacks/S1.md``.
+        ``--align-compare`` is documented in ``docs/cli.md`` and
+        ``docs/factpacks/F2e.md``.
         """
         import re
         # --select-k and --plateau-fraction are documented in docs/cli.md
         # and docs/factpacks/F6.md.
         # --replicates and --mode-sim-cut are documented in docs/cli.md
         # and docs/factpacks/S1.md.
+        # --align-compare is documented in docs/cli.md and docs/factpacks/F2e.md.
         later = {
             "--provenance", "--q-format", "--ind", "--logs", "--logs-map",
             "--select-k", "--plateau-fraction",
             "--replicates", "--mode-sim-cut",
+            "--align-compare",
         }
         flags = []
         for action in qbar.build_parser()._actions:
@@ -3751,6 +3755,191 @@ class ClumpplingIlpTests(unittest.TestCase):
         self.assertTrue(all(ord(ch) < 128 for ch in en))
         zh = _cli_flag(qbar.build_parser(language="zh"), "--align-method").help or ""
         self.assertIn("clumppling-ilp 把下一份 Q 的每一列分给上一份 Q 的一列", zh)
+
+
+def _independent_pearson(a, b):
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+    if np.ptp(a) == 0.0 or np.ptp(b) == 0.0:
+        return 0.0
+    a = a - a.mean()
+    b = b - b.mean()
+    na = float(np.linalg.norm(a))
+    nb = float(np.linalg.norm(b))
+    if na == 0.0 or nb == 0.0:
+        return 0.0
+    return float(np.dot(a, b) / (na * nb))
+
+
+def _brute_greedy_perm(q_prev, q_new, mask):
+    """Greedy Pearson, strict greater-than, so a tie keeps the smaller column."""
+    k_old = q_prev.shape[1]
+    k_new = q_new.shape[1]
+    used = set()
+    perm = []
+    for c in range(k_old):
+        best_j, best_r = None, -2.0
+        for j in range(k_new):
+            if j in used:
+                continue
+            value = _independent_pearson(q_prev[mask, c], q_new[mask, j])
+            if value > best_r:
+                best_r, best_j = value, j
+        perm.append(int(best_j))
+        used.add(best_j)
+    rest = [j for j in range(k_new) if j not in used]
+    perm.append(int(rest[0]))
+    return perm
+
+
+def _brute_hungarian_perm(q_prev, q_new, mask):
+    """Lex-first injection of K into K+1 that maximises the Pearson sum."""
+    import itertools
+    k_old = q_prev.shape[1]
+    k_new = q_new.shape[1]
+    score = np.empty((k_old, k_new), dtype=float)
+    for c in range(k_old):
+        for j in range(k_new):
+            score[c, j] = _independent_pearson(q_prev[mask, c], q_new[mask, j])
+    best = None
+    best_sum = None
+    for cols in itertools.permutations(range(k_new), k_old):
+        total = sum(float(score[c, cols[c]]) for c in range(k_old))
+        if best_sum is None or total > best_sum:
+            best_sum = total
+            best = cols
+    perm = [int(j) for j in best]
+    used = set(perm)
+    rest = [j for j in range(k_new) if j not in used]
+    perm.append(int(rest[0]))
+    return perm
+
+
+class AlignCompareTests(unittest.TestCase):
+    def test_help_and_default_off(self):
+        en = _cli_flag(qbar.build_parser(), "--align-compare").help or ""
+        self.assertEqual(
+            en,
+            "Also write align_compare.tsv and align_compare.txt, comparing "
+            "every available align method with the chosen one. No method is "
+            "declared better.",
+        )
+        self.assertTrue(all(ord(ch) < 128 for ch in en))
+        zh = _cli_flag(qbar.build_parser(language="zh"), "--align-compare").help or ""
+        self.assertEqual(
+            zh,
+            "另写 align_compare.tsv 和 align_compare.txt，把每种可用的对齐方法和当前方法对照。不判定哪种更好。",
+        )
+        args = qbar.build_parser().parse_args(["--q", "x.Q", "--outdir", "o"])
+        self.assertFalse(args.align_compare)
+
+    def test_fixture_marks_disagreeing_columns(self):
+        q2, q3, _mask = AlignTests()._greedy_vs_hungarian_case()
+        with tempfile.TemporaryDirectory() as tmp:
+            path2 = os.path.join(tmp, "t.2.Q")
+            path3 = os.path.join(tmp, "t.3.Q")
+            np.savetxt(path2, q2, fmt="%.6f")
+            np.savetxt(path3, q3, fmt="%.6f")
+            loaded2 = np.loadtxt(path2)
+            loaded3 = np.loadtxt(path3)
+            mask = np.ones(loaded2.shape[0], dtype=bool)
+            greedy = _brute_greedy_perm(loaded2, loaded3, mask)
+            hungarian = _brute_hungarian_perm(loaded2, loaded3, mask)
+            self.assertNotEqual(greedy, hungarian)
+            ids = os.path.join(tmp, "ids.txt")
+            with open(ids, "w") as handle:
+                handle.write("".join("s%d\n" % i for i in range(loaded2.shape[0])))
+            plain = os.path.join(tmp, "plain")
+            flagged = os.path.join(tmp, "flagged")
+            base = ["--q", path2, path3, "--ids", ids]
+            qbar.main(base + ["--outdir", plain])
+            flagged_args = qbar.build_parser().parse_args(
+                base + ["--align-compare", "--outdir", flagged],
+            )
+            result = qbar.api.run(flagged_args, base + ["--align-compare", "--outdir", flagged])
+            self.assertIn(os.path.join(flagged, "align_compare.tsv"), result.paths)
+            self.assertIn(os.path.join(flagged, "align_compare.txt"), result.paths)
+            self.assertFalse(os.path.exists(os.path.join(plain, "align_compare.tsv")))
+            with open(os.path.join(plain, "align.tsv"), "rb") as handle:
+                plain_align = handle.read()
+            with open(os.path.join(flagged, "align.tsv"), "rb") as handle:
+                flagged_align = handle.read()
+            self.assertEqual(plain_align, flagged_align)
+            with open(os.path.join(plain, "perm_K3.tsv"), "rb") as handle:
+                plain_perm = handle.read()
+            with open(os.path.join(flagged, "perm_K3.tsv"), "rb") as handle:
+                flagged_perm = handle.read()
+            self.assertEqual(plain_perm, flagged_perm)
+            tsv_path = os.path.join(flagged, "align_compare.tsv")
+            txt_path = os.path.join(flagged, "align_compare.txt")
+            self.assertTrue(os.path.isfile(tsv_path))
+            self.assertTrue(os.path.isfile(txt_path))
+            with open(tsv_path) as handle:
+                lines = handle.read().splitlines()
+            self.assertEqual(
+                lines[0].split("\t"),
+                ["K_to", "column", "method", "matched_from", "similarity", "agrees_with_default"],
+            )
+            body = [line.split("\t") for line in lines[1:]]
+            by_method = {}
+            for row in body:
+                by_method.setdefault(row[2], []).append(row)
+            self.assertEqual(
+                [row[3] for row in by_method["greedy"]],
+                [str(index + 1) for index in greedy],
+            )
+            self.assertEqual(
+                [row[3] for row in by_method["hungarian"]],
+                [str(index + 1) for index in hungarian],
+            )
+            for row_g, row_h, g_col, h_col in zip(
+                by_method["greedy"], by_method["hungarian"], greedy, hungarian,
+            ):
+                self.assertEqual(row_g[5], "yes")
+                if g_col != h_col:
+                    self.assertEqual(row_h[5], "no")
+                else:
+                    self.assertEqual(row_h[5], "yes")
+            self.assertTrue(any(g_col != h_col for g_col, h_col in zip(greedy, hungarian)))
+            with open(txt_path) as handle:
+                text = handle.read()
+            self.assertIn("No method is declared better.", text)
+            self.assertNotIn("winner", text.lower())
+            self.assertIn("Different mapping from greedy:", text)
+            self.assertIn("hungarian (", text)
+
+    def test_large_k_and_missing_milp_are_named(self):
+        rng = np.random.default_rng(20261023)
+        q8 = rng.random((4, 8))
+        q9 = rng.random((4, 9))
+        groups = ["A"] * 4
+        _aligned, perm, meta = qbar.align_qs(
+            {8: q8, 9: q9}, groups, "", "all", [], 0.75, True, "greedy",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            from qbar.report import write_align_compare
+            write_align_compare(tmp, {8: q8, 9: q9}, _aligned, meta, perm, "greedy")
+            with open(os.path.join(tmp, "align_compare.txt")) as handle:
+                text = handle.read()
+            self.assertIn("clumpp-full was not compared: K+1 is above 8.", text)
+            self.assertIn("clumpp-greedy was not compared: K+1 is above 8.", text)
+            self.assertNotIn("winner", text.lower())
+            with open(os.path.join(tmp, "align_compare.tsv")) as handle:
+                methods = {line.split("\t")[2] for line in handle.read().splitlines()[1:]}
+            self.assertNotIn("clumpp-full", methods)
+            self.assertNotIn("clumpp-greedy", methods)
+            self.assertIn("greedy", methods)
+            self.assertIn("clumpp-largek", methods)
+            import scipy.optimize as so
+            saved = so.milp
+            try:
+                del so.milp
+                write_align_compare(tmp, {8: q8, 9: q9}, _aligned, meta, perm, "greedy")
+                with open(os.path.join(tmp, "align_compare.txt")) as handle:
+                    missing = handle.read()
+                self.assertIn("clumppling-ilp was not compared: scipy import failed.", missing)
+            finally:
+                so.milp = saved
 
 
 if __name__ == "__main__":

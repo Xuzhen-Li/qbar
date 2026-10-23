@@ -39,7 +39,7 @@ from .messages import text as _msg
 from .modes import assemble_replicates, require_replicate_flags, write_replicate_outputs
 from .selectk import select_k_table, write_select_k_tsv, write_select_k_txt
 from .order import WITHIN, build_order, check_hclust_opts
-from .report import column_label, write_align_report, write_tables
+from .report import column_label, write_align_compare, write_align_report, write_tables
 
 
 def column_owners(q, iids, groups, rank):
@@ -304,6 +304,10 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     ``replicates_`` file is written and the matrices passed onward are
     the loaded ones. Without ``args.replicates``, two files at one K
     still raise the duplicate-K error.
+
+    When ``args.align_compare`` is set and there is at least one alignment
+    step, ``align_compare.tsv`` and ``align_compare.txt`` are written.
+    The chosen alignment is unchanged. The text does not declare a better method.
     """
     if args.provenance:
         started = datetime.datetime.now().astimezone().isoformat()
@@ -420,6 +424,11 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     write_tables(args.outdir, iids, groups, order, spans, perm, owners, hexes, meta, aligned)
     if args.align_report and meta:
         write_align_report(args.outdir, aligned, meta, groups, args.align_method, perm, args.align_report_low)
+    if getattr(args, "align_compare", False) and meta:
+        write_align_compare(
+            args.outdir, q_by_k, aligned, meta, perm, args.align_method,
+            args.jaccard_set, args.jaccard_cut,
+        )
     if log_paths is not None:
         write_cv_loglik_tsv(os.path.join(args.outdir, "cv_loglik.tsv"), log_rows)
         write_cv_loglik_plot(os.path.join(args.outdir, "cv_loglik.png"), log_rows)
@@ -475,6 +484,9 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     if args.align_report and meta:
         paths.append(os.path.join(args.outdir, "align_report.tsv"))
         paths.append(os.path.join(args.outdir, "align_report.txt"))
+    if getattr(args, "align_compare", False) and meta:
+        paths.append(os.path.join(args.outdir, "align_compare.tsv"))
+        paths.append(os.path.join(args.outdir, "align_compare.txt"))
     if log_paths is not None:
         paths.append(os.path.join(args.outdir, "cv_loglik.tsv"))
         paths.append(os.path.join(args.outdir, "cv_loglik.png"))
