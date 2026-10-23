@@ -558,14 +558,14 @@ class AlignTests(unittest.TestCase):
         with self.assertRaises(SystemExit) as cm:
             qbar.hclust_order(zeros, "braycurtis", "average")
         self.assertIn("braycurtis", str(cm.exception.code))
-        self.assertIn("非有限", str(cm.exception.code))
+        self.assertIn("not finite", str(cm.exception.code))
         one_zero = np.array([[1.0, 0.0], [0.0, 1.0], [0.0, 0.0], [0.4, 0.6]])
         # One all-zero row against nonzero rows is finite: the denominator is the other row.
         self.assertEqual(sorted(qbar.hclust_order(one_zero, "braycurtis", "average")), [0, 1, 2, 3])
         two_zero = np.array([[0.0, 0.0], [0.0, 0.0], [0.2, 0.8], [0.7, 0.3]])
         with self.assertRaises(SystemExit) as cm2:
             qbar.hclust_order(two_zero, "braycurtis", "average")
-        self.assertIn("非有限", str(cm2.exception.code))
+        self.assertIn("not finite", str(cm2.exception.code))
         corr = qbar.hclust_order(zeros, "correlation", "average")
         self.assertEqual(sorted(corr), [0, 1, 2, 3])
         finite = np.array([[0.2, 0.8], [0.9, 0.1], [0.4, 0.6], [0.7, 0.3]])
@@ -778,7 +778,10 @@ class ColorTests(unittest.TestCase):
             with redirect_stderr(buf):
                 qbar.render(path, rows, spans, bar_w, 20, "")
             err = buf.getvalue()
-            self.assertIn("注意：组 Tiny 的条宽小于 14 像素，图上没写组名", err)
+            self.assertIn(
+                "Warning: group Tiny has a bar narrower than 14 pixels, so the group name is not drawn",
+                err,
+            )
             self.assertNotIn("Wide", err)
             with Image.open(path) as img:
                 self.assertEqual(img.mode, "RGB")
@@ -908,7 +911,7 @@ class CliTests(unittest.TestCase):
             with self.assertRaises(SystemExit) as cm:
                 qbar.read_q(comma)
             self.assertIn(comma, str(cm.exception.code))
-            self.assertIn("空白分隔", str(cm.exception.code))
+            self.assertIn("whitespace-separated", str(cm.exception.code))
             header = os.path.join(td, "head.2.Q")
             with open(header, "w") as f:
                 f.write("sample a\n0.2 0.8\n")
@@ -921,7 +924,7 @@ class CliTests(unittest.TestCase):
             got = qbar.read_q(good)
             self.assertTrue(np.allclose(got, [[0.2, 0.8], [0.4, 0.6]]))
         help_s = _cli_flag(qbar.build_parser(), "--q").help or ""
-        self.assertIn("空白分隔", help_s)
+        self.assertIn("whitespace-separated", help_s)
         self.assertIn(".q", help_s)
         en = _read_checkout("README.md")
         zh = _read_checkout("README.zh.md")
@@ -939,7 +942,7 @@ class CliTests(unittest.TestCase):
             out_nan = os.path.join(td, "out_nan")
             with self.assertRaises(SystemExit) as ctx:
                 qbar.main(["--q", qnan, "--ids", ids, "--outdir", out_nan])
-            self.assertEqual(ctx.exception.code, "K=2 的 Q 有 NaN")
+            self.assertEqual(ctx.exception.code, "K=2 Q contains NaN")
             self.assertFalse(os.path.isfile(os.path.join(out_nan, "bar_K2.png")))
             qinf = os.path.join(td, "inf.2.Q")
             with open(qinf, "w") as f:
@@ -947,7 +950,7 @@ class CliTests(unittest.TestCase):
             out_inf = os.path.join(td, "out_inf")
             with self.assertRaises(SystemExit) as ctx_inf:
                 qbar.main(["--q", qinf, "--ids", ids, "--outdir", out_inf])
-            self.assertEqual(ctx_inf.exception.code, "K=2 的 Q 有超出 [0,1] 的数")
+            self.assertEqual(ctx_inf.exception.code, "K=2 Q has a value outside [0,1]")
             self.assertFalse(os.path.isfile(os.path.join(out_inf, "bar_K2.png")))
 
     def test_read_q_keeps_one_row_and_one_column(self):
@@ -1008,11 +1011,11 @@ class CliTests(unittest.TestCase):
                 f.write("x\n")
             with self.assertRaises(SystemExit) as ctx:
                 qbar.collect_q([notes])
-            self.assertIn("目录里没有 .Q 或 .q", str(ctx.exception.code))
+            self.assertIn("The directory has no .Q or .q files", str(ctx.exception.code))
         help_s = _cli_flag(qbar.build_parser(), "--q").help or ""
         self.assertEqual(
             help_s,
-            "一个或多个矩阵文件，或带引号的通配符，或一个目录。默认读取 .Q 和 .q。目录里读哪些扩展名由 --q-format 决定。文件内容是空白分隔的数字。",
+            "One or more matrix files, a quoted wildcard, or a directory. The default reads .Q and .q. Which extensions a directory reads is set by --q-format. File contents are whitespace-separated numbers.",
         )
         en = _read_checkout("README.md")
         zh = _read_checkout("README.zh.md")
@@ -1022,7 +1025,7 @@ class CliTests(unittest.TestCase):
     def test_ids_extra_tokens_warn_and_keep_first(self):
         import io
         from contextlib import redirect_stderr
-        warning = "注意：--ids 有 2 行含有多个字段，只保留了每行第一个。例如：Alice Smith"
+        warning = "Warning: --ids has 2 lines with more than one field; only the first field on each line was kept. Example: Alice Smith"
         with tempfile.TemporaryDirectory() as td:
             q = os.path.join(td, "t.2.Q")
             with open(q, "w") as f:
@@ -1049,7 +1052,7 @@ class CliTests(unittest.TestCase):
             buf2 = io.StringIO()
             with redirect_stderr(buf2):
                 qbar.main(["--q", q2, "--ids", plain, "--outdir", out2])
-            self.assertNotIn("多个字段", buf2.getvalue())
+            self.assertNotIn("more than one field", buf2.getvalue())
             fam = os.path.join(td, "t.fam")
             with open(fam, "w") as f:
                 f.write("F Alice Smith 0 0 1 -9\nF Bob Jones 0 0 2 -9\n")
@@ -1060,9 +1063,9 @@ class CliTests(unittest.TestCase):
             with open(os.path.join(out3, "order.tsv")) as f:
                 fam_ids = [line.split("\t")[1] for line in f.read().splitlines()[1:]]
             self.assertEqual(sorted(fam_ids), ["Alice", "Bob"])
-            self.assertNotIn("多个字段", buf3.getvalue())
+            self.assertNotIn("more than one field", buf3.getvalue())
         help_s = _cli_flag(qbar.build_parser(), "--ids").help or ""
-        self.assertIn("多出来的字段", help_s)
+        self.assertIn("only the first token", help_s)
         en = _read_checkout("README.md")
         zh = _read_checkout("README.zh.md")
         self.assertIn("keeps the first token and writes a warning to stderr", en)
@@ -1125,7 +1128,7 @@ class DocstringTests(unittest.TestCase):
         self.assertIn("qmax > cut", doc)
         help_s = _cli_flag(qbar.build_parser(), "--align-mode").help or ""
         self.assertNotIn("c_align", help_s)
-        self.assertIn("严格大于", help_s)
+        self.assertIn("strictly greater", help_s)
 
     def test_align_mode_help_names_every_method(self):
         help_s = _cli_flag(qbar.build_parser(), "--align-mode").help or ""
@@ -1148,15 +1151,15 @@ class DocstringTests(unittest.TestCase):
         anchor = _cli_flag(parser, "--anchor-group").help or ""
         self.assertIn("--anchor-group", epilog)
         self.assertIn("--no-align", anchor)
-        self.assertIn("每个 K", anchor)
+        self.assertIn("every K", anchor)
 
     def test_align_mode_help_states_core_fallback(self):
         doc = " ".join((qbar.core_mask.__doc__ or "").split())
         self.assertIn("purest", doc)
         self.assertIn("lower K", doc)
         help_s = _cli_flag(qbar.build_parser(), "--align-mode").help or ""
-        self.assertIn("最纯", help_s)
-        self.assertIn("较低 K", help_s)
+        self.assertIn("purest", help_s)
+        self.assertIn("lower K", help_s)
 
     def test_q_bounds_are_documented(self):
         import inspect
@@ -1181,9 +1184,9 @@ class DocstringTests(unittest.TestCase):
         """Every flag except ``--provenance``, ``--q-format``, and ``--ind`` is named in both READMEs.
 
         ``--provenance`` is documented in ``docs/cli.md`` and
-        ``docs/factpacks/S10.md``. ``--q-format`` and ``--ind`` are
+        ``docs/factpacks/S10.md``.         ``--q-format`` and ``--ind`` are
         documented in ``docs/cli.md`` and ``docs/factpacks/S2.md``.
-        This PR does not edit the READMEs.
+        ``--language`` is named in both READMEs.
         """
         import re
         later = {"--provenance", "--q-format", "--ind"}
@@ -1212,8 +1215,8 @@ class DocstringTests(unittest.TestCase):
         self.assertEqual("A=B=#112233".split("=", 1)[0], "A")
         blocks = _cli_flag(qbar.build_parser(), "--blocks").help or ""
         color = _cli_flag(qbar.build_parser(), "--color").help or ""
-        self.assertIn("不能含逗号", blocks)
-        self.assertIn("不能含等号", color)
+        self.assertIn("cannot contain a comma", blocks)
+        self.assertIn("cannot contain an equals sign", color)
         en = _read_checkout("README.md")
         zh = _read_checkout("README.zh.md")
         self.assertIn("cannot contain a comma", en)
@@ -1225,7 +1228,7 @@ class DocstringTests(unittest.TestCase):
         # core_mask keeps a person only when qmax is above the cut at both
         # adjacent K (q_prev and q_new). The help must say that.
         help_s = _cli_flag(qbar.build_parser(), "--align-mode").help or ""
-        self.assertIn("相邻两个 K 的 qmax 都严格大于 --qmax", help_s)
+        self.assertIn("strictly greater than --qmax at both adjacent K", help_s)
         doc = qbar.core_mask.__doc__ or ""
         self.assertNotIn("c_align", doc)
         self.assertIn("both K", doc)
@@ -1493,7 +1496,7 @@ class ProvenanceTests(unittest.TestCase):
         action = _cli_flag(parser, "--provenance")
         self.assertEqual(
             action.help,
-            "另写 run.json，记下版本、选项、输入哈希和依赖版本",
+            "Also write run.json, recording the version, options, input hashes, and dependency versions",
         )
         self.assertIs(action.default, False)
         args = parser.parse_args(["--q", "x.Q", "--outdir", "o"])
@@ -1691,7 +1694,7 @@ class InputFormatTests(unittest.TestCase):
                 qbar.load_q_set([bad], format="meanq")
             self.assertEqual(
                 ctx.exception.code,
-                "%s 文件名是 K=%d，列数是 %d" % (bad, 3, 2),
+                "%s filename says K=%d, but the column count is %d" % (bad, 3, 2),
             )
             text = os.path.join(td, "text.2.meanQ")
             with open(text, "w", encoding="utf-8", newline="\n") as handle:
@@ -1700,7 +1703,7 @@ class InputFormatTests(unittest.TestCase):
                 qbar.read_q(text, format="meanq")
             self.assertEqual(
                 ctx_text.exception.code,
-                "Q 只能是空白分隔的数字：%s" % text,
+                "Q must be whitespace-separated numbers: %s" % text,
             )
 
     def test_meanq_opened_first_line(self):
@@ -1769,7 +1772,7 @@ class InputFormatTests(unittest.TestCase):
             with redirect_stderr(buf):
                 got = qbar.load_ids(None, None, ind=ind)
             self.assertEqual(got, ["SAMPLE0", "SAMPLE1"])
-            self.assertNotIn("多个字段", buf.getvalue())
+            self.assertNotIn("more than one field", buf.getvalue())
             self.assertEqual(buf.getvalue(), "")
             long_path = os.path.join(td, "long.ind")
             with open(long_path, "w", encoding="utf-8", newline="\n") as handle:
@@ -1791,21 +1794,21 @@ class InputFormatTests(unittest.TestCase):
                     "--q", qpath, "--fam", fam, "--ind", ind,
                     "--outdir", os.path.join(td, "both"),
                 ])
-            self.assertEqual(ctx.exception.code, "--fam 和 --ind 只留一个")
+            self.assertEqual(ctx.exception.code, "--fam and --ind: keep only one")
             with self.assertRaises(SystemExit) as ctx_ids:
                 qbar.load_ids(None, "ids.txt", ind=ind)
-            self.assertEqual(ctx_ids.exception.code, "--ids 和 --ind 只留一个")
+            self.assertEqual(ctx_ids.exception.code, "--ids and --ind: keep only one")
             with self.assertRaises(SystemExit) as ctx_fam_ids:
                 qbar.load_ids("a.fam", "ids.txt")
-            self.assertEqual(ctx_fam_ids.exception.code, "--fam 和 --ids 只留一个")
+            self.assertEqual(ctx_fam_ids.exception.code, "--fam and --ids: keep only one")
             with self.assertRaises(SystemExit) as ctx_all:
                 qbar.load_ids("a.fam", "ids.txt", ind=ind)
-            self.assertEqual(ctx_all.exception.code, "--fam 和 --ids 和 --ind 只留一个")
+            self.assertEqual(ctx_all.exception.code, "--fam and --ids and --ind: keep only one")
             with self.assertRaises(SystemExit) as ctx_none:
                 qbar.load_ids(None, None)
             self.assertEqual(
                 ctx_none.exception.code,
-                "需要 --fam（PLINK .fam）或 --ids（一行一个 IID，顺序与 Q 的行一致）",
+                "Need --fam (PLINK .fam) or --ids (one IID per line, in the same order as the Q rows)",
             )
 
     def test_directory_glob_follows_format(self):
@@ -1852,7 +1855,7 @@ class InputFormatTests(unittest.TestCase):
                 handle.write("0.2 0.8\n")
             with self.assertRaises(SystemExit) as ctx:
                 qbar.collect_q([only])
-            self.assertIn("目录里没有 .Q 或 .q", str(ctx.exception.code))
+            self.assertIn("The directory has no .Q or .q files", str(ctx.exception.code))
             q_by_k, src = qbar.load_q_set([mean_path], format="meanq")
             self.assertEqual(list(q_by_k), [2])
             self.assertTrue(np.array_equal(q_by_k[2], np.array([[float("0.3"), float("0.7")]])))
@@ -1885,28 +1888,90 @@ class InputFormatTests(unittest.TestCase):
                         qbar.k_of(path, matrix, format=fmt)
                     self.assertEqual(
                         ctx.exception.code,
-                        "%s 的扩展名不符合格式 %s" % (path, fmt),
+                        "%s does not have the extension for format %s" % (path, fmt),
                     )
             missing = os.path.join(td, "toy.2.Q")
             with self.assertRaises(SystemExit) as ctx_bad:
                 qbar.read_q(missing, format="nope")
             self.assertEqual(
                 ctx_bad.exception.code,
-                "Q 格式只能是 admixture、meanq、qopt，收到 %s" % "nope",
+                "Q format must be admixture, meanq, or qopt, got %s" % "nope",
             )
 
     def test_q_format_and_ind_help(self):
         parser = qbar.build_parser()
         q_format = _cli_flag(parser, "--q-format")
-        self.assertEqual(q_format.help, "指定读取的矩阵排版")
+        self.assertEqual(q_format.help, "Matrix layout to read")
         self.assertEqual(q_format.default, "admixture")
         self.assertEqual(list(q_format.choices), ["admixture", "meanq", "qopt"])
         ind = _cli_flag(parser, "--ind")
-        self.assertEqual(ind.help, "EIGENSTRAT 的 .ind，三列，样本号在第 1 列")
+        self.assertEqual(ind.help, "EIGENSTRAT .ind, three columns, sample id in column 1")
         self.assertIsNone(ind.default)
         args = parser.parse_args(["--q", "a.Q", "--outdir", "o"])
         self.assertEqual(args.q_format, "admixture")
         self.assertIsNone(args.ind)
+
+
+class LanguageTests(unittest.TestCase):
+    def test_english_help_and_column_defaults(self):
+        parser = qbar.build_parser()
+        help_s = parser.format_help()
+        self.assertTrue(all(ord(ch) < 128 for ch in help_s))
+        self.assertIn("greedy is the default align method", help_s)
+        self.assertIn("--language", help_s)
+        self.assertEqual(_cli_flag(parser, "--id-col").default, "analysis_IID")
+        self.assertEqual(_cli_flag(parser, "--group-col").default, "Dong_Grp")
+        language = _cli_flag(parser, "--language")
+        self.assertEqual(list(language.choices), ["en", "zh"])
+        self.assertEqual(language.default, "en")
+        args = parser.parse_args(["--q", "x.Q", "--outdir", "o"])
+        self.assertEqual(args.id_col, "analysis_IID")
+        self.assertEqual(args.group_col, "Dong_Grp")
+        self.assertEqual(args.language, "en")
+        self.assertIn("language", vars(args))
+        zh = qbar.build_parser(language="zh").format_help()
+        self.assertIn(
+            "读 ADMIXTURE 的 Q，按指定规则排人，跨 K 对齐列，写出结构条形图。",
+            zh,
+        )
+
+    def test_missing_id_follows_language(self):
+        english = (
+            "Need --fam (PLINK .fam) or --ids "
+            "(one IID per line, in the same order as the Q rows)"
+        )
+        chinese = "需要 --fam（PLINK .fam）或 --ids（一行一个 IID，顺序与 Q 的行一致）"
+        with tempfile.TemporaryDirectory() as td:
+            qpath = os.path.join(td, "t.2.Q")
+            with open(qpath, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("0.2 0.8\n")
+            with self.assertRaises(SystemExit) as ctx:
+                qbar.main(["--q", qpath, "--outdir", os.path.join(td, "out")])
+            self.assertEqual(ctx.exception.code, english)
+            with self.assertRaises(SystemExit) as ctx_zh:
+                qbar.main([
+                    "--q", qpath, "--language", "zh",
+                    "--outdir", os.path.join(td, "outzh"),
+                ])
+            self.assertEqual(ctx_zh.exception.code, chinese)
+            import io
+            from contextlib import redirect_stdout
+            zh_help = io.StringIO()
+            with self.assertRaises(SystemExit) as ctx_help:
+                with redirect_stdout(zh_help):
+                    qbar.main(["--help", "--language", "zh"])
+            self.assertEqual(ctx_help.exception.code, 0)
+            self.assertIn(
+                "读 ADMIXTURE 的 Q，按指定规则排人，跨 K 对齐列，写出结构条形图。",
+                zh_help.getvalue(),
+            )
+            en_help = io.StringIO()
+            with self.assertRaises(SystemExit) as ctx_en:
+                with redirect_stdout(en_help):
+                    qbar.main(["--help"])
+            self.assertEqual(ctx_en.exception.code, 0)
+            self.assertIn("greedy is the default align method", en_help.getvalue())
+            self.assertTrue(all(ord(ch) < 128 for ch in en_help.getvalue()))
 
 
 if __name__ == "__main__":

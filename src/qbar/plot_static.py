@@ -8,6 +8,8 @@ import sys
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from .messages import text as _msg
+
 PALETTE = [
     "#0072b2", "#d55e00", "#009e73", "#cc79a7", "#e69f00",
     "#56b4e9", "#f0e442", "#332288", "#88ccee", "#44aa99",
@@ -57,7 +59,7 @@ def next_free(used, start):
         i += 1
 
 
-def assign_colors(k, owners, group_color, col_color):
+def assign_colors(k, owners, group_color, col_color, *, language="en"):
     hexes = [None] * k
     used = set()
     for c in range(k):
@@ -81,7 +83,7 @@ def assign_colors(k, owners, group_color, col_color):
             hexes[c] = hx
             used.add(hx)
     if len(set(hexes)) != k:
-        raise SystemExit("内部错误：K=%d 的颜色有重复" % k)
+        raise SystemExit(_msg("duplicate_color", language, k=k))
     return hexes
 
 
@@ -122,7 +124,7 @@ def draw_rotated(base, x, y, text, font, fill):
     return rot.size
 
 
-def render(path, rows, spans, bar_w, bar_h, title):
+def render(path, rows, spans, bar_w, bar_h, title, *, language="en"):
     """rows: list of {k, image(ndarray HxN), legend[(hex, text)]} in K order."""
     font = load_font(15)
     font_s = load_font(13)
@@ -182,7 +184,7 @@ def render(path, rows, spans, bar_w, bar_h, title):
         px0 = left + int(span["start"] * bar_w / n)
         px1 = left + int(span["end"] * bar_w / n)
         if px1 - px0 < 14:
-            print("注意：组 %s 的条宽小于 14 像素，图上没写组名" % span["name"], file=sys.stderr)
+            print(_msg("narrow_group", language, name=span["name"]), file=sys.stderr)
             continue
         mid = (px0 + px1) // 2
         if rotate:
