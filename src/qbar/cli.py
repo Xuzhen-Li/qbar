@@ -22,6 +22,12 @@ metric="correlation"). --hclust-dist also accepts euclidean and
 braycurtis. --hclust-linkage also accepts ward and complete; ward needs
 --hclust-dist euclidean. --hclust-pre accepts dominant (default none).
 --hclust-olo is off unless set.
+--order-mode within (the default) orders inside groups. global-hclust
+clusters every row as one tree. group-hclust keeps each group together
+and can order the groups by the mean Q row. --dendrogram top draws that
+tree above the bars. The default none draws none. --hclust-max-bytes
+limits the distance vector. When it is omitted, the new modes use
+4294967296 bytes for the all-rows vector or the between-group vector.
 https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.hierarchy.linkage.html
 """
 from __future__ import annotations
@@ -76,14 +82,24 @@ from .io import (
 )
 from .messages import text as _msg
 from .order import (
+    DENDROGRAMS,
+    GROUP_ORDERS,
     HCLUST_DIST,
     HCLUST_LINK,
     HCLUST_PRE,
+    ORDER_MODES,
     WITHIN,
+    DEFAULT_HCLUST_MAX_BYTES,
     build_order,
+    cap_for_tree,
+    check_hclust_bytes,
     check_hclust_opts,
+    group_hclust_order,
     hclust_block_order,
     hclust_order,
+    linkage_matrix,
+    pdist_nbytes,
+    resolve_hclust_max_bytes,
     sort_block,
     spans_of,
 )
@@ -170,6 +186,14 @@ def build_parser(language="en"):
                    help=say("help_hclust_pre"))
     p.add_argument("--hclust-olo", action="store_true",
                    help=say("help_hclust_olo"))
+    p.add_argument("--order-mode", choices=ORDER_MODES, default="within",
+                   help=say("help_order_mode"))
+    p.add_argument("--group-order", choices=GROUP_ORDERS, default="input",
+                   help=say("help_group_order"))
+    p.add_argument("--dendrogram", choices=DENDROGRAMS, default="none",
+                   help=say("help_dendrogram"))
+    p.add_argument("--hclust-max-bytes", type=int, default=None,
+                   help=say("help_hclust_max_bytes"))
     p.add_argument("--align", dest="align", action="store_true")
     p.add_argument("--no-align", dest="align", action="store_false")
     p.set_defaults(align=None)

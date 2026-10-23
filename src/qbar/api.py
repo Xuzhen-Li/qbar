@@ -42,7 +42,14 @@ from .lowconf import append_low_confidence_rows, read_low_confidence_table
 from .messages import text as _msg
 from .modes import assemble_replicates, require_replicate_flags, write_replicate_outputs
 from .selectk import select_k_table, write_select_k_tsv, write_select_k_txt
-from .order import WITHIN, build_order, check_hclust_opts
+from .order import (
+    WITHIN,
+    apply_order_mode,
+    check_hclust_opts,
+    validate_order_flags,
+    write_linkage_index,
+    write_linkage_tsv,
+)
 from .parentshare import (
     check_parent_alpha,
     parent_interval_rows,
@@ -473,6 +480,21 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     destination column's flag from the alignment report when that report
     is written, and NA otherwise. ``--no-align`` with ``sankey`` is an
     error. A gap in K is reported first. No HTML flow file is written.
+
+    ``--order-mode within`` (the default) orders inside groups and writes no
+    linkage file. ``global-hclust`` clusters every row at ``--hclust-k`` and
+    writes ``linkage_global.tsv`` when that order is one tree.
+    ``group-hclust`` keeps each group contiguous. ``--group-order hclust``
+    orders groups by the mean Q row and writes ``linkage_between_groups.tsv``.
+    ``--within hclust`` in that mode also writes ``linkage_group_<n>.tsv`` for
+    each group of at least two rows, with ``n`` the 1-based input index.
+    Either of those group files causes ``linkage_index.tsv`` to be written.
+    ``--dendrogram top`` draws the tree above the bars and may make those
+    figures taller. The default ``none`` does not. When ``--hclust-max-bytes``
+    is omitted, the all-rows vector and the between-group vector refuse above
+    4294967296 bytes before the distance vector is built. Within-group trees
+    stay uncapped unless a byte value is set. ``0`` means no cap. A refusal
+    writes no output file.
     """
     if args.provenance:
         started = datetime.datetime.now().astimezone().isoformat()
@@ -503,6 +525,15 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     n_perm, perm_seed, perm_null = _perm_request(args, language)
     parent_ci, parent_test, parent_alpha = _parent_request(args, language, n_boot, n_perm)
     check_hclust_opts(args.hclust_dist, args.hclust_linkage, language=language)
+    order_mode = getattr(args, "order_mode", "within")
+    group_order = getattr(args, "group_order", "input")
+    dendrogram_mode = getattr(args, "dendrogram", "none")
+    explicit_cap = getattr(args, "hclust_max_bytes", None)
+    # Flag errors happen before any output file is created.
+    validate_order_flags(
+        order_mode, group_order, dendrogram_mode, explicit_cap, args.order_file,
+        language=language,
+    )
     logs = getattr(args, "logs", None)
     logs_map = getattr(args, "logs_map", None)
     select_k = bool(getattr(args, "select_k", False))
@@ -576,12 +607,27 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         raise SystemExit(_msg("sort_col_range", language, k=sort_k))
     if args.order_file and blocks:
         print(_msg("order_file_ignores_blocks", language), file=sys.stderr)
-    order, spans = build_order(
+    if order_mode != "within" and blocks:
+        print(_msg("blocks_ignored", language, mode=order_mode), file=sys.stderr)
+    if order_mode == "global-hclust" and (args.within != "iid" or within_group):
+        print(_msg("within_ignored_global", language), file=sys.stderr)
+    hc = {
+        "dist": args.hclust_dist,
+        "link": args.hclust_linkage,
+        "olo": args.hclust_olo,
+        "pre": args.hclust_pre,
+    }
+    # Ordering, including the byte cap, finishes before outdir is created.
+    arranged = apply_order_mode(
         iids, groups, blocks, args.within, within_group, args.rest_name,
         aligned[sort_k], aligned[hclust_k], args.sort_col, args.order_file,
-        {"dist": args.hclust_dist, "link": args.hclust_linkage, "olo": args.hclust_olo, "pre": args.hclust_pre},
-        language=language,
+        hc, order_mode, group_order, explicit_cap, language=language,
     )
+    order = arranged["order"]
+    spans = arranged["spans"]
+    dendro_spec = None
+    if dendrogram_mode == "top" and arranged["layers"]:
+        dendro_spec = {"layers": arranged["layers"]}
     rank = {name: i for i, name in enumerate(blocks)}
     group_color, col_color = parse_colors(args.color, args.color_file, language=language)
     owners = {}
@@ -600,16 +646,27 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
             "legend": legend_lines(aligned[k], groups, owners[k], hexes[k]),
         })
     os.makedirs(args.outdir, exist_ok=True)
+    linkage_paths = []
+    for _name, _z in arranged["matrices"]:
+        _path = os.path.join(args.outdir, _name)
+        write_linkage_tsv(_path, _z)
+        linkage_paths.append(_path)
+        print(_path)
+    if arranged["index_groups"] is not None:
+        _path = os.path.join(args.outdir, "linkage_index.tsv")
+        write_linkage_index(_path, arranged["index_groups"])
+        linkage_paths.append(_path)
+        print(_path)
     if len(rows) == 1:
         out = os.path.join(args.outdir, "bar_K%d.png" % rows[0]["k"])
-        render(out, rows, spans, args.width, bar_h, args.title, language=language)
+        render(out, rows, spans, args.width, bar_h, args.title, language=language, dendrogram=dendro_spec)
         print(out)
     else:
         for row in rows:
             one = os.path.join(args.outdir, "bar_K%d.png" % row["k"])
-            render(one, [row], spans, args.width, max(bar_h, 180), args.title, language=language)
+            render(one, [row], spans, args.width, max(bar_h, 180), args.title, language=language, dendrogram=dendro_spec)
         panel = os.path.join(args.outdir, "panel.png")
-        render(panel, rows, spans, args.width, bar_h, args.title, language=language)
+        render(panel, rows, spans, args.width, bar_h, args.title, language=language, dendrogram=dendro_spec)
         print(panel)
     write_tables(args.outdir, iids, groups, order, spans, perm, owners, hexes, meta, aligned)
     report_rows = None
@@ -750,6 +807,7 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         paths.append(os.path.splitext(_panel)[0] + ".pdf")
     paths.append(os.path.join(args.outdir, "order.tsv"))
     paths.append(os.path.join(args.outdir, "blocks.tsv"))
+    paths.extend(linkage_paths)
     for _k in sorted(perm):
         paths.append(os.path.join(args.outdir, "perm_K%d.tsv" % _k))
     if meta:
