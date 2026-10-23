@@ -10,7 +10,9 @@ Cross-K column matching runs from K to K+1. The default --align-method
 is greedy: each old column takes the unused new column with the highest
 Pearson correlation. Other --align-method choices are hungarian, pong,
 jaccard, clumpp-full, clumpp-greedy, clumpp-largek, and clumppling-ilp. --align-report writes align_report.tsv and
-align_report.txt.
+align_report.txt. --low-confidence-table copies precision and recall rows for the
+active method onto the end of align_report.txt when --align-report is also set.
+It does not change the low-confidence cut.
 Label switching itself is described by Alexander, Novembre & Lange 2009
 Genome Res 19:1655, DOI 10.1101/gr.094052.109.
 
@@ -184,6 +186,8 @@ def build_parser(language="en"):
                    help=say("help_align_compare"))
     p.add_argument("--align-report-low", type=float,
                    help=say("help_align_report_low"))
+    p.add_argument("--low-confidence-table", default=None,
+                   help=say("help_low_confidence_table"))
     p.add_argument("--align-groups", default="", help=say("help_align_groups"))
     p.add_argument("--qmax", type=float, default=0.75, help=say("help_qmax"))
     p.add_argument("--anchor-group", default="", help=say("help_anchor_group"))

@@ -10,6 +10,7 @@ The package version is 0.2.0.dev0. No git tag exists.
 
 ### Added
 
+- `--low-confidence-table` copies precision and recall rows for the active align method onto the end of `align_report.txt` when `--align-report` is also set. It is omitted by default. It does not change the low-confidence cut. `REPORT_LOW` stays 0.5, 0.5, 0.8, and 0.5 for greedy, hungarian, pong, and jaccard.
 - `--parent-ci` writes `parent_share_ci.tsv` with a percentile interval for the largest parent share. It is off by default and requires `--bootstrap` greater than 0. `--parent-alpha` defaults to 0.05. `--parent-test` adds a one-parent residual p value to that file. It is off by default and requires `--perm` greater than 0. With both flags off, that file is not written.
 - `--perm` adds an optional permutation p value for each column match on `match_support.tsv`. The default is 0, which adds no columns. `--perm-null` is required when `--perm` is greater than 0. The choices are `rows` and `column`, and the help lists `rows` first. `--perm-seed` defaults to 0 and is used only when `--perm` is greater than 0.
 - `--bootstrap` resamples individuals and writes `match_support.tsv` with how often each column match returns. The default is 0, which writes no file. `--bootstrap-seed` defaults to 0 and is used only when `--bootstrap` is greater than 0.

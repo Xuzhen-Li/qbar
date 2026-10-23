@@ -1201,6 +1201,8 @@ class DocstringTests(unittest.TestCase):
         ``docs/cli.md`` and ``docs/factpacks/ST2.md``.
         ``--parent-ci``, ``--parent-alpha``, and ``--parent-test`` are
         documented in ``docs/cli.md`` and ``docs/factpacks/ST4.md``.
+        ``--low-confidence-table`` is documented in ``docs/cli.md`` and
+        ``docs/factpacks/ST3.md``.
         """
         import re
         # --select-k and --plateau-fraction are documented in docs/cli.md
@@ -1214,6 +1216,8 @@ class DocstringTests(unittest.TestCase):
         # and docs/factpacks/ST2.md.
         # --parent-ci, --parent-alpha, and --parent-test are documented in
         # docs/cli.md and docs/factpacks/ST4.md.
+        # --low-confidence-table is documented in docs/cli.md and
+        # docs/factpacks/ST3.md.
         later = {
             "--provenance", "--q-format", "--ind", "--logs", "--logs-map",
             "--select-k", "--plateau-fraction",
@@ -1222,6 +1226,7 @@ class DocstringTests(unittest.TestCase):
             "--bootstrap", "--bootstrap-seed",
             "--perm", "--perm-seed", "--perm-null",
             "--parent-ci", "--parent-alpha", "--parent-test",
+            "--low-confidence-table",
         }
         flags = []
         for action in qbar.build_parser()._actions:
@@ -5269,6 +5274,376 @@ class ParentShareTests(unittest.TestCase):
                 "--bootstrap", "3", "--parent-ci",
             ])
             self.assertFalse(os.path.exists(os.path.join(no_align, "parent_share_ci.tsv")))
+
+
+class LowConfidenceTests(unittest.TestCase):
+    def test_hand_ten_matches(self):
+        from qbar.lowconf import score_matches
+        # pred_low, truth_wrong. Counted by hand, not by a second scorer.
+        # T T tp, T T tp, T F fp, F T fn, F T fn, then five F F tn.
+        pred = [True, True, True, False, False, False, False, False, False, False]
+        truth = [True, True, False, True, True, False, False, False, False, False]
+        hand_tp = 2
+        hand_fp = 1
+        hand_fn = 2
+        hand_tn = 5
+        self.assertEqual(hand_tp + hand_fp + hand_fn + hand_tn, 10)
+        self.assertEqual(sum(1 for item in pred if item is True), 3)
+        self.assertEqual(sum(1 for item in truth if item is True), 4)
+        got = score_matches(pred, truth)
+        self.assertEqual(list(got), ["tp", "fp", "fn", "tn", "precision", "recall"])
+        self.assertIs(type(got["tp"]), int)
+        self.assertIs(type(got["fp"]), int)
+        self.assertIs(type(got["fn"]), int)
+        self.assertIs(type(got["tn"]), int)
+        self.assertEqual(got["tp"], hand_tp)
+        self.assertEqual(got["fp"], hand_fp)
+        self.assertEqual(got["fn"], hand_fn)
+        self.assertEqual(got["tn"], hand_tn)
+        self.assertIsInstance(got["precision"], float)
+        self.assertIsInstance(got["recall"], float)
+        self.assertEqual(got["precision"], hand_tp / (hand_tp + hand_fp))
+        self.assertEqual(got["recall"], hand_tp / (hand_tp + hand_fn))
+        self.assertEqual(got["precision"], 2 / 3)
+        self.assertEqual(got["recall"], 1 / 2)
+        got_np = score_matches(np.array(pred), np.array(truth))
+        self.assertEqual(got_np, got)
+
+    def test_zero_denominators_are_none(self):
+        from qbar.lowconf import score_matches
+        # No flagged match: tp + fp = 0, so precision is None.
+        # One truly wrong match is not flagged: recall is 0 / 1.
+        no_flag = score_matches([False, False], [True, False])
+        self.assertEqual((no_flag["tp"], no_flag["fp"], no_flag["fn"], no_flag["tn"]), (0, 0, 1, 1))
+        self.assertIsNone(no_flag["precision"])
+        self.assertEqual(no_flag["recall"], 0 / 1)
+        # No truly wrong match: tp + fn = 0, so recall is None.
+        # One flag is a false positive: precision is 0 / 1.
+        no_wrong = score_matches([True, False], [False, False])
+        self.assertEqual((no_wrong["tp"], no_wrong["fp"], no_wrong["fn"], no_wrong["tn"]), (0, 1, 0, 1))
+        self.assertIsNone(no_wrong["recall"])
+        self.assertEqual(no_wrong["precision"], 0 / 1)
+        # Both denominators are 0.
+        neither = score_matches([False], [False])
+        self.assertEqual((neither["tp"], neither["fp"], neither["fn"], neither["tn"]), (0, 0, 0, 1))
+        self.assertIsNone(neither["precision"])
+        self.assertIsNone(neither["recall"])
+        empty = score_matches([], [])
+        self.assertEqual((empty["tp"], empty["fp"], empty["fn"], empty["tn"]), (0, 0, 0, 0))
+        self.assertIsNone(empty["precision"])
+        self.assertIsNone(empty["recall"])
+
+    def test_length_mismatch_and_non_bool_are_errors(self):
+        from qbar.lowconf import score_matches
+        with self.assertRaises(SystemExit) as mismatch:
+            score_matches([True, False], [True])
+        self.assertEqual(
+            str(mismatch.exception),
+            "score_matches needs equal-length boolean sequences, got 2 and 1",
+        )
+        with self.assertRaises(SystemExit) as mismatch_zh:
+            score_matches([True], [True, False], language="zh")
+        self.assertEqual(
+            str(mismatch_zh.exception),
+            "score_matches 需要等长布尔序列，收到 1 和 2",
+        )
+        with self.assertRaises(SystemExit) as bad:
+            score_matches([1, 0], [True, False])
+        self.assertEqual(str(bad.exception), "score_matches needs boolean values, got 1")
+        with self.assertRaises(SystemExit) as bad_zh:
+            score_matches([True, False], [0, 1], language="zh")
+        self.assertEqual(str(bad_zh.exception), "score_matches 需要布尔值，收到 0")
+
+    def test_report_low_values_stay_fixed(self):
+        self.assertEqual(qbar.REPORT_LOW, {
+            "greedy": 0.5,
+            "hungarian": 0.5,
+            "pong": 0.8,
+            "jaccard": 0.5,
+        })
+        self.assertEqual(set(qbar.REPORT_LOW), {"greedy", "hungarian", "pong", "jaccard"})
+
+    def test_reader_missing_column_and_bad_number(self):
+        from qbar.lowconf import read_low_confidence_table
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = os.path.join(tmp, "missing.tsv")
+            with open(missing, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("method\tcut\tprecision\trecall\tn_matches\n")
+                handle.write("greedy\t0.5\t0.67\t0.5\t10\n")
+            with self.assertRaises(SystemExit) as missing_en:
+                read_low_confidence_table(missing)
+            self.assertEqual(
+                str(missing_en.exception),
+                "--low-confidence-table is missing columns: split",
+            )
+            with self.assertRaises(SystemExit) as missing_zh:
+                read_low_confidence_table(missing, language="zh")
+            self.assertEqual(
+                str(missing_zh.exception),
+                "--low-confidence-table 缺少列：split",
+            )
+            bad = os.path.join(tmp, "bad.tsv")
+            with open(bad, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("method\tcut\tprecision\trecall\tn_matches\tsplit\n")
+                handle.write("greedy\t0.5\tabc\t0.5\t10\theld-out\n")
+            with self.assertRaises(SystemExit) as bad_en:
+                read_low_confidence_table(bad)
+            self.assertEqual(
+                str(bad_en.exception),
+                "--low-confidence-table row 1 column precision is not a number: abc",
+            )
+            with self.assertRaises(SystemExit) as bad_zh:
+                read_low_confidence_table(bad, language="zh")
+            self.assertEqual(
+                str(bad_zh.exception),
+                "--low-confidence-table 第 1 行的 precision 不是数字：abc",
+            )
+
+    def test_help_defaults_and_column_names(self):
+        parser = qbar.build_parser()
+        flag = _cli_flag(parser, "--low-confidence-table")
+        self.assertIsNone(flag.default)
+        help_s = flag.help or ""
+        self.assertTrue(all(ord(ch) < 128 for ch in help_s))
+        self.assertNotIn("\u2013", help_s)
+        self.assertNotIn("\u2014", help_s)
+        self.assertNotIn("recommended", help_s.lower())
+        args = parser.parse_args(["--q", "x.Q", "--outdir", "o"])
+        self.assertIsNone(args.low_confidence_table)
+        self.assertEqual(_cli_flag(parser, "--id-col").default, "analysis_IID")
+        self.assertEqual(_cli_flag(parser, "--group-col").default, "Dong_Grp")
+        zh = qbar.build_parser(language="zh")
+        zh_help = _cli_flag(zh, "--low-confidence-table").help or ""
+        self.assertNotEqual(zh_help, help_s)
+        self.assertIn("低置信", zh_help)
+        self.assertNotIn("\u2013", zh_help)
+        self.assertNotIn("\u2014", zh_help)
+
+    def _pair(self, tmp):
+        q2 = np.array([[1.0, 0.0], [1.0, 0.0], [0.0, 1.0], [0.0, 1.0]])
+        q3 = np.array([
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ])
+        path2 = os.path.join(tmp, "t.2.Q")
+        path3 = os.path.join(tmp, "t.3.Q")
+        np.savetxt(path2, q2, fmt="%.6f")
+        np.savetxt(path3, q3, fmt="%.6f")
+        ids = os.path.join(tmp, "ids.txt")
+        with open(ids, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write("s0\ns1\ns2\ns3\n")
+        return path2, path3, ids
+
+    def _table(self, path, body):
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(body)
+            if not body.endswith("\n"):
+                handle.write("\n")
+
+    def test_cli_copies_active_method_rows_and_keeps_prefix(self):
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+        from qbar.lowconf import read_low_confidence_table
+        with tempfile.TemporaryDirectory() as tmp:
+            path2, path3, ids = self._pair(tmp)
+            table = os.path.join(tmp, "scores.tsv")
+            self._table(table, "\n".join([
+                "split\tmethod\tcut\tprecision\trecall\tn_matches\tnote",
+                "held-out\tgreedy\t0.5\t0.666667\t0.5\t10\tmade-up",
+                "training\tgreedy\t0.8\tNA\t0.25\t8\tmade-up",
+                "held-out\thungarian\t0.5\t0.5\t0.5\t4\tmade-up",
+            ]))
+            parsed = read_low_confidence_table(table)
+            self.assertEqual(
+                [row["method"] for row in parsed],
+                ["greedy", "greedy", "hungarian"],
+            )
+            self.assertEqual(list(parsed[0]), [
+                "method", "cut", "precision", "recall", "n_matches", "split",
+            ])
+            self.assertEqual(parsed[1]["precision"], "NA")
+            self.assertNotIn("note", parsed[0])
+            base = ["--q", path2, path3, "--ids", ids, "--align-method", "greedy"]
+            plain = os.path.join(tmp, "plain")
+            copied = os.path.join(tmp, "copied")
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                qbar.main(base + ["--align-report", "--outdir", plain])
+                qbar.main(base + [
+                    "--align-report", "--low-confidence-table", table, "--outdir", copied,
+                ])
+            with open(os.path.join(plain, "align_report.txt"), "rb") as handle:
+                before = handle.read()
+            with open(os.path.join(copied, "align_report.txt"), "rb") as handle:
+                after = handle.read()
+            self.assertTrue(after.startswith(before))
+            self.assertGreater(len(after), len(before))
+            suffix = after[len(before):]
+            self.assertEqual(suffix.decode("utf-8"), "\n".join([
+                "",
+                "Low-confidence table",
+                "Copied rows for this align method. These rows do not change the low-confidence cut used above.",
+                "method\tcut\tprecision\trecall\tn_matches\tsplit",
+                "greedy\t0.5\t0.666667\t0.5\t10\theld-out",
+                "greedy\t0.8\tNA\t0.25\t8\ttraining",
+                "",
+            ]))
+            self.assertNotIn(b"hungarian", suffix)
+            self.assertNotIn(b"made-up", suffix)
+            self.assertNotIn(b"recommended", after.lower())
+            self.assertNotIn(b"Low-confidence table", before)
+            self.assertIn(b"low confidence: similarity < 0.5\n", before)
+            with open(os.path.join(plain, "align_report.tsv"), "rb") as handle:
+                plain_tsv = handle.read()
+            with open(os.path.join(copied, "align_report.tsv"), "rb") as handle:
+                copied_tsv = handle.read()
+            self.assertEqual(copied_tsv, plain_tsv)
+            header = plain_tsv.decode("utf-8").splitlines()[0].split("\t")
+            idx = header.index("low_confidence")
+            lows = [line.split("\t")[idx] for line in plain_tsv.decode("utf-8").splitlines()[1:]]
+            self.assertTrue(lows)
+            self.assertTrue(all(item in ("yes", "no", "NA") for item in lows))
+            self.assertEqual(qbar.REPORT_LOW["greedy"], 0.5)
+            low_dir = os.path.join(tmp, "explicit")
+            low_plain = os.path.join(tmp, "explicit-plain")
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                qbar.main(base + [
+                    "--align-report", "--align-report-low", "0.2", "--outdir", low_plain,
+                ])
+                qbar.main(base + [
+                    "--align-report", "--align-report-low", "0.2",
+                    "--low-confidence-table", table, "--outdir", low_dir,
+                ])
+            with open(os.path.join(low_plain, "align_report.txt"), "rb") as handle:
+                low_before = handle.read()
+            with open(os.path.join(low_dir, "align_report.txt"), "rb") as handle:
+                low_after = handle.read()
+            self.assertTrue(low_after.startswith(low_before))
+            self.assertIn(b"low confidence: similarity < 0.2\n", low_before)
+            self.assertEqual(qbar.REPORT_LOW, {
+                "greedy": 0.5, "hungarian": 0.5, "pong": 0.8, "jaccard": 0.5,
+            })
+
+    def test_missing_method_warns_and_adds_no_block(self):
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+        with tempfile.TemporaryDirectory() as tmp:
+            path2, path3, ids = self._pair(tmp)
+            table = os.path.join(tmp, "hungarian-only.tsv")
+            self._table(table, "\n".join([
+                "method\tcut\tprecision\trecall\tn_matches\tsplit",
+                "hungarian\t0.5\t0.5\t0.5\t4\theld-out",
+            ]))
+            base = ["--q", path2, path3, "--ids", ids]
+            plain = os.path.join(tmp, "plain")
+            missing = os.path.join(tmp, "missing")
+            err = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(err):
+                qbar.main(base + ["--align-report", "--outdir", plain])
+                qbar.main(base + [
+                    "--align-report", "--low-confidence-table", table,
+                    "--align-method", "greedy", "--outdir", missing,
+                ])
+            self.assertEqual(
+                err.getvalue().strip(),
+                "Warning: --low-confidence-table has no rows for method greedy. The low-confidence cut is unchanged.",
+            )
+            with open(os.path.join(plain, "align_report.txt"), "rb") as handle:
+                before = handle.read()
+            with open(os.path.join(missing, "align_report.txt"), "rb") as handle:
+                after = handle.read()
+            self.assertEqual(after, before)
+            self.assertNotIn(b"Low-confidence table", after)
+            with open(os.path.join(plain, "align_report.tsv"), "rb") as handle:
+                plain_tsv = handle.read()
+            with open(os.path.join(missing, "align_report.tsv"), "rb") as handle:
+                missing_tsv = handle.read()
+            self.assertEqual(missing_tsv, plain_tsv)
+            err_zh = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(err_zh):
+                qbar.main(base + [
+                    "--align-report", "--low-confidence-table", table,
+                    "--align-method", "greedy", "--language", "zh",
+                    "--outdir", os.path.join(tmp, "zh"),
+                ])
+            self.assertEqual(
+                err_zh.getvalue().strip(),
+                "注意：--low-confidence-table 没有方法 greedy 的行。低置信阈值不变。",
+            )
+
+    def test_bom_table_is_accepted_and_copied(self):
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+        with tempfile.TemporaryDirectory() as tmp:
+            path2, path3, ids = self._pair(tmp)
+            table = os.path.join(tmp, "bom.tsv")
+            body = "\n".join([
+                "method\tcut\tprecision\trecall\tn_matches\tsplit",
+                "greedy\t0.5\t0.67\t0.5\t10\theld-out",
+                "",
+            ])
+            with open(table, "wb") as handle:
+                handle.write(b"\xef\xbb\xbf" + body.encode("utf-8"))
+            out = os.path.join(tmp, "out")
+            err = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(err):
+                qbar.main([
+                    "--q", path2, path3, "--ids", ids, "--align-method", "greedy",
+                    "--align-report", "--low-confidence-table", table, "--outdir", out,
+                ])
+            self.assertEqual(err.getvalue(), "")
+            with open(os.path.join(out, "align_report.txt"), encoding="utf-8") as handle:
+                text = handle.read()
+            self.assertIn(
+                "Copied rows for this align method. These rows do not change the low-confidence cut used above.",
+                text,
+            )
+            self.assertIn("greedy\t0.5\t0.67\t0.5\t10\theld-out\n", text)
+            self.assertNotIn("\ufeff", text)
+
+    def test_table_without_align_report_warns(self):
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+        with tempfile.TemporaryDirectory() as tmp:
+            path2, path3, ids = self._pair(tmp)
+            table = os.path.join(tmp, "scores.tsv")
+            self._table(table, "\n".join([
+                "method\tcut\tprecision\trecall\tn_matches\tsplit",
+                "greedy\t0.5\t0.67\t0.5\t10\theld-out",
+            ]))
+            base = ["--q", path2, path3, "--ids", ids]
+            err = io.StringIO()
+            out = os.path.join(tmp, "unused")
+            with redirect_stdout(io.StringIO()), redirect_stderr(err):
+                qbar.main(base + ["--low-confidence-table", table, "--outdir", out])
+            self.assertEqual(
+                err.getvalue().strip(),
+                "Warning: --low-confidence-table is unused without --align-report.",
+            )
+            self.assertFalse(os.path.exists(os.path.join(out, "align_report.txt")))
+            err_zh = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(err_zh):
+                qbar.main(base + [
+                    "--low-confidence-table", table, "--language", "zh",
+                    "--outdir", os.path.join(tmp, "unused-zh"),
+                ])
+            self.assertEqual(
+                err_zh.getvalue().strip(),
+                "注意：没有 --align-report 时不使用 --low-confidence-table。",
+            )
+            err_single = io.StringIO()
+            single = os.path.join(tmp, "single")
+            with redirect_stdout(io.StringIO()), redirect_stderr(err_single):
+                qbar.main([
+                    "--q", path2, "--ids", ids, "--align-report",
+                    "--low-confidence-table", table, "--outdir", single,
+                ])
+            self.assertEqual(
+                err_single.getvalue().strip(),
+                "Warning: --low-confidence-table is unused because this run wrote no alignment report.",
+            )
+            self.assertFalse(os.path.exists(os.path.join(single, "align_report.txt")))
 
 
 if __name__ == "__main__":

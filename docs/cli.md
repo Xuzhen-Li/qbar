@@ -192,6 +192,12 @@ Low-confidence cutoff. Default 0.5 for greedy/hungarian/jaccard, and 0.8 for pon
 
 - Default: not set
 
+### `--low-confidence-table`
+
+TSV with columns method, cut, precision, recall, n_matches, and split. With --align-report, copy those rows for the active align method onto the end of align_report.txt. Does not change the low-confidence cut.
+
+- Default: not set
+
 ### `--align-groups`
 
 Groups that take part in alignment, comma-separated. Required for core mode
