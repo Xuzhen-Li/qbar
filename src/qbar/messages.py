@@ -711,6 +711,46 @@ _CATALOG = {
         "en": "score_matches needs boolean values, got %(value)s",
         "zh": "score_matches 需要布尔值，收到 %(value)s",
     },
+    "help_cluster_flow": {
+        "en": "Write cluster_flow.tsv, cluster_flow.png, and cluster_flow.pdf. none writes nothing. sankey draws membership weight between aligned columns at consecutive K. Default none.",
+        "zh": "写 cluster_flow.tsv、cluster_flow.png 和 cluster_flow.pdf。none 不写。sankey 画连续 K 的对齐列之间的成员权重。默认 none。",
+    },
+    "help_flow_weight": {
+        "en": "Edge weight used only with --cluster-flow sankey. share is the destination parent share. jaccard is the member-set Jaccard. Default share.",
+        "zh": "只在 --cluster-flow sankey 时作为边权重。share 是目标列的父列份额。jaccard 是成员集合 Jaccard。默认 share。",
+    },
+    "flow_weight_needs_sankey": {
+        "en": "--flow-weight %(weight)s requires --cluster-flow sankey.",
+        "zh": "--flow-weight %(weight)s 需要 --cluster-flow sankey。",
+    },
+    "flow_needs_align": {
+        "en": "--cluster-flow sankey needs alignment across K; remove --no-align.",
+        "zh": "--cluster-flow sankey 需要跨 K 对齐；去掉 --no-align。",
+    },
+    "flow_weight_choice": {
+        "en": "--flow-weight must be share or jaccard, got %(weight)s",
+        "zh": "--flow-weight 只能是 share 或 jaccard，收到 %(weight)s",
+    },
+    "flow_mode_choice": {
+        "en": "--cluster-flow must be none or sankey, got %(mode)s",
+        "zh": "--cluster-flow 只能是 none 或 sankey，收到 %(mode)s",
+    },
+    "flow_jaccard_set": {
+        "en": "--jaccard-set must be dominant or threshold, got %(kind)s",
+        "zh": "--jaccard-set 只能是 dominant 或 threshold，收到 %(kind)s",
+    },
+    "flow_not_matrix": {
+        "en": "Cluster flow needs a 2-d matrix at each K",
+        "zh": "聚类流需要每个 K 都是二维矩阵",
+    },
+    "flow_row_count": {
+        "en": "Cluster flow needs the same row count at K=%(k_from)s and K=%(k_to)s, got %(prev)s and %(new)s",
+        "zh": "聚类流需要 K=%(k_from)s 和 K=%(k_to)s 行数相同，收到 %(prev)s 和 %(new)s",
+    },
+    "flow_mask_shape": {
+        "en": "Cluster-flow mask has %(got)s entries, expected %(rows)s rows",
+        "zh": "聚类流掩码有 %(got)s 项，应为 %(rows)s 行",
+    },
 }
 
 

@@ -440,3 +440,261 @@ def write_select_k_plot(png_path, table):
     canvas.save(png_path, dpi=(150, 150))
     if png_path.lower().endswith(".png"):
         canvas.save(os.path.splitext(png_path)[0] + ".pdf", "PDF", resolution=150.0)
+
+
+# Fixed canvas. The PDF uses the same Pillow save as the bar plot.
+FLOW_CANVAS = (960, 640)
+FLOW_FIGURE_TITLE = "membership weight"
+FLOW_NODE_CAPTION = "Node height is the mean membership of that column."
+FLOW_BAND_CAPTION = (
+    "Band thickness is weight times the destination column sum over the "
+    "rows used for that step, divided by all rows."
+)
+
+
+def _px(value):
+    """Nearest integer, half away from zero for positive values."""
+    return int(float(value) + 0.5)
+
+
+def _mix_white(h, keep=0.65):
+    rgb = hex_rgb(h)
+    mixed = []
+    for channel in rgb:
+        mixed.append(int(float(channel) * keep + 255.0 * (1.0 - keep) + 0.5))
+    return tuple(mixed)
+
+
+def _ink_on(h):
+    rgb = hex_rgb(h)
+    luma = 0.2126 * float(rgb[0]) + 0.7152 * float(rgb[1]) + 0.0722 * float(rgb[2])
+    if luma < 150.0:
+        return (255, 255, 255)
+    return (31, 41, 55)
+
+
+def flow_band_thickness(weight, masked_sum, n_all, scale):
+    """Return ``weight * masked_sum / n_all * scale``.
+
+    ``masked_sum`` is the destination column summed over the rows used
+    for that step. ``n_all`` is every row. Node height stays the all-row
+    mean times ``scale``. With every row used, ``masked_sum / n_all``
+    is that mean, so the thickness matches ``weight * mean * scale``.
+    """
+    n_all = int(n_all)
+    if n_all <= 0:
+        return 0.0
+    return float(weight) * float(masked_sum) / float(n_all) * float(scale)
+
+
+def _column_means(q):
+    """Mean of each column over every row. Non-finite or negative means are 0.
+
+    The bar draws every person, so the node height uses this mean
+    (sum over all rows, divided by the row count). Band thickness uses
+    ``flow_band_thickness`` and the masked sum. A negative mean is
+    drawn as height 0.
+    """
+    q = np.asarray(q, dtype=float)
+    if q.ndim != 2:
+        return []
+    n_rows, n_cols = q.shape
+    means = []
+    for c in range(int(n_cols)):
+        if n_rows == 0:
+            means.append(0.0)
+            continue
+        value = float(np.mean(q[:, c]))
+        if not np.isfinite(value) or value < 0.0:
+            value = 0.0
+        means.append(value)
+    return means
+
+
+def _flow_node_hex(hexes, k, c):
+    """Colour of aligned column ``c`` at K, else the bar palette."""
+    if hexes is not None and k in hexes and c < len(hexes[k]):
+        return hexes[k][c]
+    if c < len(PALETTE):
+        return PALETTE[c]
+    return hsv_hex(c)
+
+
+def _ribbon(x0, y0_top, y0_bot, x1, y1_top, y1_bot):
+    """One filled band. ``top`` is the smaller image y."""
+    def edge(y_start, y_end):
+        points = []
+        for step in range(17):
+            u = step / 16.0
+            smooth = u * u * (3.0 - 2.0 * u)
+            x = x0 + (x1 - x0) * u
+            y = y_start + (y_end - y_start) * smooth
+            points.append((_px(x), _px(y)))
+        return points
+
+    forward = edge(y0_top, y1_top)
+    backward = edge(y0_bot, y1_bot)
+    backward.reverse()
+    return forward + backward
+
+
+def _flow_canvas(aligned, edges, hexes):
+    """960 by 640 RGB canvas.
+
+    Node height is ``mean * scale``, with ``mean`` the all-row column
+    mean. Column 0 (label C1) sits at the bottom, matching the bar.
+    Bands are drawn for every edge. Thickness is ``flow_band_thickness``:
+    weight times the destination column sum over the rows used for that
+    step, divided by all rows, times ``scale``. Share weights that sum
+    to 1 fill the masked part of the node. With every row used, that
+    part is the node height. A thickness below half a pixel and above 0
+    is raised to 1 pixel so a positive tie stays visible. Bands stack
+    from the bottom of each node. Lower column index is closer to the
+    bottom. A stack that runs past the node is still drawn.
+    """
+    width, height = FLOW_CANVAS
+    canvas = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(canvas)
+    font = load_font(15)
+    font_s = load_font(13)
+    ink = (51, 51, 51)
+    left, right = 156, 800
+    top, bottom = 84, 500
+    gap = 4
+    node_w = 36
+    ks = sorted(aligned)
+    means = {k: _column_means(aligned[k]) for k in ks}
+    sums = [sum(cols) for cols in means.values()] or [0.0]
+    max_sum = max(sums)
+    n_cols = [len(cols) for cols in means.values()] or [0]
+    max_gaps = gap * max(0, max(n_cols) - 1)
+    usable = bottom - top
+    if max_sum <= 0.0:
+        scale = 0.0
+        gap_px = float(gap)
+    else:
+        room = usable - max_gaps
+        if room < 1.0:
+            gap_px = 0.0
+            room = float(usable)
+        else:
+            gap_px = float(gap)
+        scale = room / max_sum
+    if len(ks) <= 1:
+        centers = [(left + right) / 2.0] if ks else []
+    else:
+        span = float(right - left)
+        centers = [left + span * i / (len(ks) - 1) for i in range(len(ks))]
+    boxes = {}
+    for k, center in zip(ks, centers):
+        y = float(bottom)
+        boxes[k] = []
+        cols = means[k]
+        for index, mean in enumerate(cols):
+            h = mean * scale
+            y_bot = y
+            y_top = y - h
+            boxes[k].append((y_top, y_bot, mean, center))
+            if index < len(cols) - 1:
+                y = y_top - gap_px
+    draw.line([(96, top), (96, bottom)], fill=ink, width=1)
+    _paste_up(canvas, FLOW_FIGURE_TITLE, font, (ink[0], ink[1], ink[2], 255), 28, (top + bottom) / 2.0)
+    weight_of = {}
+    masked_of = {}
+    for edge in edges:
+        key = (
+            int(edge["K_from"]),
+            str(edge["col_from"]),
+            int(edge["K_to"]),
+            str(edge["col_to"]),
+        )
+        weight_of[key] = float(edge["weight"])
+        masked_of[key] = float(edge["dest_masked_sum"])
+    center_of = {k: center for k, center in zip(ks, centers)}
+    for k_from, k_to in zip(ks, ks[1:]):
+        src_boxes = boxes[k_from]
+        dst_boxes = boxes[k_to]
+        out_cursor = {s: src_boxes[s][1] for s in range(len(src_boxes))}
+        in_cursor = {c: dst_boxes[c][1] for c in range(len(dst_boxes))}
+        x0 = center_of[k_from] + node_w / 2.0
+        x1 = center_of[k_to] - node_w / 2.0
+        for s in range(len(src_boxes)):
+            for c in range(len(dst_boxes)):
+                label_from = "C%d" % (s + 1)
+                label_to = "C%d" % (c + 1)
+                key = (int(k_from), label_from, int(k_to), label_to)
+                value = weight_of.get(key, 0.0)
+                if value <= 0.0:
+                    continue
+                n_all = int(np.asarray(aligned[k_to]).shape[0])
+                thick = flow_band_thickness(value, masked_of[key], n_all, scale)
+                if 0.0 < thick < 0.5:
+                    thick = 1.0
+                if thick <= 0.0:
+                    continue
+                y0_bot = out_cursor[s]
+                y0_top = y0_bot - thick
+                out_cursor[s] = y0_top
+                y1_bot = in_cursor[c]
+                y1_top = y1_bot - thick
+                in_cursor[c] = y1_top
+                colour = _mix_white(_flow_node_hex(hexes, k_from, s))
+                draw.polygon(
+                    _ribbon(x0, y0_top, y0_bot, x1, y1_top, y1_bot),
+                    fill=colour,
+                )
+    for k, center in zip(ks, centers):
+        k_label = "K=%d" % int(k)
+        tw, th = text_wh(font, k_label)
+        draw.text((center - tw / 2.0, 36), k_label, font=font, fill=ink)
+        for c, (y_top, y_bot, mean, _center) in enumerate(boxes[k]):
+            colour = _flow_node_hex(hexes, k, c)
+            top_i = _px(y_top)
+            bot_i = _px(y_bot)
+            if bot_i <= top_i and mean > 0.0:
+                top_i = bot_i - 1
+            x_left = _px(center - node_w / 2.0)
+            x_right = _px(center + node_w / 2.0)
+            if bot_i > top_i:
+                rgb = tuple(int(channel) for channel in hex_rgb(colour))
+                draw.rectangle((x_left, top_i, x_right, bot_i), fill=rgb)
+            label = "C%d" % (c + 1)
+            lw, lh = text_wh(font_s, label)
+            if bot_i - top_i >= lh + 4:
+                tx = (x_left + x_right - lw) / 2.0
+                ty = (top_i + bot_i - lh) / 2.0
+                draw.text((tx, ty), label, font=font_s, fill=_ink_on(colour))
+            else:
+                tx = x_right + 4
+                ty = (top_i + bot_i - lh) / 2.0
+                draw.rectangle(
+                    (_px(tx) - 1, _px(ty) - 1, _px(tx + lw) + 1, _px(ty + lh) + 1),
+                    fill=(255, 255, 255),
+                )
+                draw.text((tx, ty), label, font=font_s, fill=ink)
+    draw.text((left, 524), FLOW_FIGURE_TITLE, font=font, fill=ink)
+    draw.text((left, 552), FLOW_NODE_CAPTION, font=font_s, fill=ink)
+    draw.text((left, 576), FLOW_BAND_CAPTION, font=font_s, fill=ink)
+    return canvas
+
+
+def write_cluster_flow_plot(png_path, aligned, edges, hexes=None):
+    """Write ``cluster_flow.png`` and, for a .png path, ``cluster_flow.pdf``.
+
+    The canvas is 960 by 640, white, RGB. Labels are ASCII. The axis
+    title and the legend title are both ``membership weight``. Node
+    height is the all-row column mean. Band thickness is
+    ``flow_band_thickness``. Node colours are ``hexes[k]``, the same
+    lists the bar plot uses. Without ``hexes``, columns take ``PALETTE``
+    and then ``hsv_hex``. The PDF save matches the bar plot: Pillow
+    ``resolution`` 150. Pillow is imported by this module; ``api.run``
+    imports this module on the call.
+    """
+    canvas = _flow_canvas(aligned, edges, hexes)
+    folder = os.path.dirname(os.path.abspath(png_path))
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    canvas.save(png_path, dpi=(150, 150))
+    if png_path.lower().endswith(".png"):
+        canvas.save(os.path.splitext(png_path)[0] + ".pdf", "PDF", resolution=150.0)
+    return png_path

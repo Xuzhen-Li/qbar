@@ -1203,6 +1203,8 @@ class DocstringTests(unittest.TestCase):
         documented in ``docs/cli.md`` and ``docs/factpacks/ST4.md``.
         ``--low-confidence-table`` is documented in ``docs/cli.md`` and
         ``docs/factpacks/ST3.md``.
+        ``--cluster-flow`` and ``--flow-weight`` are documented in
+        ``docs/cli.md`` and ``docs/factpacks/F7.md``.
         """
         import re
         # --select-k and --plateau-fraction are documented in docs/cli.md
@@ -1218,6 +1220,8 @@ class DocstringTests(unittest.TestCase):
         # docs/cli.md and docs/factpacks/ST4.md.
         # --low-confidence-table is documented in docs/cli.md and
         # docs/factpacks/ST3.md.
+        # --cluster-flow and --flow-weight are documented in docs/cli.md
+        # and docs/factpacks/F7.md.
         later = {
             "--provenance", "--q-format", "--ind", "--logs", "--logs-map",
             "--select-k", "--plateau-fraction",
@@ -1227,6 +1231,7 @@ class DocstringTests(unittest.TestCase):
             "--perm", "--perm-seed", "--perm-null",
             "--parent-ci", "--parent-alpha", "--parent-test",
             "--low-confidence-table",
+            "--cluster-flow", "--flow-weight",
         }
         flags = []
         for action in qbar.build_parser()._actions:
@@ -5644,6 +5649,528 @@ class LowConfidenceTests(unittest.TestCase):
                 "Warning: --low-confidence-table is unused because this run wrote no alignment report.",
             )
             self.assertFalse(os.path.exists(os.path.join(single, "align_report.txt")))
+
+
+def _pdf_without_dates(path):
+    """Drop Pillow CreationDate and ModDate, matching tools/compare_outputs.py."""
+    import re
+    with open(path, "rb") as handle:
+        data = handle.read()
+    return re.compile(br"/(?:CreationDate|ModDate)[ \t]+\([^)\r\n]*\)").sub(b"", data)
+
+
+def _hex_rgb(text):
+    h = text.strip().lstrip("#")
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+class ClusterFlowTests(unittest.TestCase):
+    def _indicators(self):
+        return np.array([
+            [1.0, 0.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [0.0, 1.0],
+        ])
+
+    def _run(self, prev, new, weight="share", meta=None, method="greedy", **kwargs):
+        from qbar.flow import cluster_flow
+        prev = np.asarray(prev, dtype=float)
+        new = np.asarray(new, dtype=float)
+        if meta is None:
+            meta = {3: {"mask": np.ones(prev.shape[0], dtype=bool)}}
+        return cluster_flow(
+            {2: prev, 3: new}, meta, method, weight, **kwargs,
+        )
+
+    def test_flow_module_has_no_module_level_pil_import(self):
+        import inspect
+        import qbar.flow as flow
+        from qbar.plot_static import write_cluster_flow_plot
+        with open(flow.__file__, encoding="utf-8") as handle:
+            blob = handle.read()
+        for line in blob.splitlines():
+            self.assertFalse(line.startswith("import PIL"))
+            self.assertFalse(line.startswith("from PIL"))
+        blob += inspect.getsource(write_cluster_flow_plot)
+        self.assertNotIn("\u2013", blob)
+        self.assertNotIn("\u2014", blob)
+        self.assertNotIn("descent", blob.lower())
+        self.assertNotIn("genealogy", blob.lower())
+        self.assertIn("membership weight", inspect.getsource(write_cluster_flow_plot))
+
+    def test_help_defaults_and_column_names(self):
+        parser = qbar.build_parser()
+        flow_flag = _cli_flag(parser, "--cluster-flow")
+        weight_flag = _cli_flag(parser, "--flow-weight")
+        self.assertEqual(flow_flag.default, "none")
+        self.assertEqual(weight_flag.default, "share")
+        self.assertEqual(list(flow_flag.choices), ["none", "sankey"])
+        self.assertEqual(list(weight_flag.choices), ["share", "jaccard"])
+        for flag in (flow_flag, weight_flag):
+            help_s = flag.help or ""
+            self.assertTrue(all(ord(ch) < 128 for ch in help_s))
+            self.assertNotIn("\u2013", help_s)
+            self.assertNotIn("\u2014", help_s)
+            self.assertNotIn("descent", help_s.lower())
+            self.assertNotIn("genealogy", help_s.lower())
+        self.assertIn("membership weight", flow_flag.help)
+        args = parser.parse_args(["--q", "x.Q", "--outdir", "o"])
+        self.assertEqual(args.cluster_flow, "none")
+        self.assertEqual(args.flow_weight, "share")
+        self.assertEqual(args.id_col, "analysis_IID")
+        self.assertEqual(args.group_col, "Dong_Grp")
+        zh = qbar.build_parser(language="zh")
+        zh_help = _cli_flag(zh, "--cluster-flow").help or ""
+        self.assertNotEqual(zh_help, flow_flag.help)
+        self.assertIn("成员权重", zh_help)
+        self.assertNotIn("\u2013", zh_help)
+        self.assertNotIn("\u2014", zh_help)
+
+    def test_block_column_one_edge_weight_one(self):
+        # Two blocks. Previous columns are indicators.
+        # New column (0.7, 0.7, 0, 0). Denominator 0.7+0.7+0+0 = 1.4.
+        # Column 0 numerator 0.7*1 + 0.7*1 + 0*0 + 0*0 = 1.4.
+        # Column 1 numerator 0.7*0 + 0.7*0 + 0*1 + 0*1 = 0.
+        # Shares (1, 0). One edge of weight 1.
+        from qbar.flow import FLOW_COLUMNS, write_cluster_flow_tsv
+        num0 = 0.7 * 1 + 0.7 * 1 + 0 * 0 + 0 * 0
+        num1 = 0.7 * 0 + 0.7 * 0 + 0 * 1 + 0 * 1
+        den = 0.7 + 0.7 + 0 + 0
+        self.assertEqual(num0 / den, 1.0)
+        self.assertEqual(num1 / den, 0.0)
+        new = np.array([[0.7], [0.7], [0.0], [0.0]])
+        edges = self._run(self._indicators(), new)
+        self.assertEqual(len(edges), 1)
+        self.assertEqual(edges[0]["col_from"], "C1")
+        self.assertEqual(edges[0]["col_to"], "C1")
+        self.assertEqual(edges[0]["weight"], 1.0)
+        self.assertEqual(edges[0]["weight_definition"], "share")
+        self.assertEqual(edges[0]["method"], "greedy")
+        self.assertEqual(edges[0]["low_confidence"], "NA")
+        self.assertEqual(edges[0]["K_from"], 2)
+        self.assertEqual(edges[0]["K_to"], 3)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "cluster_flow.tsv")
+            write_cluster_flow_tsv(path, edges)
+            with open(path, encoding="utf-8") as handle:
+                lines = handle.read().splitlines()
+        self.assertEqual(lines[0], "\t".join(FLOW_COLUMNS))
+        self.assertEqual(lines[1], "2\tC1\t3\tC1\t1.000000\tshare\tgreedy\tNA")
+        self.assertEqual(len(lines), 2)
+
+    def test_half_column_two_edges_of_weight_half(self):
+        # (0.5, 0, 0.5, 0) on the same indicators.
+        # num0 = 0.5*1 + 0*1 + 0.5*0 + 0*1 = 0.5
+        # num1 = 0.5*0 + 0*0 + 0.5*1 + 0*1 = 0.5
+        # den = 1. Two edges, 0.5 and 0.5. This is also a tie: both stay.
+        num0 = 0.5 * 1 + 0 * 1 + 0.5 * 0 + 0 * 1
+        num1 = 0.5 * 0 + 0 * 0 + 0.5 * 1 + 0 * 1
+        den = 0.5 + 0 + 0.5 + 0
+        self.assertEqual(num0 / den, 0.5)
+        self.assertEqual(num1 / den, 0.5)
+        self.assertEqual(num0 / den + num1 / den, 1.0)
+        new = np.array([[0.5], [0.0], [0.5], [0.0]])
+        edges = self._run(self._indicators(), new)
+        self.assertEqual(len(edges), 2)
+        self.assertEqual([edge["col_from"] for edge in edges], ["C1", "C2"])
+        self.assertEqual([edge["weight"] for edge in edges], [0.5, 0.5])
+        self.assertEqual(sum(edge["weight"] for edge in edges), 1.0)
+        # Previous masked rows are indicators, so each sums to 1.
+        self.assertTrue(np.all(self._indicators().sum(axis=1) == 1.0))
+
+    def test_destination_weights_sum_to_parent_shares(self):
+        # Previous rows are [0.4, 0.4], which sum to 0.8, not 1.
+        # New column is 1 on four rows. Denominator 4.
+        # Each source numerator is 4 * 1 * 0.4. Each share is 0.4.
+        # Edge weights sum to 0.8, the sum of the shares.
+        prev = np.array([[0.4, 0.4]] * 4)
+        new = np.array([[1.0]] * 4)
+        num = 4 * 1.0 * 0.4
+        den = 4 * 1.0
+        share = num / den
+        self.assertAlmostEqual(share + share, 0.8, places=6)
+        edges = self._run(prev, new)
+        self.assertEqual(len(edges), 2)
+        self.assertAlmostEqual(sum(edge["weight"] for edge in edges), share + share, places=6)
+        self.assertAlmostEqual(edges[0]["weight"], share, places=6)
+        self.assertAlmostEqual(edges[1]["weight"], share, places=6)
+
+    def test_merge_is_two_edges(self):
+        # One source carries weight 1 on two destination columns.
+        # Those are two edges. They are not collapsed to one parent.
+        prev = np.array([[1.0, 0.0]] * 4)
+        new = np.array([[0.7, 0.3]] * 4)
+        # dest 0: numerator 4 * 0.7 * 1, denominator 4 * 0.7, share 1 on C1.
+        # dest 1: numerator 4 * 0.3 * 1, denominator 4 * 0.3, share 1 on C1.
+        self.assertEqual((4 * 0.7 * 1) / (4 * 0.7), 1.0)
+        self.assertEqual((4 * 0.3 * 1) / (4 * 0.3), 1.0)
+        edges = self._run(prev, new)
+        self.assertEqual(len(edges), 2)
+        self.assertEqual([edge["col_from"] for edge in edges], ["C1", "C1"])
+        self.assertEqual([edge["col_to"] for edge in edges], ["C1", "C2"])
+        self.assertEqual([edge["weight"] for edge in edges], [1.0, 1.0])
+
+    def test_tie_keeps_both_edges(self):
+        # Equal shares 0.5 and 0.5. The lower index is not used to drop C2.
+        new = np.array([[0.5], [0.0], [0.5], [0.0]])
+        edges = self._run(self._indicators(), new)
+        self.assertEqual({edge["col_from"] for edge in edges}, {"C1", "C2"})
+        self.assertEqual(len(edges), 2)
+        self.assertNotEqual(len(edges), 1)
+
+    def test_zero_column_has_no_edges(self):
+        # A zero destination column emits no edges.
+        # The second column sums to 0. The first is the block column of weight 1.
+        new = np.array([
+            [0.7, 0.0],
+            [0.7, 0.0],
+            [0.0, 0.0],
+            [0.0, 0.0],
+        ])
+        edges = self._run(self._indicators(), new, weight="share")
+        self.assertEqual(len(edges), 1)
+        self.assertEqual(edges[0]["col_to"], "C1")
+        self.assertEqual(edges[0]["weight"], 1.0)
+        self.assertFalse(any(edge["col_to"] == "C2" for edge in edges))
+        # All-zero matrix. Dominant argmax would put every tied zero on
+        # column 0, so a Jaccard without the zero-column rule would be
+        # positive. Both weights emit nothing.
+        zeros = np.zeros((4, 2))
+        self.assertEqual(self._run(self._indicators(), zeros, weight="share"), [])
+        self.assertEqual(self._run(self._indicators(), zeros, weight="jaccard"), [])
+
+    def test_jaccard_matches_hand_sets(self):
+        # Dominant member sets, lowest index on a tie. No call to jaccard_matrix.
+        # prev C1 {0,1,4} C2 {2,3}
+        # new  C1 {0,4}   C2 {1,2,3}
+        # C1->C1 = |{0,4}| / |{0,1,4}| = 2/3
+        # C1->C2 = |{1}| / |{0,1,2,3,4}| = 1/5
+        # C2->C1 = 0
+        # C2->C2 = |{2,3}| / |{1,2,3}| = 2/3
+        prev = np.array([
+            [1.0, 0.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [0.0, 1.0],
+            [1.0, 0.0],
+        ])
+        new = np.array([
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [0.0, 1.0],
+            [0.0, 1.0],
+            [1.0, 0.0],
+        ])
+
+        def dominant(row):
+            best_i = 0
+            best_v = row[0]
+            for i in range(1, len(row)):
+                if row[i] > best_v:
+                    best_v = row[i]
+                    best_i = i
+            return best_i
+
+        prev_sets = [set(), set()]
+        new_sets = [set(), set()]
+        for i, row in enumerate(prev.tolist()):
+            prev_sets[dominant(row)].add(i)
+        for i, row in enumerate(new.tolist()):
+            new_sets[dominant(row)].add(i)
+        self.assertEqual(prev_sets, [{0, 1, 4}, {2, 3}])
+        self.assertEqual(new_sets, [{0, 4}, {1, 2, 3}])
+        hand = {}
+        for s, a in enumerate(prev_sets):
+            for c, b in enumerate(new_sets):
+                union = a | b
+                if not union:
+                    hand[(s, c)] = 0.0
+                else:
+                    hand[(s, c)] = len(a & b) / len(union)
+        self.assertEqual(hand[(0, 0)], 2.0 / 3.0)
+        self.assertEqual(hand[(0, 1)], 1.0 / 5.0)
+        self.assertEqual(hand[(1, 0)], 0.0)
+        self.assertEqual(hand[(1, 1)], 2.0 / 3.0)
+        edges = self._run(prev, new, weight="jaccard")
+        got = {(edge["col_from"], edge["col_to"]): edge["weight"] for edge in edges}
+        self.assertEqual(set(got), {("C1", "C1"), ("C1", "C2"), ("C2", "C2")})
+        self.assertEqual(got[("C1", "C1")], 2.0 / 3.0)
+        self.assertEqual(got[("C1", "C2")], 1.0 / 5.0)
+        self.assertEqual(got[("C2", "C2")], 2.0 / 3.0)
+        self.assertTrue(all(edge["weight_definition"] == "jaccard" for edge in edges))
+        from qbar.flow import write_cluster_flow_tsv
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "cluster_flow.tsv")
+            write_cluster_flow_tsv(path, edges)
+            with open(path, encoding="utf-8") as handle:
+                text = handle.read()
+        self.assertIn("0.666667", text)
+        self.assertIn("0.200000", text)
+
+    def test_jaccard_set_and_cut_change_the_edges(self):
+        # One row [0.6, 0.6]. Dominant keeps column 0, so one edge of weight 1.
+        # Threshold 0.5 keeps both columns, so four edges of weight 1.
+        # Threshold 0.7 keeps neither, so no edges.
+        row = np.array([[0.6, 0.6]])
+        dominant = self._run(row, row, weight="jaccard", jaccard_set="dominant", jaccard_cut=0.5)
+        self.assertEqual(len(dominant), 1)
+        self.assertEqual(dominant[0]["col_from"], "C1")
+        self.assertEqual(dominant[0]["col_to"], "C1")
+        self.assertEqual(dominant[0]["weight"], 1.0)
+        wide = self._run(row, row, weight="jaccard", jaccard_set="threshold", jaccard_cut=0.5)
+        self.assertEqual(len(wide), 4)
+        self.assertTrue(all(edge["weight"] == 1.0 for edge in wide))
+        high = self._run(row, row, weight="jaccard", jaccard_set="threshold", jaccard_cut=0.7)
+        self.assertEqual(high, [])
+
+    def test_mask_uses_the_report_rows(self):
+        # Mask keeps the first block only. (0.5, 0) over indicators is all column 0.
+        # num0 = 0.5 * 1, den = 0.5, share 1. The second block is outside the mask.
+        new = np.array([[0.5], [0.0], [0.5], [0.0]])
+        meta = {3: {"mask": np.array([True, True, False, False])}}
+        num0 = 0.5 * 1 + 0 * 1
+        den = 0.5 + 0
+        self.assertEqual(num0 / den, 1.0)
+        edges = self._run(self._indicators(), new, meta=meta)
+        self.assertEqual(len(edges), 1)
+        self.assertEqual(edges[0]["col_from"], "C1")
+        self.assertEqual(edges[0]["weight"], 1.0)
+
+    def test_low_confidence_follows_the_destination_column(self):
+        prev = np.array([[1.0, 0.0]] * 4)
+        new = np.array([[0.7, 0.3]] * 4)
+        report_rows = [
+            {"K_to": 2, "column": "C1", "low_confidence": "yes"},
+            {"K_to": 3, "column": "C1", "low_confidence": "no"},
+            {"K_to": 3, "column": "C1", "low_confidence": "yes"},
+            {"K_to": 3, "column": "C2", "low_confidence": "NA"},
+        ]
+        edges = self._run(prev, new, report_rows=report_rows)
+        by_dest = {edge["col_to"]: edge["low_confidence"] for edge in edges}
+        self.assertEqual(by_dest["C1"], "no")
+        self.assertEqual(by_dest["C2"], "NA")
+        plain = self._run(prev, new)
+        self.assertTrue(all(edge["low_confidence"] == "NA" for edge in plain))
+
+    def test_gap_matches_align_qs(self):
+        from qbar.flow import cluster_flow
+        from qbar.messages import text as msg
+        prev = self._indicators()
+        new = np.zeros((4, 4))
+        aligned = {2: prev, 4: new}
+        with self.assertRaises(SystemExit) as got:
+            cluster_flow(aligned, {}, "greedy", "share")
+        with self.assertRaises(SystemExit) as align:
+            qbar.align_qs(
+                {2: prev, 4: np.zeros((4, 4))},
+                ["A", "A", "A", "A"], "", "all", [], 0.75, True,
+            )
+        self.assertEqual(got.exception.code, align.exception.code)
+        self.assertEqual(got.exception.code, msg("k_gap", "en", k=3))
+        with self.assertRaises(SystemExit) as zh:
+            cluster_flow(aligned, {}, "greedy", "share", language="zh")
+        self.assertEqual(zh.exception.code, msg("k_gap", "zh", k=3))
+        self.assertEqual(cluster_flow({2: prev}, {}, "greedy", "share"), [])
+
+    def test_flow_weight_without_sankey_is_an_error(self):
+        with self.assertRaises(SystemExit) as ctx:
+            qbar.main([
+                "--q", "x.Q", "--outdir", "o", "--flow-weight", "jaccard",
+            ])
+        self.assertEqual(
+            ctx.exception.code,
+            "--flow-weight jaccard requires --cluster-flow sankey.",
+        )
+        with self.assertRaises(SystemExit) as zh:
+            qbar.main([
+                "--q", "x.Q", "--outdir", "o", "--language", "zh",
+                "--flow-weight", "jaccard",
+            ])
+        self.assertEqual(
+            zh.exception.code,
+            "--flow-weight jaccard 需要 --cluster-flow sankey。",
+        )
+
+    def _write_q(self, directory):
+        path2 = os.path.join(directory, "t.2.Q")
+        path3 = os.path.join(directory, "t.3.Q")
+        np.savetxt(path2, self._indicators(), fmt="%.6f")
+        np.savetxt(path3, [
+            [0.3, 0.0, 0.7],
+            [0.3, 0.0, 0.7],
+            [0.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ], fmt="%.6f")
+        ids = os.path.join(directory, "ids.txt")
+        with open(ids, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write("s0\ns1\ns2\ns3\n")
+        return path2, path3, ids
+
+    def test_cli_sankey_files_and_default_writes_none(self):
+        from qbar.plot_static import FLOW_CANVAS, FLOW_FIGURE_TITLE
+        header = (
+            "K_from\tcol_from\tK_to\tcol_to\tweight\t"
+            "weight_definition\tmethod\tlow_confidence"
+        )
+        # Identity alignment. Hand shares on the aligned columns:
+        # C1 (0.3, 0.3, 0, 0): all of the mass is on previous C1, weight 1.
+        # C2 (0, 0, 1, 1): all of the mass is on previous C2, weight 1.
+        # C3 (0.7, 0.7, 0, 0): all of the mass is on previous C1, weight 1.
+        # With --align-report, matched C1 and C2 are similarity 1, so "no".
+        # C3 is the new column, so the report flag is NA.
+        den1 = 0.3 + 0.3 + 0 + 0
+        self.assertEqual((0.3 + 0.3) / den1, 1.0)
+        self.assertEqual((1.0 + 1.0) / (1.0 + 1.0), 1.0)
+        self.assertEqual((0.7 + 0.7) / (0.7 + 0.7), 1.0)
+        expected = [
+            "2\tC1\t3\tC1\t1.000000\tshare\tgreedy\tno",
+            "2\tC2\t3\tC2\t1.000000\tshare\tgreedy\tno",
+            "2\tC1\t3\tC3\t1.000000\tshare\tgreedy\tNA",
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path2, path3, ids = self._write_q(tmp)
+            base = ["--q", path2, path3, "--ids", ids, "--align-report"]
+            out_a = os.path.join(tmp, "a")
+            out_b = os.path.join(tmp, "b")
+            sankey = base + ["--cluster-flow", "sankey", "--flow-weight", "share"]
+            self.assertEqual(qbar.main(sankey + ["--outdir", out_a]), 0)
+            self.assertEqual(qbar.main(sankey + ["--outdir", out_b]), 0)
+            tsv_a = os.path.join(out_a, "cluster_flow.tsv")
+            with open(tsv_a, encoding="utf-8") as handle:
+                lines = handle.read().splitlines()
+            self.assertEqual(lines[0], header)
+            self.assertEqual(lines[1:], expected)
+            with open(tsv_a, "rb") as handle:
+                tsv_bytes_a = handle.read()
+            with open(os.path.join(out_b, "cluster_flow.tsv"), "rb") as handle:
+                tsv_bytes_b = handle.read()
+            self.assertEqual(tsv_bytes_a, tsv_bytes_b)
+            png_a = os.path.join(out_a, "cluster_flow.png")
+            png_b = os.path.join(out_b, "cluster_flow.png")
+            pdf_a = os.path.join(out_a, "cluster_flow.pdf")
+            pdf_b = os.path.join(out_b, "cluster_flow.pdf")
+            with open(png_a, "rb") as handle:
+                png_bytes_a = handle.read()
+            with open(png_b, "rb") as handle:
+                png_bytes_b = handle.read()
+            self.assertEqual(png_bytes_a, png_bytes_b)
+            self.assertEqual(_pdf_without_dates(pdf_a), _pdf_without_dates(pdf_b))
+            with open(pdf_a, "rb") as handle:
+                self.assertTrue(handle.read().startswith(b"%PDF"))
+            for name in ("cluster_flow.html",):
+                self.assertFalse(os.path.exists(os.path.join(out_a, name)))
+            with Image.open(png_a) as img:
+                self.assertEqual(img.size, FLOW_CANVAS)
+                arr = np.asarray(img.convert("RGB"))
+            colours = []
+            for k in (2, 3):
+                with open(os.path.join(out_a, "perm_K%d.tsv" % k), encoding="utf-8") as handle:
+                    next(handle)
+                    for line in handle:
+                        colours.append(_hex_rgb(line.split("\t")[2]))
+            for rgb in colours:
+                self.assertTrue(
+                    (arr == np.array(rgb)).all(axis=2).any(),
+                    "missing bar colour %s" % (rgb,),
+                )
+            self.assertEqual(FLOW_FIGURE_TITLE, "membership weight")
+            plain = os.path.join(tmp, "plain")
+            self.assertEqual(qbar.main(base + [
+                "--cluster-flow", "none", "--flow-weight", "share", "--outdir", plain,
+            ]), 0)
+            for name in (
+                "cluster_flow.tsv", "cluster_flow.png", "cluster_flow.pdf",
+                "cluster_flow.html",
+            ):
+                self.assertFalse(os.path.exists(os.path.join(plain, name)))
+            jac = os.path.join(tmp, "jac")
+            self.assertEqual(qbar.main(base + [
+                "--cluster-flow", "sankey", "--flow-weight", "jaccard",
+                "--outdir", jac,
+            ]), 0)
+            with open(os.path.join(jac, "cluster_flow.tsv"), encoding="utf-8") as handle:
+                jac_lines = handle.read().splitlines()
+            self.assertEqual(jac_lines[0], header)
+            # Dominant sets on the identity alignment:
+            # previous C1 {0,1}, C2 {2,3}
+            # new C1 empty (0.3 loses to 0.7), C2 {2,3}, C3 {0,1}
+            # C1->C3 = 2/2 = 1, C2->C2 = 2/2 = 1, and C1 has no members.
+            self.assertEqual(jac_lines[1:], [
+                "2\tC2\t3\tC2\t1.000000\tjaccard\tgreedy\tno",
+                "2\tC1\t3\tC3\t1.000000\tjaccard\tgreedy\tNA",
+            ])
+
+    def test_masked_band_is_half_the_node_height(self):
+        # Four rows. Previous columns are indicators.
+        # New column (1, 0, 1, 0). Mask keeps the first two rows.
+        # Masked C1 numerator 1*1 + 0*1 = 1. Denominator 1+0 = 1. Weight 1.
+        # C2 numerator is 0. One edge.
+        # All-row sum 1+0+1+0 = 2. N_all = 4. Mean = 1/2.
+        # Masked sum 1+0 = 1.
+        # Thickness = 1 * 1 / 4 * scale. Node height = (1/2) * scale.
+        # Those are 10 and 20 when scale is 40, so the band is half the node.
+        new = np.array([[1.0], [0.0], [1.0], [0.0]])
+        meta = {3: {"mask": np.array([True, True, False, False])}}
+        num0 = 1.0 * 1.0 + 0.0 * 1.0
+        den = 1.0 + 0.0
+        self.assertEqual(num0 / den, 1.0)
+        edges = self._run(self._indicators(), new, meta=meta)
+        self.assertEqual(len(edges), 1)
+        self.assertEqual(edges[0]["col_from"], "C1")
+        self.assertEqual(edges[0]["col_to"], "C1")
+        self.assertEqual(edges[0]["weight"], 1.0)
+        self.assertEqual(edges[0]["dest_masked_sum"], 1.0)
+        from qbar.plot_static import flow_band_thickness
+        scale = 40.0
+        thick = flow_band_thickness(edges[0]["weight"], 1.0, 4, scale)
+        self.assertEqual(thick, 10.0)
+        self.assertEqual(thick, 20.0 / 2.0)
+        # Every row used: masked sum is 2, so thickness equals the node height.
+        self.assertEqual(flow_band_thickness(1.0, 2.0, 4, scale), 20.0)
+
+    def test_no_align_with_sankey_is_an_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path2, path3, ids = self._write_q(tmp)
+            with self.assertRaises(SystemExit) as ctx:
+                qbar.main([
+                    "--q", path2, path3, "--ids", ids, "--no-align",
+                    "--cluster-flow", "sankey",
+                    "--outdir", os.path.join(tmp, "out"),
+                ])
+            self.assertEqual(
+                ctx.exception.code,
+                "--cluster-flow sankey needs alignment across K; remove --no-align.",
+            )
+            with self.assertRaises(SystemExit) as zh:
+                qbar.main([
+                    "--q", path2, path3, "--ids", ids, "--no-align",
+                    "--cluster-flow", "sankey", "--language", "zh",
+                    "--outdir", os.path.join(tmp, "zh"),
+                ])
+            self.assertEqual(
+                zh.exception.code,
+                "--cluster-flow sankey 需要跨 K 对齐；去掉 --no-align。",
+            )
+
+    def test_no_align_gap_still_refuses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path2 = os.path.join(tmp, "t.2.Q")
+            path4 = os.path.join(tmp, "t.4.Q")
+            np.savetxt(path2, self._indicators(), fmt="%.6f")
+            np.savetxt(path4, np.full((4, 4), 0.25), fmt="%.6f")
+            ids = os.path.join(tmp, "ids.txt")
+            with open(ids, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("s0\ns1\ns2\ns3\n")
+            with self.assertRaises(SystemExit) as ctx:
+                qbar.main([
+                    "--q", path2, path4, "--ids", ids, "--no-align",
+                    "--cluster-flow", "sankey", "--outdir", os.path.join(tmp, "out"),
+                ])
+            self.assertEqual(
+                ctx.exception.code,
+                "Cross-K alignment requires consecutive K. Missing K=3",
+            )
 
 
 if __name__ == "__main__":
