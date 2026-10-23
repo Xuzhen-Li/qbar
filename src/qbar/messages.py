@@ -519,6 +519,38 @@ _CATALOG = {
         "en": "modes_for_k needs at least one matrix",
         "zh": "modes_for_k 至少需要一个矩阵",
     },
+    "help_bootstrap": {
+        "en": "Resample individuals with replacement this many times and write match_support.tsv. Default 0 writes no file.",
+        "zh": "按个体有放回重抽样这么多次，并写 match_support.tsv。默认 0，不写文件。",
+    },
+    "help_bootstrap_seed": {
+        "en": "Seed for --bootstrap. Used only when --bootstrap is greater than 0. Default 0.",
+        "zh": "--bootstrap 的种子。仅在 --bootstrap 大于 0 时使用。默认 0。",
+    },
+    "bootstrap_negative": {
+        "en": "--bootstrap must be an integer greater than or equal to 0, got %(n)s",
+        "zh": "--bootstrap 必须是大于或等于 0 的整数，收到 %(n)s",
+    },
+    "bootstrap_seed_negative": {
+        "en": "--bootstrap-seed must be an integer greater than or equal to 0, got %(seed)s",
+        "zh": "--bootstrap-seed 必须是大于或等于 0 的整数，收到 %(seed)s",
+    },
+    "bootstrap_replicate_failed": {
+        "en": "Bootstrap replicate %(n)s failed: %(detail)s",
+        "zh": "Bootstrap 第 %(n)s 次失败：%(detail)s",
+    },
+    "bootstrap_row_count": {
+        "en": "Bootstrap needs the same row count at every K",
+        "zh": "Bootstrap 要求每个 K 的行数相同",
+    },
+    "bootstrap_group_rows": {
+        "en": "Bootstrap expected %(rows)s group labels, got %(got)s",
+        "zh": "Bootstrap 需要 %(rows)s 个组名，收到 %(got)s",
+    },
+    "bootstrap_mask_shape": {
+        "en": "Bootstrap mask has %(got)s entries, expected %(rows)s rows",
+        "zh": "Bootstrap 掩码有 %(got)s 项，应为 %(rows)s 行",
+    },
 }
 
 

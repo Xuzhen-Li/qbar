@@ -1195,6 +1195,8 @@ class DocstringTests(unittest.TestCase):
         ``docs/cli.md`` and ``docs/factpacks/S1.md``.
         ``--align-compare`` is documented in ``docs/cli.md`` and
         ``docs/factpacks/F2e.md``.
+        ``--bootstrap`` and ``--bootstrap-seed`` are documented in
+        ``docs/cli.md`` and ``docs/factpacks/ST1.md``.
         """
         import re
         # --select-k and --plateau-fraction are documented in docs/cli.md
@@ -1202,11 +1204,14 @@ class DocstringTests(unittest.TestCase):
         # --replicates and --mode-sim-cut are documented in docs/cli.md
         # and docs/factpacks/S1.md.
         # --align-compare is documented in docs/cli.md and docs/factpacks/F2e.md.
+        # --bootstrap and --bootstrap-seed are documented in docs/cli.md
+        # and docs/factpacks/ST1.md.
         later = {
             "--provenance", "--q-format", "--ind", "--logs", "--logs-map",
             "--select-k", "--plateau-fraction",
             "--replicates", "--mode-sim-cut",
             "--align-compare",
+            "--bootstrap", "--bootstrap-seed",
         }
         flags = []
         for action in qbar.build_parser()._actions:
@@ -3940,6 +3945,365 @@ class AlignCompareTests(unittest.TestCase):
                 self.assertIn("clumppling-ilp was not compared: scipy import failed.", missing)
             finally:
                 so.milp = saved
+
+
+def _oracle_greedy_counts(q_by_k, n_boot, seed, groups=None, align_groups=None):
+    """Greedy resample counts. This does not call bootstrap_support.
+
+    Each replicate draws ``default_rng(seed).integers(0, n, size=n)`` and
+    reuses that index vector at every K. The match is ``_brute_greedy_perm``.
+    """
+    ks = sorted(q_by_k)
+    for left, right in zip(ks, ks[1:]):
+        if right != left + 1:
+            raise AssertionError("oracle fixture has a K gap")
+    n = int(np.asarray(q_by_k[ks[0]]).shape[0])
+    if groups is None:
+        groups = ["NA"] * n
+    else:
+        groups = list(groups)
+    chosen = list(align_groups or [])
+
+    def mask_of(group_list):
+        if chosen:
+            return np.array([item in set(chosen) for item in group_list])
+        return np.ones(len(group_list), dtype=bool)
+
+    def chain(qs, group_list):
+        mask = mask_of(group_list)
+        if not bool(mask.any()):
+            return None
+        perm = {ks[0]: list(range(int(np.asarray(qs[ks[0]]).shape[1])))}
+        aligned = {ks[0]: np.asarray(qs[ks[0]], dtype=float)}
+        for k in ks[:-1]:
+            nxt = np.asarray(qs[k + 1], dtype=float)
+            perm[k + 1] = _brute_greedy_perm(aligned[k], nxt, mask)
+            aligned[k + 1] = nxt[:, perm[k + 1]]
+        return perm
+
+    full = chain(q_by_k, groups)
+    if full is None:
+        raise AssertionError("full-data mask is empty")
+    n_same = {k: [0] * len(full[k]) for k in ks[1:]}
+    n_empty = 0
+    rng = np.random.default_rng(seed)
+    for _replicate in range(n_boot):
+        idx = rng.integers(0, n, size=n)
+        resampled = {k: np.asarray(q_by_k[k], dtype=float)[idx] for k in ks}
+        groups_b = [groups[int(i)] for i in idx]
+        got = chain(resampled, groups_b)
+        if got is None:
+            n_empty += 1
+            continue
+        for k in ks[1:]:
+            for c, raw in enumerate(got[k]):
+                if int(raw) == int(full[k][c]):
+                    n_same[k][c] += 1
+    return full, n_same, n_empty
+
+
+class BootstrapSupportTests(unittest.TestCase):
+    def test_help_and_defaults(self):
+        en = _cli_flag(qbar.build_parser(), "--bootstrap").help or ""
+        self.assertEqual(
+            en,
+            "Resample individuals with replacement this many times and write "
+            "match_support.tsv. Default 0 writes no file.",
+        )
+        self.assertTrue(all(ord(ch) < 128 for ch in en))
+        zh = _cli_flag(qbar.build_parser(language="zh"), "--bootstrap").help or ""
+        self.assertEqual(
+            zh,
+            "按个体有放回重抽样这么多次，并写 match_support.tsv。默认 0，不写文件。",
+        )
+        en_seed = _cli_flag(qbar.build_parser(), "--bootstrap-seed").help or ""
+        self.assertEqual(
+            en_seed,
+            "Seed for --bootstrap. Used only when --bootstrap is greater than 0. Default 0.",
+        )
+        self.assertTrue(all(ord(ch) < 128 for ch in en_seed))
+        zh_seed = _cli_flag(qbar.build_parser(language="zh"), "--bootstrap-seed").help or ""
+        self.assertEqual(
+            zh_seed,
+            "--bootstrap 的种子。仅在 --bootstrap 大于 0 时使用。默认 0。",
+        )
+        parser = qbar.build_parser()
+        args = parser.parse_args(["--q", "x.Q", "--outdir", "o"])
+        self.assertEqual(args.bootstrap, 0)
+        self.assertEqual(args.bootstrap_seed, 0)
+        self.assertEqual(_cli_flag(parser, "--id-col").default, "analysis_IID")
+        self.assertEqual(_cli_flag(parser, "--group-col").default, "Dong_Grp")
+
+    def _block_pair(self):
+        q2 = np.vstack([
+            np.tile([1.0, 0.0], (4, 1)),
+            np.tile([0.0, 1.0], (4, 1)),
+        ])
+        q3 = np.vstack([
+            np.tile([1.0, 0.0, 0.0], (4, 1)),
+            np.tile([0.0, 1.0, 0.0], (4, 1)),
+        ])
+        return {2: q2, 3: q3}
+
+    def _identical_pair(self):
+        q2 = np.array([
+            [0.95, 0.05],
+            [0.80, 0.20],
+            [0.70, 0.30],
+            [0.55, 0.45],
+            [0.40, 0.60],
+            [0.25, 0.75],
+            [0.10, 0.90],
+            [0.60, 0.40],
+        ], dtype=float)
+        q3 = np.array([
+            [0.90, 0.70, 0.70],
+            [0.20, 0.85, 0.85],
+            [0.75, 0.30, 0.30],
+            [0.10, 0.60, 0.60],
+            [0.65, 0.15, 0.15],
+            [0.30, 0.95, 0.95],
+            [0.85, 0.05, 0.05],
+            [0.15, 0.50, 0.50],
+        ], dtype=float)
+        return {2: q2, 3: q3}
+
+    def _assert_rows_match_oracle(self, rows, q_by_k, n_boot, seed, groups=None, align_groups=None):
+        full, n_same, n_empty = _oracle_greedy_counts(
+            q_by_k, n_boot, seed, groups=groups, align_groups=align_groups,
+        )
+        ks = sorted(q_by_k)
+        expected_n = sum(len(full[k]) for k in ks[1:])
+        self.assertEqual(len(rows), expected_n)
+        index = 0
+        for k in ks[1:]:
+            for c, raw in enumerate(full[k]):
+                row = rows[index]
+                index += 1
+                self.assertEqual(row["K_to"], k)
+                self.assertEqual(row["aligned_column"], "C%d" % (c + 1))
+                self.assertEqual(row["raw_column"], int(raw) + 1)
+                self.assertEqual(row["n_boot"], n_boot)
+                self.assertEqual(row["n_same"], n_same[k][c])
+                self.assertEqual(row["support"], n_same[k][c] / float(n_boot))
+                self.assertEqual(row["seed"], seed)
+                self.assertEqual(row["method"], "greedy")
+                self.assertEqual(row["n_empty_mask"], n_empty)
+        return full, n_same, n_empty
+
+    def test_block_diagonal_support_is_one(self):
+        from qbar.bootstrap import bootstrap_support
+        q_by_k = self._block_pair()
+        n_boot = 20
+        seed = 0
+        rows = bootstrap_support(q_by_k, "greedy", n_boot, seed)
+        _full, n_same, n_empty = self._assert_rows_match_oracle(rows, q_by_k, n_boot, seed)
+        self.assertEqual(n_empty, 0)
+        for counts in n_same.values():
+            for count in counts:
+                self.assertEqual(count, n_boot)
+        self.assertEqual([row["aligned_column"] for row in rows], ["C1", "C2", "C3"])
+        for row in rows:
+            self.assertEqual(row["support"], 1.0)
+            self.assertEqual(row["n_same"], n_boot)
+
+    def test_identical_columns_match_resample_oracle(self):
+        from qbar.bootstrap import bootstrap_support
+        q_by_k = self._identical_pair()
+        q3 = q_by_k[3]
+        self.assertTrue(np.allclose(q3[:, 1], q3[:, 2]))
+        n_boot = 40
+        seed = 0
+        rows = bootstrap_support(q_by_k, "greedy", n_boot, seed)
+        _full, n_same, n_empty = self._assert_rows_match_oracle(rows, q_by_k, n_boot, seed)
+        self.assertEqual(n_empty, 0)
+        fractional = [
+            count for counts in n_same.values() for count in counts
+            if 0 < count < n_boot
+        ]
+        self.assertTrue(fractional)
+
+    def test_seed_zero_is_repeatable(self):
+        from qbar.bootstrap import bootstrap_support
+        q_by_k = self._identical_pair()
+        first = bootstrap_support(q_by_k, "greedy", 15, 0)
+        second = bootstrap_support(q_by_k, "greedy", 15, 0)
+        self.assertEqual(first, second)
+        self.assertTrue(first)
+        self.assertEqual(first[0]["seed"], 0)
+
+    def test_one_replicate_support_is_zero_or_one(self):
+        from qbar.bootstrap import bootstrap_support
+        rows = bootstrap_support(self._block_pair(), "greedy", 1, 0)
+        self.assertTrue(rows)
+        for row in rows:
+            self.assertEqual(row["n_boot"], 1)
+            self.assertIn(row["n_same"], (0, 1))
+            self.assertIn(row["support"], (0.0, 1.0))
+
+    def test_empty_mask_is_counted(self):
+        from qbar.bootstrap import bootstrap_support
+        q2 = np.array([
+            [1.0, 0.0],
+            [0.9, 0.1],
+            [0.0, 1.0],
+            [0.0, 0.8],
+            [0.2, 0.8],
+            [0.1, 0.9],
+        ], dtype=float)
+        q3 = np.array([
+            [1.0, 0.0, 0.0],
+            [0.9, 0.0, 0.1],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.8, 0.2],
+            [0.0, 0.7, 0.3],
+            [0.1, 0.0, 0.9],
+        ], dtype=float)
+        q_by_k = {2: q2, 3: q3}
+        groups = ["A", "A", "B", "B", "B", "B"]
+        n_boot = 40
+        seed = 0
+        rows = bootstrap_support(
+            q_by_k, "greedy", n_boot, seed, groups=groups, align_groups=["A"],
+        )
+        _full, _n_same, n_empty = self._assert_rows_match_oracle(
+            rows, q_by_k, n_boot, seed, groups=groups, align_groups=["A"],
+        )
+        self.assertGreater(n_empty, 0)
+        for row in rows:
+            self.assertEqual(row["n_empty_mask"], n_empty)
+            self.assertLessEqual(row["n_same"], n_boot - n_empty)
+
+    def test_negative_bootstrap_errors(self):
+        from qbar.bootstrap import bootstrap_support
+        with self.assertRaises(SystemExit) as ctx:
+            bootstrap_support({}, "greedy", -3, 0)
+        self.assertEqual(
+            str(ctx.exception),
+            "--bootstrap must be an integer greater than or equal to 0, got -3",
+        )
+        with self.assertRaises(SystemExit) as ctx_seed:
+            bootstrap_support({}, "greedy", 1, -4)
+        self.assertEqual(
+            str(ctx_seed.exception),
+            "--bootstrap-seed must be an integer greater than or equal to 0, got -4",
+        )
+        self.assertEqual(bootstrap_support(self._block_pair(), "greedy", 0, -1), [])
+        with self.assertRaises(SystemExit) as ctx_cli:
+            qbar.main(["--q", "missing.Q", "--outdir", "o", "--bootstrap", "-1"])
+        self.assertEqual(
+            str(ctx_cli.exception),
+            "--bootstrap must be an integer greater than or equal to 0, got -1",
+        )
+        with self.assertRaises(SystemExit) as ctx_zh:
+            qbar.main([
+                "--q", "missing.Q", "--outdir", "o", "--bootstrap", "-2", "--language", "zh",
+            ])
+        self.assertEqual(
+            str(ctx_zh.exception),
+            "--bootstrap 必须是大于或等于 0 的整数，收到 -2",
+        )
+
+    def test_bootstrap_zero_writes_no_file(self):
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+        q_by_k = self._block_pair()
+        with tempfile.TemporaryDirectory() as tmp:
+            path2 = os.path.join(tmp, "t.2.Q")
+            path3 = os.path.join(tmp, "t.3.Q")
+            np.savetxt(path2, q_by_k[2], fmt="%.6f")
+            np.savetxt(path3, q_by_k[3], fmt="%.6f")
+            ids = os.path.join(tmp, "ids.txt")
+            with open(ids, "w", encoding="utf-8") as handle:
+                handle.write("".join("s%d\n" % i for i in range(q_by_k[2].shape[0])))
+            plain = os.path.join(tmp, "plain")
+            zero = os.path.join(tmp, "zero")
+            base = ["--q", path2, path3, "--ids", ids]
+            out_plain, err_plain = io.StringIO(), io.StringIO()
+            out_zero, err_zero = io.StringIO(), io.StringIO()
+            with redirect_stdout(out_plain), redirect_stderr(err_plain):
+                qbar.main(base + ["--outdir", plain])
+            with redirect_stdout(out_zero), redirect_stderr(err_zero):
+                qbar.main(base + [
+                    "--bootstrap", "0", "--bootstrap-seed", "-1", "--outdir", zero,
+                ])
+            self.assertFalse(os.path.exists(os.path.join(plain, "match_support.tsv")))
+            self.assertFalse(os.path.exists(os.path.join(zero, "match_support.tsv")))
+            self.assertEqual(err_plain.getvalue(), err_zero.getvalue())
+            for name in ("align.tsv", "perm_K2.tsv", "perm_K3.tsv", "order.tsv"):
+                with open(os.path.join(plain, name), "rb") as handle:
+                    left = handle.read()
+                with open(os.path.join(zero, name), "rb") as handle:
+                    right = handle.read()
+                self.assertEqual(left, right, name)
+
+    def test_cli_writes_match_support_header(self):
+        q_by_k = self._block_pair()
+        with tempfile.TemporaryDirectory() as tmp:
+            path2 = os.path.join(tmp, "t.2.Q")
+            path3 = os.path.join(tmp, "t.3.Q")
+            np.savetxt(path2, q_by_k[2], fmt="%.6f")
+            np.savetxt(path3, q_by_k[3], fmt="%.6f")
+            ids = os.path.join(tmp, "ids.txt")
+            with open(ids, "w", encoding="utf-8") as handle:
+                handle.write("".join("s%d\n" % i for i in range(q_by_k[2].shape[0])))
+            out = os.path.join(tmp, "out")
+            qbar.main([
+                "--q", path2, path3, "--ids", ids, "--outdir", out, "--bootstrap", "3",
+            ])
+            path = os.path.join(out, "match_support.tsv")
+            self.assertTrue(os.path.isfile(path))
+            with open(path, encoding="utf-8") as handle:
+                lines = handle.read().splitlines()
+            self.assertEqual(
+                lines[0].split("\t"),
+                [
+                    "K_to", "aligned_column", "raw_column", "n_boot", "n_same",
+                    "support", "seed", "method", "n_empty_mask",
+                ],
+            )
+            body = [line.split("\t") for line in lines[1:]]
+            self.assertEqual([row[1] for row in body], ["C1", "C2", "C3"])
+            for row in body:
+                self.assertEqual(len(row), 9)
+                self.assertEqual(row[0], "3")
+                self.assertEqual(row[3], "3")
+                self.assertEqual(row[5], "%.6f" % (int(row[4]) / float(row[3])))
+                self.assertEqual(row[6], "0")
+                self.assertEqual(row[7], "greedy")
+
+    def test_anchor_missing_in_a_replicate_stops(self):
+        from qbar.bootstrap import bootstrap_support
+        q2 = np.array([
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [0.2, 0.8],
+            [0.3, 0.7],
+            [0.4, 0.6],
+        ], dtype=float)
+        q3 = np.array([
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.8, 0.2],
+            [0.0, 0.7, 0.3],
+            [0.1, 0.2, 0.7],
+        ], dtype=float)
+        groups = ["A", "B", "B", "B", "B"]
+        n = len(groups)
+        found = None
+        for seed in range(30):
+            idx = np.random.default_rng(seed).integers(0, n, size=n)
+            if "A" not in [groups[int(i)] for i in idx]:
+                found = seed
+                break
+        self.assertIsNotNone(found)
+        with self.assertRaises(SystemExit) as ctx:
+            bootstrap_support(
+                {2: q2, 3: q3}, "greedy", 1, found, groups=groups, anchor="A",
+            )
+        message = str(ctx.exception)
+        self.assertIn("Bootstrap replicate 1 failed:", message)
+        self.assertIn("Anchor group A has no one in the samples", message)
 
 
 if __name__ == "__main__":
