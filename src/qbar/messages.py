@@ -647,6 +647,70 @@ _CATALOG = {
         "en": "Parent-share interval expected %(n)s bootstrap index vectors, got %(got)s",
         "zh": "父列份额区间需要 %(n)s 个 bootstrap 行下标，收到 %(got)s",
     },
+    "help_low_confidence_table": {
+        "en": "TSV with columns method, cut, precision, recall, n_matches, and split. With --align-report, copy those rows for the active align method onto the end of align_report.txt. Does not change the low-confidence cut.",
+        "zh": "含 method、cut、precision、recall、n_matches、split 列的 TSV。与 --align-report 一起用时，把当前对齐方法的行抄到 align_report.txt 末尾。不改变低置信阈值。",
+    },
+    "lowconf_not_found": {
+        "en": "--low-confidence-table file not found: %(path)s",
+        "zh": "--low-confidence-table 文件不存在：%(path)s",
+    },
+    "lowconf_encoding": {
+        "en": "--low-confidence-table is not UTF-8: %(path)s",
+        "zh": "--low-confidence-table 不是 UTF-8：%(path)s",
+    },
+    "lowconf_no_header": {
+        "en": "--low-confidence-table has no header: %(path)s",
+        "zh": "--low-confidence-table 没有表头：%(path)s",
+    },
+    "lowconf_blank_column": {
+        "en": "--low-confidence-table has a blank column name",
+        "zh": "--low-confidence-table 有空的列名",
+    },
+    "lowconf_duplicate_column": {
+        "en": "--low-confidence-table repeats column %(column)s",
+        "zh": "--low-confidence-table 列 %(column)s 重复",
+    },
+    "lowconf_missing": {
+        "en": "--low-confidence-table is missing columns: %(columns)s",
+        "zh": "--low-confidence-table 缺少列：%(columns)s",
+    },
+    "lowconf_row_width": {
+        "en": "--low-confidence-table row %(row)s has %(got)s fields and the header has %(want)s",
+        "zh": "--low-confidence-table 第 %(row)s 行有 %(got)s 列，表头有 %(want)s 列",
+    },
+    "lowconf_empty_method": {
+        "en": "--low-confidence-table row %(row)s has an empty method",
+        "zh": "--low-confidence-table 第 %(row)s 行的 method 为空",
+    },
+    "lowconf_bad_number": {
+        "en": "--low-confidence-table row %(row)s column %(column)s is not a number: %(value)s",
+        "zh": "--low-confidence-table 第 %(row)s 行的 %(column)s 不是数字：%(value)s",
+    },
+    "lowconf_unused": {
+        "en": "Warning: --low-confidence-table is unused without --align-report.",
+        "zh": "注意：没有 --align-report 时不使用 --low-confidence-table。",
+    },
+    "lowconf_no_report": {
+        "en": "Warning: --low-confidence-table is unused because this run wrote no alignment report.",
+        "zh": "注意：这次没有写对齐报告，所以不使用 --low-confidence-table。",
+    },
+    "lowconf_block_note": {
+        "en": "Copied rows for this align method. These rows do not change the low-confidence cut used above.",
+        "zh": "当前对齐方法的抄录行。这些行不改变上面使用的低置信阈值。",
+    },
+    "lowconf_method_missing": {
+        "en": "Warning: --low-confidence-table has no rows for method %(method)s. The low-confidence cut is unchanged.",
+        "zh": "注意：--low-confidence-table 没有方法 %(method)s 的行。低置信阈值不变。",
+    },
+    "lowconf_length": {
+        "en": "score_matches needs equal-length boolean sequences, got %(pred)s and %(truth)s",
+        "zh": "score_matches 需要等长布尔序列，收到 %(pred)s 和 %(truth)s",
+    },
+    "lowconf_not_bool": {
+        "en": "score_matches needs boolean values, got %(value)s",
+        "zh": "score_matches 需要布尔值，收到 %(value)s",
+    },
 }
 
 
