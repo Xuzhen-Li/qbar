@@ -32,6 +32,7 @@ The package version is 0.2.0.dev0. No git tag exists.
 
 ### Changed
 
+- Help and errors are English. `--language zh` selects the previous Chinese text. Column-name defaults are unchanged.
 - Implementation is split into modules `io`, `align`, `order`, `report`, `plot_static`, `api`, and `cli`. Outputs are unchanged.
 - An --ids line with more than one whitespace-separated token still uses the first token as the ID. qbar warns on stderr with how many lines did that, and shows the first example. Output files are unchanged (584b084).
 - A directory given to --q now includes lowercase .q files as well as .Q files. .Q files stay in the same sorted order, and the same file is not added twice (6471e3b).

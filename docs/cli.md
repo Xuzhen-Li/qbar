@@ -2,13 +2,13 @@
 
 Generated from `build_parser()`. The option text below is the help string the program ships. It is copied, not rewritten.
 
-读 ADMIXTURE 的 Q，按指定规则排人，跨 K 对齐列，写出结构条形图。
+Read an ADMIXTURE Q matrix, order people by the rules you set, align columns across K, and write a structure bar plot.
 
 ## Notes
 
-排序：--order-file 用你给的名单；否则按 --blocks 的组序分块，组内用 --within。
-组内 iid=名字，q=该组占比最高的那一列从高到低，hclust=平均连锁、距离 1−Pearson，input=Q 里的原顺序。
-多个 K 默认做 Pearson 贪心对齐，新列放在最上面。--no-align 保持每个 Q 自己的列顺序；若同时给了 --anchor-group，每个 K 仍把该组最纯的人的主列放到 C1。
+Order: --order-file uses the list you give; otherwise groups are blocked in the --blocks order, and --within orders people inside each group.
+Inside a group, iid sorts by name, q sorts the column with the highest share in that group from high to low, hclust uses average linkage and distance 1-Pearson, and input keeps the original order in the Q file.
+With more than one K, greedy is the default align method. The match is Pearson greedy alignment, and the new column is placed at the top. --no-align keeps each Q file's own column order; if --anchor-group is also set, every K still places that group's purest person's main column at C1.
 
 ## Options
 
@@ -18,7 +18,7 @@ show this help message and exit
 
 ### `--q`
 
-一个或多个矩阵文件，或带引号的通配符，或一个目录。默认读取 .Q 和 .q。目录里读哪些扩展名由 --q-format 决定。文件内容是空白分隔的数字。
+One or more matrix files, a quoted wildcard, or a directory. The default reads .Q and .q. Which extensions a directory reads is set by --q-format. File contents are whitespace-separated numbers.
 
 - Required: yes
 - Arguments: +
@@ -26,32 +26,32 @@ show this help message and exit
 
 ### `--q-format`
 
-指定读取的矩阵排版
+Matrix layout to read
 
 - Choices: admixture, meanq, qopt
 - Default: admixture
 
 ### `--fam`
 
-PLINK .fam，IID 在第 2 列，行序与 Q 相同
+PLINK .fam, IID in column 2, row order matches Q
 
 - Default: not set
 
 ### `--ids`
 
-一行一个 IID，行序与 Q 相同。与 --fam、--ind 只能留一个。多出来的字段只保留第一个，并在 stderr 警告
+One IID per line, row order matches Q. Keep only one of --fam, --ids, and --ind. Extra fields keep only the first token, and a warning is written to stderr
 
 - Default: not set
 
 ### `--ind`
 
-EIGENSTRAT 的 .ind，三列，样本号在第 1 列
+EIGENSTRAT .ind, three columns, sample id in column 1
 
 - Default: not set
 
 ### `--groups`
 
-分组表，tsv 或 csv，要有表头
+Group table, tsv or csv, with a header
 
 - Default: not set
 
@@ -65,77 +65,77 @@ EIGENSTRAT 的 .ind，三列，样本号在第 1 列
 
 ### `--blocks`
 
-组的从左到右顺序，逗号分隔。组名不能含逗号，否则会被拆开。没写到的组按名字接在后面
+Left-to-right group order, comma-separated. A group name cannot contain a comma, or it will be split. Groups that are not listed are appended by name
 
 - Default: ""
 
 ### `--rest-name`
 
-分组为空的人用这个名字。默认 NA
+Name used for a person whose group is empty. Default NA
 
 - Default: NA
 
 ### `--within`
 
-每一组内部怎么排。默认 iid
+How to order people inside each group. Default iid
 
 - Choices: iid, q, hclust, input
 - Default: iid
 
 ### `--within-group`
 
-单独改某一组，例如 NA=hclust。可重复
+Set one group, for example NA=hclust. Repeatable
 
 - Default: []
 
 ### `--order-file`
 
-一行一个 IID，这就是从左到右的顺序。给了它就不再用 --blocks
+One IID per line. That list is the left-to-right order. When this is set, --blocks is not used
 
 - Default: not set
 
 ### `--sort-k`
 
-按组分排序时用哪个 K。默认最大的 K
+Which K to use when sorting by ancestry share. Default is the largest K
 
 - Default: not set
 
 ### `--sort-col`
 
-所有按 q 排序的组都用这一列（从 1 数）。不给就每组用自己占比最高的列
+Every q-sorted group uses this column (counted from 1). If omitted, each group uses the column where its share is highest
 
 - Default: not set
 
 ### `--hclust-k`
 
-hclust 用哪个 K。默认与 --sort-k 相同
+Which K hclust uses. Default matches --sort-k
 
 - Default: not set
 
 ### `--hclust-dist`
 
-hclust 距离。默认 correlation（1−Pearson）
+hclust distance. Default correlation (1-Pearson)
 
 - Choices: correlation, euclidean, braycurtis
 - Default: correlation
 
 ### `--hclust-linkage`
 
-hclust 连锁法。默认 average。ward 只能配 euclidean
+hclust linkage. Default average. ward requires euclidean
 
 - Choices: average, ward, complete
 - Default: average
 
 ### `--hclust-pre`
 
-dominant=组内先按每人最高的列分小块（C1、C2…顺序），块内再 hclust。默认 none
+dominant first splits each group by each person's highest column (order C1, C2, ...), then runs hclust inside each block. Default none
 
 - Choices: none, dominant
 - Default: none
 
 ### `--hclust-olo`
 
-叶序用 scipy optimal_leaf_ordering
+Order leaves with scipy optimal_leaf_ordering
 
 - Default: false
 
@@ -149,70 +149,70 @@ dominant=组内先按每人最高的列分小块（C1、C2…顺序），块内�
 
 ### `--align-mode`
 
-all=掩码内所有人参与对齐，greedy、hungarian、pong、jaccard 用同一批人。Pearson 只用于 greedy 和 hungarian。core=只留相邻两个 K 的 qmax 都严格大于 --qmax 的人；某一组没有人超过时，留下该组在较低 K 上最纯的一个人
+all: everyone in the mask is used for alignment, and greedy, hungarian, pong, and jaccard use the same people. Pearson is used only for greedy and hungarian. core: keep only people whose qmax is strictly greater than --qmax at both adjacent K; if a group has nobody above that cut, keep that group's purest person at the lower K
 
 - Choices: all, core
 - Default: all
 
 ### `--align-method`
 
-greedy=按列顺序逐列取 Pearson 最高的未用列（默认）。hungarian=Pearson 总和最大的一一匹配。pong=允许上一 K 的一列拆成两列（Behr 2016），align.tsv 第三列为 pong 相似度并多一列 split_parent。jaccard=按人的集合算 Jaccard 后一一匹配，见 --jaccard-set
+greedy takes the unused column with the highest Pearson value, one old column at a time (default). hungarian is the one-to-one match with the largest sum of Pearson values. pong allows one column from the previous K to split into two (Behr 2016); column 3 of align.tsv is the pong similarity and an extra split_parent column is written. jaccard matches one-to-one on sets of people; see --jaccard-set
 
 - Choices: greedy, hungarian, pong, jaccard
 - Default: greedy
 
 ### `--jaccard-set`
 
-jaccard 用的集合：dominant=该列是此人最高的列；threshold=此人该列 >= --jaccard-cut。默认 dominant
+Set used by jaccard. dominant: this column is the person's highest column. threshold: this person's value in the column is >= --jaccard-cut. Default dominant
 
 - Choices: dominant, threshold
 - Default: dominant
 
 ### `--jaccard-cut`
 
-threshold 集合的阈值。默认 0.5
+Cutoff for the threshold set. Default 0.5
 
 - Default: 0.5
 
 ### `--align-report`
 
-另写 align_report.tsv 和 align_report.txt
+Also write align_report.tsv and align_report.txt
 
 - Default: false
 
 ### `--align-report-low`
 
-低置信阈值。默认 greedy/hungarian/jaccard 0.5，pong 0.8
+Low-confidence cutoff. Default 0.5 for greedy/hungarian/jaccard, and 0.8 for pong
 
 - Default: not set
 
 ### `--align-groups`
 
-参与对齐的组，逗号分隔。core 模式必填
+Groups that take part in alignment, comma-separated. Required for core mode
 
 - Default: ""
 
 ### `--qmax`
 
-core 模式的 qmax 阈值。默认 0.75
+qmax cutoff for core mode. Default 0.75
 
 - Default: 0.75
 
 ### `--anchor-group`
 
-对齐时只改最低 K，把这个组最纯的人的主列放到 C1。--no-align 或只有一个 K 时，每个 K 都这样做。
+When aligning, only the lowest K changes: that group's purest person's main column is placed at C1. With --no-align, or when there is only one K, every K does this.
 
 - Default: ""
 
 ### `--color`
 
-组名=#rrggbb 或 C3=#rrggbb，在第一个等号处分开。组名不能含等号。可重复
+group=#rrggbb or C3=#rrggbb, split at the first equals sign. A group name cannot contain an equals sign. Repeatable
 
 - Default: []
 
 ### `--color-file`
 
-两列：名字 #rrggbb
+Two columns: name and #rrggbb
 
 - Default: not set
 
@@ -222,13 +222,13 @@ core 模式的 qmax 阈值。默认 0.75
 
 ### `--width`
 
-条形图宽度，像素
+Bar plot width, in pixels
 
 - Default: 2200
 
 ### `--bar-height`
 
-每一行条的高度。单个 K 默认 220，多个 K 默认 120
+Height of each bar row. Default 220 for a single K, and 120 when there is more than one K
 
 - Default: 0
 
@@ -239,6 +239,13 @@ core 模式的 qmax 阈值。默认 0.75
 
 ### `--provenance`
 
-另写 run.json，记下版本、选项、输入哈希和依赖版本
+Also write run.json, recording the version, options, input hashes, and dependency versions
 
 - Default: false
+
+### `--language`
+
+Language for help, errors, and warnings. en or zh
+
+- Choices: en, zh
+- Default: en
