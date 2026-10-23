@@ -347,3 +347,17 @@ Two-sided alpha for --parent-ci. Default 0.05. Must be greater than 0 and less t
 Add a residual test of one parent versus two to parent_share_ci.tsv. Off by default. Requires --perm greater than 0. Uses --perm and --perm-seed.
 
 - Default: false
+
+### `--cluster-flow`
+
+Write cluster_flow.tsv, cluster_flow.png, and cluster_flow.pdf. none writes nothing. sankey draws membership weight between aligned columns at consecutive K. Default none.
+
+- Choices: none, sankey
+- Default: none
+
+### `--flow-weight`
+
+Edge weight used only with --cluster-flow sankey. share is the destination parent share. jaccard is the member-set Jaccard. Default share.
+
+- Choices: share, jaccard
+- Default: share

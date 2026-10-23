@@ -222,6 +222,10 @@ def build_parser(language="en"):
                    help=say("help_parent_alpha"))
     p.add_argument("--parent-test", action="store_true",
                    help=say("help_parent_test"))
+    p.add_argument("--cluster-flow", choices=("none", "sankey"), default="none",
+                   help=say("help_cluster_flow"))
+    p.add_argument("--flow-weight", choices=("share", "jaccard"), default="share",
+                   help=say("help_flow_weight"))
     return p
 
 
