@@ -189,6 +189,8 @@ def build_parser(language="en"):
                    help=say("help_provenance"))
     p.add_argument("--language", choices=("en", "zh"), default="en",
                    help=say("help_language"))
+    p.add_argument("--logs", nargs="+", help=say("help_logs"))
+    p.add_argument("--logs-map", help=say("help_logs_map"))
     return p
 
 

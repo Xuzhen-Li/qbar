@@ -198,3 +198,136 @@ def render(path, rows, spans, bar_w, bar_h, title, *, language="en"):
     canvas.save(path, dpi=(150, 150))
     if path.lower().endswith(".png"):
         canvas.save(os.path.splitext(path)[0] + ".pdf", "PDF", resolution=150.0)
+
+
+def cv_k_marks(rows):
+    """Per-K min, max, median, and numeric-row count.
+
+    Rows with ``cv_error`` ``NA`` are skipped. K values are the distinct
+    integers, sorted. The median is ``numpy.median``.
+    """
+    buckets = {}
+    for row in rows:
+        cv = row["cv_error"]
+        k_text = str(row["k"])
+        if cv == "NA" or not k_text.isdigit():
+            continue
+        buckets.setdefault(int(k_text), []).append(float(cv))
+    marks = []
+    for k in sorted(buckets):
+        vals = np.asarray(buckets[k], dtype=float)
+        marks.append({
+            "k": k,
+            "median": float(np.median(vals)),
+            "vmin": float(vals.min()),
+            "vmax": float(vals.max()),
+            "n": int(vals.size),
+        })
+    return marks
+
+
+def _ascii_tick(value):
+    return "%.4g" % value
+
+
+def _paste_up(base, text, font, fill, cx, cy):
+    """Draw ASCII text rotated so it reads upward, centered at cx, cy."""
+    width, height = text_wh(font, text)
+    tmp = Image.new("RGBA", (width + 2, height + 2), (0, 0, 0, 0))
+    ImageDraw.Draw(tmp).text((1, 0), text, font=font, fill=fill)
+    rot = tmp.rotate(90, expand=True, resample=Image.Resampling.BICUBIC)
+    rw, rh = rot.size
+    base.paste(rot, (int(cx - rw / 2), int(cy - rh / 2)), rot)
+
+
+def _cv_canvas(rows):
+    canvas = Image.new("RGB", (800, 500), "white")
+    draw = ImageDraw.Draw(canvas)
+    marks = cv_k_marks(rows)
+    font = load_font(15)
+    font_s = load_font(13)
+    ink = (51, 51, 51, 255)
+    if not marks:
+        message = "No CV error to plot"
+        tw, th = text_wh(font, message)
+        draw.text(((800 - tw) / 2, (500 - th) / 2), message, font=font, fill=(51, 51, 51))
+        return canvas
+    left, right = 86, 776
+    top, bottom = 46, 420
+    vals = []
+    for row in rows:
+        if row["cv_error"] == "NA" or not str(row["k"]).isdigit():
+            continue
+        vals.append(float(row["cv_error"]))
+    ymin = min(vals)
+    ymax = max(vals)
+    if ymax == ymin:
+        pad = 1.0 if ymax == 0 else abs(ymax) * 0.05
+        if pad == 0:
+            pad = 1.0
+    else:
+        pad = (ymax - ymin) * 0.12
+    ymin -= pad
+    ymax += pad
+    span = ymax - ymin
+
+    def y_of(value):
+        return bottom - (value - ymin) / span * (bottom - top)
+
+    n_k = len(marks)
+    span_left = left + 28
+    span_right = right - 28
+    if n_k == 1:
+        xs = [(span_left + span_right) / 2.0]
+    else:
+        xs = [
+            span_left + (span_right - span_left) * i / (n_k - 1)
+            for i in range(n_k)
+        ]
+    draw.line([(left, top), (left, bottom), (right, bottom)], fill=(51, 51, 51), width=1)
+    _paste_up(canvas, "CV error", font, ink, 18, (top + bottom) / 2)
+    kw, kh = text_wh(font, "K")
+    draw.text(((left + right - kw) / 2, 464), "K", font=font, fill=(51, 51, 51))
+    for step in range(5):
+        value = ymin + span * step / 4.0
+        y = y_of(value)
+        draw.line([(left - 4, y), (left, y)], fill=(51, 51, 51), width=1)
+        label = _ascii_tick(value)
+        tw, th = text_wh(font_s, label)
+        draw.text((left - 8 - tw, y - th / 2), label, font=font_s, fill=(51, 51, 51))
+    by_k = {mark["k"]: x for mark, x in zip(marks, xs)}
+    for mark, x in zip(marks, xs):
+        y0 = y_of(mark["vmin"])
+        y1 = y_of(mark["vmax"])
+        draw.line([(x, y0), (x, y1)], fill=(136, 136, 136), width=2)
+        cy = int(round(y_of(mark["median"])))
+        cx = int(round(x))
+        draw.line([(cx - 6, cy), (cx + 5, cy)], fill=(176, 0, 0), width=3)
+        nlab = "n=%d" % mark["n"]
+        tw, th = text_wh(font_s, nlab)
+        draw.text((x - tw / 2, 16), nlab, font=font_s, fill=(51, 51, 51))
+        klab = str(mark["k"])
+        tw, th = text_wh(font_s, klab)
+        draw.text((x - tw / 2, bottom + 8), klab, font=font_s, fill=(51, 51, 51))
+    for row in rows:
+        if row["cv_error"] == "NA" or not str(row["k"]).isdigit():
+            continue
+        k = int(row["k"])
+        x = by_k[k]
+        y = y_of(float(row["cv_error"]))
+        draw.ellipse((x - 4, y - 4, x + 4, y + 4), fill=(51, 51, 51))
+    return canvas
+
+
+def write_cv_loglik_plot(png_path, rows):
+    """Write an 800 by 500 CV plot as PNG and PDF.
+
+    Figure text is the ASCII strings ``K``, ``CV error``, ``n=<count>``,
+    and, when no numeric CV is present, ``No CV error to plot``.
+    """
+    canvas = _cv_canvas(rows)
+    folder = os.path.dirname(os.path.abspath(png_path))
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    canvas.save(png_path, dpi=(150, 150))
+    canvas.save(os.path.splitext(png_path)[0] + ".pdf", "PDF", resolution=150.0)

@@ -10,6 +10,7 @@ The package version is 0.2.0.dev0. No git tag exists.
 
 ### Added
 
+- `--logs` and `--logs-map` read optional ADMIXTURE stdout into `cv_loglik.tsv` and a CV error plot (`cv_loglik.png`, `cv_loglik.pdf`). The default run is unchanged: it does not read logs and does not write those files.
 - `--q-format` selects `admixture` (the default), `meanq`, or `qopt`. `--ind` reads sample IDs from column 1 of an EIGENSTRAT `.ind` file and is off by default. The default remains `.Q`. Other outputs are unchanged.
 - `--provenance` writes `run.json`. It is off by default. Other outputs are unchanged.
 - `qbar.api.run` returns `RunResult`.
