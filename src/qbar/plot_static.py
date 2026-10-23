@@ -331,3 +331,112 @@ def write_cv_loglik_plot(png_path, rows):
         os.makedirs(folder, exist_ok=True)
     canvas.save(png_path, dpi=(150, 150))
     canvas.save(os.path.splitext(png_path)[0] + ".pdf", "PDF", resolution=150.0)
+
+
+def _select_points(table, key):
+    points = []
+    for row in table:
+        text = row.get(key, "NA")
+        if text == "NA":
+            continue
+        points.append((int(row["k"]), float(text)))
+    return points
+
+
+def _draw_select_panel(canvas, origin_y, title, points):
+    """One 300 px band. A band with no points shows ``No data``."""
+    draw = ImageDraw.Draw(canvas)
+    font = load_font(15)
+    font_s = load_font(13)
+    width = canvas.size[0]
+    ink = (51, 51, 51)
+    draw.text((16, origin_y + 8), title, font=font, fill=ink)
+    if not points:
+        message = "No data"
+        tw, th = text_wh(font, message)
+        draw.text(
+            ((width - tw) / 2, origin_y + (300 - th) / 2),
+            message,
+            font=font,
+            fill=ink,
+        )
+        return
+    left, right = 78, 860
+    top = origin_y + 40
+    bottom = origin_y + 246
+    vals = [value for _k, value in points]
+    ymin = min(vals)
+    ymax = max(vals)
+    if ymax == ymin:
+        pad = 1.0 if ymax == 0 else abs(ymax) * 0.05
+        if pad == 0:
+            pad = 1.0
+    else:
+        pad = (ymax - ymin) * 0.12
+    ymin -= pad
+    ymax += pad
+    span = ymax - ymin
+
+    def y_of(value):
+        return bottom - (value - ymin) / span * (bottom - top)
+
+    n_k = len(points)
+    span_left = left + 24
+    span_right = right - 24
+    if n_k == 1:
+        xs = [(span_left + span_right) / 2.0]
+    else:
+        xs = [
+            span_left + (span_right - span_left) * i / (n_k - 1)
+            for i in range(n_k)
+        ]
+    draw.line([(left, top), (left, bottom), (right, bottom)], fill=ink, width=1)
+    for step in range(5):
+        value = ymin + span * step / 4.0
+        y = y_of(value)
+        label = _ascii_tick(value)
+        tw, th = text_wh(font_s, label)
+        draw.line([(left - 4, y), (left, y)], fill=ink, width=1)
+        draw.text((left - 8 - tw, y - th / 2), label, font=font_s, fill=ink)
+    if n_k > 1:
+        coords = []
+        for (_k, value), x in zip(points, xs):
+            coords.extend((x, y_of(value)))
+        draw.line(coords, fill=(136, 136, 136), width=2)
+    for (k, value), x in zip(points, xs):
+        y = y_of(value)
+        draw.ellipse((x - 4, y - 4, x + 4, y + 4), fill=ink)
+        klab = str(k)
+        tw, th = text_wh(font_s, klab)
+        draw.text((x - tw / 2, bottom + 6), klab, font=font_s, fill=ink)
+    kw, _kh = text_wh(font_s, "K")
+    draw.text(((left + right - kw) / 2, bottom + 24), "K", font=font_s, fill=ink)
+
+
+def _select_k_canvas(table):
+    canvas = Image.new("RGB", (900, 900), "white")
+    panels = (
+        ("CV error", _select_points(table, "cv_median")),
+        ("log-likelihood", _select_points(table, "loglik_mean")),
+        ("deltaK", _select_points(table, "delta_k")),
+    )
+    for index, (title, points) in enumerate(panels):
+        _draw_select_panel(canvas, index * 300, title, points)
+    return canvas
+
+
+def write_select_k_plot(png_path, table):
+    """Write a 900 by 900 select-K plot as PNG and PDF.
+
+    Three stacked panels, titled ``CV error``, ``log-likelihood``, and
+    ``deltaK``. Each panel draws one point per K. A panel with no numeric
+    values shows ``No data``. Labels are ASCII. The PDF uses the same
+    Pillow save as the bar plot, resolution 150.
+    """
+    canvas = _select_k_canvas(table)
+    folder = os.path.dirname(os.path.abspath(png_path))
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    canvas.save(png_path, dpi=(150, 150))
+    if png_path.lower().endswith(".png"):
+        canvas.save(os.path.splitext(png_path)[0] + ".pdf", "PDF", resolution=150.0)

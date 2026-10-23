@@ -111,6 +111,8 @@ order	demo/out/order.tsv
 
 可选的 `--logs` 和 `--logs-map` 用来读取 ADMIXTURE 的 CV error 和 log-likelihood，默认运行不设置这两项。
 
+可选的 `--select-k` 和 `--plateau-fraction` 根据 CV 和对数似然表另写选 K 启发式，默认运行不设置这两项。
+
 如果只输入单个 `.Q` 文件，程序就只会生成对应 K 值的单张图（例如 `bar_K8.png` 和 `bar_K8.pdf`），不会生成汇总图 `panel` 和对齐文件 `align.tsv`：
 
 ```bash

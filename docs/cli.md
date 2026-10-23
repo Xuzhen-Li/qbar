@@ -262,3 +262,15 @@ ADMIXTURE stdout files, a quoted wildcard, or a directory. A directory reads .ou
 Two columns, log path and Q path, no header. Each log must be one of the --logs files, and each Q path must exist.
 
 - Default: not set
+
+### `--select-k`
+
+Also write select_k.tsv, select_k.txt, and plots from the CV and log-likelihood table. These are heuristics.
+
+- Default: false
+
+### `--plateau-fraction`
+
+Plateau cut for --select-k. 0.05 is an arbitrary qbar default, not a published constant.
+
+- Default: 0.05

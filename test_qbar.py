@@ -1189,9 +1189,16 @@ class DocstringTests(unittest.TestCase):
         ``--language`` is named in both READMEs.
         ``--logs`` and ``--logs-map`` are documented in ``docs/cli.md`` and
         ``docs/factpacks/F5.md``.
+        ``--select-k`` and ``--plateau-fraction`` are documented in
+        ``docs/cli.md`` and ``docs/factpacks/F6.md``.
         """
         import re
-        later = {"--provenance", "--q-format", "--ind", "--logs", "--logs-map"}
+        # --select-k and --plateau-fraction are documented in docs/cli.md
+        # and docs/factpacks/F6.md.
+        later = {
+            "--provenance", "--q-format", "--ind", "--logs", "--logs-map",
+            "--select-k", "--plateau-fraction",
+        }
         flags = []
         for action in qbar.build_parser()._actions:
             for name in action.option_strings:
@@ -2302,6 +2309,350 @@ class CvLoglikTests(unittest.TestCase):
         self.assertIsNone(args.logs_map)
         self.assertEqual(args.id_col, "analysis_IID")
         self.assertEqual(args.group_col, "Dong_Grp")
+
+
+def _f6_row(k, cv="NA", loglik="NA"):
+    # Numbers passed in by the caller are invented.
+    return {
+        "file": "invented",
+        "k": "NA" if k == "NA" else str(k),
+        "seed": "NA",
+        "cv_error": cv,
+        "loglik": loglik,
+        "iterations": "NA",
+        "converged": "NA",
+        "warnings": "NA",
+    }
+
+
+def _f6_by_k(table):
+    return {int(row["k"]): row for row in table}
+
+
+_F6_CAVEAT = (
+    "These are heuristics. None of them identifies a true K. "
+    "Real populations may not be discrete. Choose K by the biological "
+    "question and show several K."
+)
+
+_F6_COLUMNS = [
+    "k", "n_runs", "cv_median", "cv_min", "cv_max", "loglik_mean",
+    "loglik_sd", "delta_k", "min_median_cv", "elbow_k", "plateau_k",
+]
+
+
+class SelectKTests(unittest.TestCase):
+    def _assert_summary_repeated(self, table):
+        self.assertGreater(len(table), 0)
+        for row in table:
+            self.assertEqual(list(row.keys()), _F6_COLUMNS)
+            self.assertEqual(row["min_median_cv"], table[0]["min_median_cv"])
+            self.assertEqual(row["elbow_k"], table[0]["elbow_k"])
+            self.assertEqual(row["plateau_k"], table[0]["plateau_k"])
+
+    def test_selectk_module_has_no_module_level_pil_import(self):
+        import qbar.selectk as selectk
+        source = selectk.__file__
+        with open(source, encoding="utf-8") as handle:
+            for line in handle:
+                self.assertFalse(line.startswith("import PIL"))
+                self.assertFalse(line.startswith("from PIL"))
+
+    def test_cv_series_min_median_and_elbow(self):
+        # Invented CV errors. Hand calculation:
+        # d2(3) = 1.0 - 2*0.5 + 0.4 = 0.4
+        # d2(4) = 0.5 - 2*0.4 + 0.39 = 0.09
+        # 0.4 is larger than 0.09, so elbow_k is 3.
+        # The smallest median is 0.39 at K=5, so min_median_cv is 5.
+        from qbar.selectk import select_k_table, select_k_text
+        d2_3 = 1.0 - 2 * 0.5 + 0.4
+        d2_4 = 0.5 - 2 * 0.4 + 0.39
+        self.assertGreater(d2_3, d2_4)
+        rows = [
+            _f6_row(2, cv="1.0"),
+            _f6_row(2, cv="NA"),
+            _f6_row(3, cv="0.5"),
+            _f6_row(4, cv="0.4"),
+            _f6_row(5, cv="0.39"),
+            _f6_row("NA", cv="0.01"),
+        ]
+        table = select_k_table(rows)
+        by_k = _f6_by_k(table)
+        self.assertEqual(sorted(by_k), [2, 3, 4, 5])
+        self.assertEqual(by_k[2]["n_runs"], "2")
+        self.assertEqual(by_k[2]["cv_median"], "1.0")
+        self.assertEqual(by_k[3]["cv_median"], "0.5")
+        self.assertEqual(by_k[4]["cv_median"], "0.4")
+        self.assertEqual(by_k[5]["cv_median"], "0.39")
+        self.assertEqual(by_k[5]["min_median_cv"], "5")
+        self.assertEqual(by_k[5]["elbow_k"], "3")
+        self._assert_summary_repeated(table)
+        text = select_k_text(table)
+        self.assertEqual(text.splitlines()[0], _F6_CAVEAT)
+        self.assertNotIn("best K", text)
+
+    def test_plateau_fraction_on_invented_loglik(self):
+        # Invented median log-likelihoods at K = 2, 3, 4, 5:
+        # -100, -90, -89, -89. One value, so the median is that value.
+        # Gain from K-1 to K, divided by abs(median at K):
+        # K=3: (-90 - -100) / abs(-90) = 10/90
+        # K=4: (-89 - -90) / abs(-89) = 1/89
+        # K=5: (-89 - -89) / abs(-89) = 0
+        # plateau_fraction is 0.5.
+        # 10/90 < 0.5, 1/89 < 0.5, and 0 < 0.5.
+        # K=2 has no K-1. The smallest K below 0.5 whose larger
+        # consecutive K stay below 0.5 is 3.
+        from qbar.selectk import select_k_table
+        self.assertLess(10 / 90, 0.5)
+        self.assertLess(1 / 89, 0.5)
+        self.assertLess(0, 0.5)
+        rows = [
+            _f6_row(2, loglik="-100"),
+            _f6_row(3, loglik="-90"),
+            _f6_row(4, loglik="-89"),
+            _f6_row(5, loglik="-89"),
+        ]
+        table = select_k_table(rows, plateau_fraction=0.5)
+        by_k = _f6_by_k(table)
+        self.assertEqual(by_k[2]["loglik_mean"], "-100.0")
+        self.assertEqual(by_k[3]["plateau_k"], "3")
+        self._assert_summary_repeated(table)
+        for row in table:
+            self.assertEqual(row["delta_k"], "NA")
+
+    def test_one_run_per_k_makes_every_delta_na(self):
+        # Invented. One numeric log-likelihood at each K.
+        from qbar.selectk import select_k_table, select_k_text
+        rows = [
+            _f6_row(2, cv="0.4", loglik="-10"),
+            _f6_row(3, cv="0.3", loglik="-9"),
+            _f6_row(4, cv="0.2", loglik="-8"),
+        ]
+        table = select_k_table(rows)
+        for row in table:
+            self.assertEqual(row["delta_k"], "NA")
+            self.assertEqual(row["loglik_sd"], "NA")
+        text = select_k_text(table)
+        self.assertIn("fewer than 2", text)
+        self.assertEqual(text.splitlines()[0], _F6_CAVEAT)
+        self.assertNotIn("best K", text)
+
+    def test_k_gap_makes_delta_na_across_the_gap(self):
+        # Invented log-likelihoods, two runs at K = 2, 3, 4, 6. K = 5 is absent.
+        # K=3 has both neighbours, so delta_k is a number.
+        # K=4 is missing K+1, so the difference across the gap is NA.
+        import math
+        from qbar.selectk import select_k_table, select_k_text
+        rows = []
+        values = {2: (0.0, 2.0), 3: (0.0, 2.0), 4: (10.0, 12.0), 6: (10.0, 12.0)}
+        for k, pair in values.items():
+            for value in pair:
+                rows.append(_f6_row(k, loglik=str(value)))
+        table = select_k_table(rows)
+        by_k = _f6_by_k(table)
+        mean2 = (0.0 + 2.0) / 2.0
+        mean3 = (0.0 + 2.0) / 2.0
+        mean4 = (10.0 + 12.0) / 2.0
+        sd3 = math.sqrt(((0.0 - mean3) ** 2 + (2.0 - mean3) ** 2) / 1.0)
+        expected3 = abs(mean4 - 2.0 * mean3 + mean2) / sd3
+        self.assertEqual(by_k[3]["delta_k"], str(float(expected3)))
+        self.assertNotEqual(by_k[3]["delta_k"], "NA")
+        self.assertEqual(by_k[4]["delta_k"], "NA")
+        self.assertEqual(by_k[2]["delta_k"], "NA")
+        self.assertEqual(by_k[6]["delta_k"], "NA")
+        text = select_k_text(table)
+        self.assertIn("undefined", text)
+        self.assertIn("K gap", text)
+        self.assertNotIn("best K", text)
+
+    def test_delta_k_matches_evanno_expansion(self):
+        # Invented log-likelihoods, two runs at each of K = 2, 3, 4, 5.
+        # Hand calculation from the page 2614 expansion on the means:
+        # deltaK = |L(K+1) - 2 L(K) + L(K-1)| / s[L(K)]
+        # s is the sample standard deviation, divisor n - 1.
+        # K=2: 0, 2. K=3: 10, 12. K=4: 14, 18. K=5: 20, 24.
+        import math
+        from qbar.selectk import select_k_table, select_k_text
+        runs = {
+            2: (0.0, 2.0),
+            3: (10.0, 12.0),
+            4: (14.0, 18.0),
+            5: (20.0, 24.0),
+        }
+        rows = []
+        for k, pair in runs.items():
+            for value in pair:
+                rows.append(_f6_row(k, cv="0.5", loglik=str(value)))
+        means = {k: (pair[0] + pair[1]) / 2.0 for k, pair in runs.items()}
+        sds = {}
+        for k, pair in runs.items():
+            center = means[k]
+            sds[k] = math.sqrt(
+                ((pair[0] - center) ** 2 + (pair[1] - center) ** 2) / 1.0
+            )
+        expected = {
+            3: abs(means[4] - 2.0 * means[3] + means[2]) / sds[3],
+            4: abs(means[5] - 2.0 * means[4] + means[3]) / sds[4],
+        }
+        table = select_k_table(rows)
+        by_k = _f6_by_k(table)
+        self.assertEqual(by_k[2]["delta_k"], "NA")
+        self.assertEqual(by_k[5]["delta_k"], "NA")
+        self.assertEqual(by_k[3]["delta_k"], str(float(expected[3])))
+        self.assertEqual(by_k[4]["delta_k"], str(float(expected[4])))
+        self.assertEqual(by_k[3]["loglik_mean"], str(float(means[3])))
+        self.assertEqual(by_k[3]["loglik_sd"], str(float(sds[3])))
+        self.assertEqual(by_k[3]["n_runs"], "2")
+        self._assert_summary_repeated(table)
+        text = select_k_text(table)
+        self.assertEqual(text.splitlines()[0], _F6_CAVEAT)
+        self.assertIn("adaptation", text)
+        self.assertIn("does not support K = 1", text)
+        self.assertNotIn("best K", text)
+        self.assertNotIn("not verified", text)
+
+    def test_zero_sd_makes_delta_na_at_that_k(self):
+        # Invented. K=4 has two equal log-likelihoods, so its sd is 0.
+        from qbar.selectk import select_k_table, select_k_text
+        runs = {2: (0.0, 2.0), 3: (4.0, 6.0), 4: (8.0, 8.0), 5: (10.0, 14.0)}
+        rows = []
+        for k, pair in runs.items():
+            for value in pair:
+                rows.append(_f6_row(k, loglik=str(value)))
+        table = select_k_table(rows)
+        by_k = _f6_by_k(table)
+        self.assertEqual(by_k[4]["loglik_sd"], "0.0")
+        self.assertEqual(by_k[4]["delta_k"], "NA")
+        self.assertNotEqual(by_k[3]["delta_k"], "NA")
+        text = select_k_text(table)
+        self.assertIn("K=4", text)
+        self.assertIn("is 0", text)
+        self.assertNotIn("best K", text)
+
+    def test_overlapping_cv_ranges_are_listed_as_pairs(self):
+        # Invented. K=2 spans 0.10 to 0.30 and K=3 spans 0.20 to 0.40.
+        # K=5 is not a neighbour of K=3.
+        from qbar.selectk import select_k_table, select_k_text
+        rows = [
+            _f6_row(2, cv="0.10"),
+            _f6_row(2, cv="0.30"),
+            _f6_row(3, cv="0.20"),
+            _f6_row(3, cv="0.40"),
+            _f6_row(5, cv="0.90"),
+        ]
+        text = select_k_text(select_k_table(rows))
+        self.assertIn("2-3", text)
+        self.assertNotIn("3-5", text)
+        self.assertNotIn("best K", text)
+
+    def test_select_k_without_logs_is_an_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            q_path = os.path.join(td, "t.2.Q")
+            with open(q_path, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("0.4 0.6\n")
+            with self.assertRaises(SystemExit) as ctx:
+                qbar.main([
+                    "--q", q_path, "--outdir", os.path.join(td, "out"),
+                    "--select-k",
+                ])
+            self.assertEqual(ctx.exception.code, "--select-k requires --logs")
+            with self.assertRaises(SystemExit) as ctx_zh:
+                qbar.main([
+                    "--q", q_path, "--language", "zh",
+                    "--outdir", os.path.join(td, "outzh"),
+                    "--select-k",
+                ])
+            self.assertEqual(ctx_zh.exception.code, "--select-k 需要 --logs")
+
+    def test_logs_without_select_k_writes_no_select_files(self):
+        with tempfile.TemporaryDirectory() as td:
+            q_path, ids_path = _tiny_q(td)
+            log_path = os.path.join(td, "a.out")
+            _invented_banner(log_path, k="2", cv="0.4", seed="31", loglik="-8")
+            out = os.path.join(td, "out")
+            qbar.main([
+                "--q", q_path, "--ids", ids_path, "--outdir", out,
+                "--logs", log_path,
+            ])
+            self.assertTrue(os.path.isfile(os.path.join(out, "cv_loglik.tsv")))
+            for name in ("select_k.tsv", "select_k.txt", "select_k.png", "select_k.pdf"):
+                self.assertFalse(os.path.exists(os.path.join(out, name)))
+            self.assertTrue(os.path.isfile(os.path.join(out, "bar_K2.png")))
+
+    def test_select_k_writes_table_text_and_plots(self):
+        # Invented banner numbers. The Q file is K=2, so the bar plot stays K=2.
+        with tempfile.TemporaryDirectory() as td:
+            q_path, ids_path = _tiny_q(td)
+            logs = []
+            for index, (k, cv, loglik) in enumerate((
+                ("2", "1.0", "-100"),
+                ("3", "0.5", "-90"),
+                ("4", "0.4", "-89"),
+                ("5", "0.39", "-89"),
+            )):
+                path = os.path.join(td, "k%s.out" % k)
+                _invented_banner(
+                    path, k=k, cv=cv, seed=str(40 + index), loglik=loglik,
+                )
+                logs.append(path)
+            out = os.path.join(td, "out")
+            qbar.main([
+                "--q", q_path, "--ids", ids_path, "--outdir", out,
+                "--logs", *logs, "--select-k", "--plateau-fraction", "0.5",
+            ])
+            self.assertTrue(os.path.isfile(os.path.join(out, "bar_K2.png")))
+            self.assertFalse(os.path.exists(os.path.join(out, "bar_K3.png")))
+            tsv = os.path.join(out, "select_k.tsv")
+            with open(tsv, encoding="utf-8") as handle:
+                lines = handle.read().splitlines()
+            self.assertEqual(lines[0].split("\t"), _F6_COLUMNS)
+            parsed = [dict(zip(_F6_COLUMNS, line.split("\t"))) for line in lines[1:]]
+            self.assertEqual([row["k"] for row in parsed], ["2", "3", "4", "5"])
+            self.assertEqual({row["min_median_cv"] for row in parsed}, {"5"})
+            self.assertEqual({row["elbow_k"] for row in parsed}, {"3"})
+            self.assertEqual({row["plateau_k"] for row in parsed}, {"3"})
+            with open(os.path.join(out, "select_k.txt"), encoding="utf-8") as handle:
+                text = handle.read()
+            self.assertEqual(text.splitlines()[0], _F6_CAVEAT)
+            self.assertNotIn("best K", text)
+            png = os.path.join(out, "select_k.png")
+            pdf = os.path.join(out, "select_k.pdf")
+            with Image.open(png) as image:
+                self.assertEqual(image.size, (900, 900))
+                self.assertEqual(image.mode, "RGB")
+            self.assertGreater(os.path.getsize(pdf), 0)
+
+    def test_parser_defaults_stay_with_select_k(self):
+        parser = qbar.build_parser()
+        self.assertEqual(_cli_flag(parser, "--id-col").default, "analysis_IID")
+        self.assertEqual(_cli_flag(parser, "--group-col").default, "Dong_Grp")
+        flag = _cli_flag(parser, "--select-k")
+        cut = _cli_flag(parser, "--plateau-fraction")
+        self.assertEqual(flag.help, (
+            "Also write select_k.tsv, select_k.txt, and plots from the CV "
+            "and log-likelihood table. These are heuristics."
+        ))
+        self.assertEqual(cut.default, 0.05)
+        self.assertEqual(cut.help, (
+            "Plateau cut for --select-k. 0.05 is an arbitrary qbar default, "
+            "not a published constant."
+        ))
+        args = parser.parse_args(["--q", "x.Q", "--outdir", "o"])
+        self.assertFalse(args.select_k)
+        self.assertEqual(args.plateau_fraction, 0.05)
+        self.assertEqual(args.id_col, "analysis_IID")
+        self.assertEqual(args.group_col, "Dong_Grp")
+        zh = qbar.build_parser(language="zh")
+        self.assertEqual(
+            _cli_flag(zh, "--select-k").help,
+            "另写 select_k.tsv、select_k.txt 和图，数据来自 CV 和对数似然表。这些只是启发式。",
+        )
+        self.assertEqual(
+            _cli_flag(zh, "--plateau-fraction").help,
+            "--select-k 的平台阈值。0.05 是 qbar 自己定的默认值，不是文献里的常数。",
+        )
+        help_s = parser.format_help()
+        self.assertTrue(all(ord(ch) < 128 for ch in help_s))
 
 
 if __name__ == "__main__":
