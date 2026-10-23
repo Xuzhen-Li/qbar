@@ -1197,6 +1197,8 @@ class DocstringTests(unittest.TestCase):
         ``docs/factpacks/F2e.md``.
         ``--bootstrap`` and ``--bootstrap-seed`` are documented in
         ``docs/cli.md`` and ``docs/factpacks/ST1.md``.
+        ``--perm``, ``--perm-seed``, and ``--perm-null`` are documented in
+        ``docs/cli.md`` and ``docs/factpacks/ST2.md``.
         """
         import re
         # --select-k and --plateau-fraction are documented in docs/cli.md
@@ -1206,12 +1208,15 @@ class DocstringTests(unittest.TestCase):
         # --align-compare is documented in docs/cli.md and docs/factpacks/F2e.md.
         # --bootstrap and --bootstrap-seed are documented in docs/cli.md
         # and docs/factpacks/ST1.md.
+        # --perm, --perm-seed, and --perm-null are documented in docs/cli.md
+        # and docs/factpacks/ST2.md.
         later = {
             "--provenance", "--q-format", "--ind", "--logs", "--logs-map",
             "--select-k", "--plateau-fraction",
             "--replicates", "--mode-sim-cut",
             "--align-compare",
             "--bootstrap", "--bootstrap-seed",
+            "--perm", "--perm-seed", "--perm-null",
         }
         flags = []
         for action in qbar.build_parser()._actions:
@@ -4304,6 +4309,449 @@ class BootstrapSupportTests(unittest.TestCase):
         message = str(ctx.exception)
         self.assertIn("Bootstrap replicate 1 failed:", message)
         self.assertIn("Anchor group A has no one in the samples", message)
+
+
+def _oracle_rows_p(q_prev, q_new, column, n_perm, seed):
+    """Rows-null p from an independent greedy loop. Does not call permutation_p.
+
+    Each draw is ``default_rng(seed).permutation(n)`` on the K+1 matrix.
+    T is 1. T* is 1 when aligned column ``column`` keeps the observed raw index.
+    """
+    mask = np.ones(int(q_prev.shape[0]), dtype=bool)
+    observed = _brute_greedy_perm(q_prev, q_new, mask)
+    raw = int(observed[column])
+    rng = np.random.default_rng(seed)
+    n_extreme = 0
+    n = int(q_new.shape[0])
+    q_new = np.asarray(q_new, dtype=float)
+    for _draw in range(n_perm):
+        order = rng.permutation(n)
+        got = _brute_greedy_perm(q_prev, q_new[order], mask)
+        t_star = 1 if int(got[column]) == raw else 0
+        if t_star >= 1:
+            n_extreme += 1
+    return raw, n_extreme, (1 + n_extreme) / float(n_perm + 1)
+
+
+def _oracle_column_p(q_prev, q_new, column, n_perm, seed):
+    """Column-null p from an independent Pearson loop. Does not call permutation_p.
+
+    The matched raw column is the greedy one. Its entries are shuffled with
+    ``base[default_rng(seed).permutation(n)]``. T* >= T counts a tie.
+    """
+    mask = np.ones(int(q_prev.shape[0]), dtype=bool)
+    observed = _brute_greedy_perm(q_prev, q_new, mask)
+    raw = int(observed[column])
+    if column >= int(q_prev.shape[1]):
+        return raw, "NA", "NA"
+    old = np.asarray(q_prev[:, column], dtype=float)
+    base = np.asarray(q_new[:, raw], dtype=float).reshape(-1).copy()
+    t_obs = _independent_pearson(old, base)
+    rng = np.random.default_rng(seed)
+    n_extreme = 0
+    n = int(base.shape[0])
+    for _draw in range(n_perm):
+        t_star = _independent_pearson(old, base[rng.permutation(n)])
+        if t_star >= t_obs:
+            n_extreme += 1
+    return raw, n_extreme, (1 + n_extreme) / float(n_perm + 1)
+
+
+class PermutationPTests(unittest.TestCase):
+    def test_help_lists_rows_first(self):
+        parser = qbar.build_parser()
+        flag = _cli_flag(parser, "--perm-null")
+        self.assertEqual(list(flag.choices), ["rows", "column"])
+        self.assertIsNone(flag.default)
+        help_s = flag.help or ""
+        self.assertLess(help_s.index("rows"), help_s.index("column"))
+        self.assertTrue(all(ord(ch) < 128 for ch in help_s))
+        perm_help = _cli_flag(parser, "--perm").help or ""
+        seed_help = _cli_flag(parser, "--perm-seed").help or ""
+        self.assertTrue(all(ord(ch) < 128 for ch in perm_help))
+        self.assertTrue(all(ord(ch) < 128 for ch in seed_help))
+        self.assertIn("Default 0 adds no columns.", perm_help)
+        zh = _cli_flag(qbar.build_parser(language="zh"), "--perm-null").help or ""
+        self.assertLess(zh.index("rows"), zh.index("column"))
+        args = parser.parse_args(["--q", "x.Q", "--outdir", "o"])
+        self.assertEqual(args.perm, 0)
+        self.assertEqual(args.perm_seed, 0)
+        self.assertIsNone(args.perm_null)
+        self.assertEqual(_cli_flag(parser, "--id-col").default, "analysis_IID")
+        self.assertEqual(_cli_flag(parser, "--group-col").default, "Dong_Grp")
+
+    def _copy_pair(self):
+        q_prev = np.array([
+            [0.90, 0.10],
+            [0.80, 0.20],
+            [0.70, 0.30],
+            [0.20, 0.80],
+            [0.15, 0.85],
+            [0.05, 0.95],
+        ], dtype=float)
+        q_new = np.column_stack([
+            q_prev[:, 0].copy(),
+            q_prev[:, 1].copy(),
+            np.full(6, 0.40),
+        ])
+        return q_prev, q_new
+
+    def _zero_pair(self):
+        q_prev = np.array([
+            [0.10, 0.90],
+            [0.20, 0.80],
+            [0.30, 0.70],
+            [0.70, 0.30],
+            [0.80, 0.20],
+            [0.90, 0.10],
+        ], dtype=float)
+        q_new = np.column_stack([
+            np.zeros(6),
+            q_prev[:, 1].copy(),
+            np.array([0.95, 0.85, 0.75, 0.25, 0.15, 0.05]),
+        ])
+        return q_prev, q_new
+
+    def test_copy_column_both_nulls_match_independent_loop(self):
+        from qbar.permtest import permutation_p
+        q_prev, q_new = self._copy_pair()
+        n_perm = 40
+        seed = 0
+        for null, oracle in (("rows", _oracle_rows_p), ("column", _oracle_column_p)):
+            for column in range(q_new.shape[1]):
+                raw, n_extreme, p_value = oracle(q_prev, q_new, column, n_perm, seed)
+                got = permutation_p(q_prev, q_new, "greedy", column, n_perm, seed, null)
+                self.assertEqual(got["null"], null)
+                self.assertEqual(got["n_perm"], n_perm)
+                self.assertFalse(got["zero_column"])
+                if null == "column" and column >= q_prev.shape[1]:
+                    self.assertEqual(p_value, "NA")
+                    self.assertEqual(got["p"], "NA")
+                    self.assertEqual(got["n_extreme"], "NA")
+                    continue
+                self.assertEqual(got["n_extreme"], n_extreme)
+                self.assertEqual(got["p"], p_value)
+                self.assertEqual(got["p"], (1 + n_extreme) / float(n_perm + 1))
+
+    def test_zero_column_matches_independent_loop(self):
+        from qbar.permtest import permutation_p
+        q_prev, q_new = self._zero_pair()
+        n_perm = 25
+        seed = 1
+        raw, n_extreme, p_value = _oracle_column_p(q_prev, q_new, 0, n_perm, seed)
+        self.assertTrue(np.all(q_new[:, raw] == 0.0))
+        self.assertLess(0, q_prev.shape[1])
+        got = permutation_p(q_prev, q_new, "greedy", 0, n_perm, seed, "column")
+        self.assertTrue(got["zero_column"])
+        self.assertNotEqual(got["p"], "NA")
+        self.assertEqual(got["n_extreme"], n_extreme)
+        self.assertEqual(got["p"], p_value)
+        self.assertEqual(n_extreme, n_perm)
+        rows_raw, rows_extreme, rows_p = _oracle_rows_p(q_prev, q_new, 0, n_perm, seed)
+        self.assertEqual(rows_raw, raw)
+        rows_got = permutation_p(q_prev, q_new, "greedy", 0, n_perm, seed, "rows")
+        self.assertTrue(rows_got["zero_column"])
+        self.assertEqual(rows_got["n_extreme"], rows_extreme)
+        self.assertEqual(rows_got["p"], rows_p)
+
+    def test_perm_zero_is_na_and_draws_nothing(self):
+        from qbar.permtest import permutation_p
+        q_prev, q_new = self._zero_pair()
+        got = permutation_p(q_prev, q_new, "greedy", 0, 0, -1, None)
+        self.assertEqual(got["n_perm"], 0)
+        self.assertEqual(got["n_extreme"], "NA")
+        self.assertEqual(got["p"], "NA")
+        self.assertEqual(got["null"], "NA")
+        self.assertTrue(got["zero_column"])
+        named = permutation_p(q_prev, q_new, "greedy", 1, 0, -3, "rows")
+        self.assertEqual(named["p"], "NA")
+        self.assertEqual(named["null"], "rows")
+        self.assertFalse(named["zero_column"])
+
+    def test_seed_is_repeatable(self):
+        from qbar.permtest import permutation_p
+        q_prev, q_new = self._copy_pair()
+        first = permutation_p(q_prev, q_new, "greedy", 0, 15, 0, "rows")
+        second = permutation_p(q_prev, q_new, "greedy", 0, 15, 0, "rows")
+        self.assertEqual(first, second)
+        column = permutation_p(q_prev, q_new, "greedy", 0, 15, 0, "column")
+        column_again = permutation_p(q_prev, q_new, "greedy", 0, 15, 0, "column")
+        self.assertEqual(column, column_again)
+
+    def test_missing_null_and_negative_perm_error(self):
+        from qbar.permtest import permutation_p
+        q_prev, q_new = self._copy_pair()
+        with self.assertRaises(SystemExit) as ctx:
+            permutation_p(q_prev, q_new, "greedy", 0, 4, 0, None)
+        message = str(ctx.exception)
+        self.assertLess(message.find("rows"), message.find("column"))
+        self.assertIn("rows", message)
+        self.assertIn("column", message)
+        with self.assertRaises(SystemExit) as ctx_neg:
+            permutation_p(q_prev, q_new, "greedy", 0, -5, 0, "rows")
+        self.assertEqual(
+            str(ctx_neg.exception),
+            "--perm must be an integer greater than or equal to 0, got -5",
+        )
+        with self.assertRaises(SystemExit) as ctx_seed:
+            permutation_p(q_prev, q_new, "greedy", 0, 2, -1, "column")
+        self.assertEqual(
+            str(ctx_seed.exception),
+            "--perm-seed must be an integer greater than or equal to 0, got -1",
+        )
+        with self.assertRaises(SystemExit) as ctx_cli:
+            qbar.main(["--q", "missing.Q", "--outdir", "o", "--perm", "3"])
+        cli_message = str(ctx_cli.exception)
+        self.assertLess(cli_message.find("rows"), cli_message.find("column"))
+        with self.assertRaises(SystemExit) as ctx_cli_neg:
+            qbar.main(["--q", "missing.Q", "--outdir", "o", "--perm", "-1"])
+        self.assertEqual(
+            str(ctx_cli_neg.exception),
+            "--perm must be an integer greater than or equal to 0, got -1",
+        )
+        with self.assertRaises(SystemExit) as ctx_zh:
+            qbar.main([
+                "--q", "missing.Q", "--outdir", "o", "--perm", "-2", "--language", "zh",
+            ])
+        self.assertEqual(
+            str(ctx_zh.exception),
+            "--perm 必须是大于或等于 0 的整数，收到 -2",
+        )
+        with self.assertRaises(SystemExit) as ctx_zh_null:
+            qbar.main([
+                "--q", "missing.Q", "--outdir", "o", "--perm", "2", "--language", "zh",
+            ])
+        zh_null = str(ctx_zh_null.exception)
+        self.assertLess(zh_null.find("rows"), zh_null.find("column"))
+
+    def _write_pair(self, tmp, q_prev, q_new):
+        path_prev = os.path.join(tmp, "t.2.Q")
+        path_new = os.path.join(tmp, "t.3.Q")
+        np.savetxt(path_prev, q_prev, fmt="%.6f")
+        np.savetxt(path_new, q_new, fmt="%.6f")
+        ids = os.path.join(tmp, "ids.txt")
+        with open(ids, "w", encoding="utf-8") as handle:
+            handle.write("".join("s%d\n" % i for i in range(q_prev.shape[0])))
+        loaded_prev = np.loadtxt(path_prev)
+        loaded_new = np.loadtxt(path_new)
+        return path_prev, path_new, ids, loaded_prev, loaded_new
+
+    def test_perm_zero_writes_nothing_new(self):
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+        q_prev, q_new = self._copy_pair()
+        with tempfile.TemporaryDirectory() as tmp:
+            path_prev, path_new, ids, _loaded_prev, _loaded_new = self._write_pair(tmp, q_prev, q_new)
+            plain = os.path.join(tmp, "plain")
+            zero = os.path.join(tmp, "zero")
+            base = ["--q", path_prev, path_new, "--ids", ids]
+            out_plain, err_plain = io.StringIO(), io.StringIO()
+            out_zero, err_zero = io.StringIO(), io.StringIO()
+            with redirect_stdout(out_plain), redirect_stderr(err_plain):
+                qbar.main(base + ["--outdir", plain])
+            with redirect_stdout(out_zero), redirect_stderr(err_zero):
+                qbar.main(base + [
+                    "--perm", "0", "--perm-seed", "-1", "--perm-null", "rows", "--outdir", zero,
+                ])
+            self.assertFalse(os.path.exists(os.path.join(plain, "match_support.tsv")))
+            self.assertFalse(os.path.exists(os.path.join(zero, "match_support.tsv")))
+            self.assertEqual(err_plain.getvalue(), err_zero.getvalue())
+            for name in ("align.tsv", "perm_K2.tsv", "perm_K3.tsv", "order.tsv"):
+                with open(os.path.join(plain, name), "rb") as handle:
+                    left = handle.read()
+                with open(os.path.join(zero, name), "rb") as handle:
+                    right = handle.read()
+                self.assertEqual(left, right, name)
+
+    def test_cli_rows_header_matches_oracle(self):
+        q_prev, q_new = self._copy_pair()
+        n_perm = 5
+        seed = 0
+        with tempfile.TemporaryDirectory() as tmp:
+            path_prev, path_new, ids, loaded_prev, loaded_new = self._write_pair(
+                tmp, q_prev, q_new,
+            )
+            out = os.path.join(tmp, "out")
+            qbar.main([
+                "--q", path_prev, path_new, "--ids", ids, "--outdir", out,
+                "--perm", str(n_perm), "--perm-seed", str(seed), "--perm-null", "rows",
+            ])
+            path = os.path.join(out, "match_support.tsv")
+            with open(path, encoding="utf-8") as handle:
+                lines = handle.read().splitlines()
+            self.assertEqual(
+                lines[0].split("\t"),
+                [
+                    "K_to", "aligned_column", "raw_column", "n_boot", "n_same",
+                    "support", "seed", "method", "n_empty_mask",
+                    "n_perm", "n_extreme", "p", "null", "zero_column",
+                ],
+            )
+            body = [line.split("\t") for line in lines[1:]]
+            self.assertEqual([row[1] for row in body], ["C1", "C2", "C3"])
+            for column, row in enumerate(body):
+                _raw, n_extreme, p_value = _oracle_rows_p(
+                    loaded_prev, loaded_new, column, n_perm, seed,
+                )
+                self.assertEqual(row[0], "3")
+                self.assertEqual(row[3:7], ["NA", "NA", "NA", "NA"])
+                self.assertEqual(row[7], "greedy")
+                self.assertEqual(row[8], "NA")
+                self.assertEqual(row[9], str(n_perm))
+                self.assertEqual(row[10], str(n_extreme))
+                self.assertEqual(row[11], "%.6f" % p_value)
+                self.assertEqual(row[12], "rows")
+                self.assertEqual(row[13], "no")
+            again = os.path.join(tmp, "again")
+            qbar.main([
+                "--q", path_prev, path_new, "--ids", ids, "--outdir", again,
+                "--perm", str(n_perm), "--perm-seed", str(seed), "--perm-null", "rows",
+            ])
+            with open(path, "rb") as handle:
+                first_bytes = handle.read()
+            with open(os.path.join(again, "match_support.tsv"), "rb") as handle:
+                second_bytes = handle.read()
+            self.assertEqual(first_bytes, second_bytes)
+
+    def test_cli_column_and_bootstrap_together(self):
+        q_prev, q_new = self._copy_pair()
+        n_perm = 5
+        n_boot = 4
+        with tempfile.TemporaryDirectory() as tmp:
+            path_prev, path_new, ids, loaded_prev, loaded_new = self._write_pair(
+                tmp, q_prev, q_new,
+            )
+            out = os.path.join(tmp, "out")
+            qbar.main([
+                "--q", path_prev, path_new, "--ids", ids, "--outdir", out,
+                "--bootstrap", str(n_boot), "--bootstrap-seed", "0",
+                "--perm", str(n_perm), "--perm-seed", "0", "--perm-null", "column",
+            ])
+            with open(os.path.join(out, "match_support.tsv"), encoding="utf-8") as handle:
+                lines = handle.read().splitlines()
+            header = lines[0].split("\t")
+            self.assertEqual(header[:9], [
+                "K_to", "aligned_column", "raw_column", "n_boot", "n_same",
+                "support", "seed", "method", "n_empty_mask",
+            ])
+            self.assertEqual(header[9:], ["n_perm", "n_extreme", "p", "null", "zero_column"])
+            body = [line.split("\t") for line in lines[1:]]
+            self.assertEqual(len(body), 3)
+            for column, row in enumerate(body):
+                self.assertEqual(row[3], str(n_boot))
+                self.assertNotEqual(row[5], "NA")
+                self.assertEqual(row[5], "%.6f" % (int(row[4]) / float(n_boot)))
+                self.assertEqual(row[6], "0")
+                self.assertEqual(row[9], str(n_perm))
+                self.assertEqual(row[12], "column")
+                _raw, n_extreme, p_value = _oracle_column_p(
+                    loaded_prev, loaded_new, column, n_perm, 0,
+                )
+                if p_value == "NA":
+                    self.assertEqual(row[10], "NA")
+                    self.assertEqual(row[11], "NA")
+                else:
+                    self.assertEqual(row[10], str(n_extreme))
+                    self.assertEqual(row[11], "%.6f" % p_value)
+                self.assertIn(row[13], ("yes", "no"))
+
+    def test_f2_column_null_uses_pearson(self):
+        from qbar.align import column_gprime, match_next
+        from qbar.permtest import permutation_p
+        data = np.random.default_rng(1000)
+        q_prev = data.random((6, 2))
+        q_new = data.random((6, 3))
+        mask = np.array([True, True, True, True, False, False])
+        perm = [int(item) for item in match_next(q_prev, q_new, mask, "clumpp-largek")[0]]
+        self.assertEqual(perm[0], 0)
+        old = np.asarray(q_prev[:, 0], dtype=float)
+        base = np.asarray(q_new[:, 0], dtype=float).copy()
+        n_perm = 40
+        seed = 0
+        t_pearson = _independent_pearson(old[mask], base[mask])
+        diff = old[mask] - base[mask]
+        t_gprime = float(1.0 - np.sqrt(np.dot(diff, diff)) / np.sqrt(2.0 * diff.shape[0]))
+        self.assertAlmostEqual(t_gprime, column_gprime(old[mask], base[mask]))
+        n = int(base.shape[0])
+
+        def _count(score, t_obs):
+            rng = np.random.default_rng(seed)
+            n_extreme = 0
+            for _draw in range(n_perm):
+                shuffled = base[rng.permutation(n)]
+                if score(old[mask], shuffled[mask]) >= t_obs:
+                    n_extreme += 1
+            return n_extreme
+
+        n_pearson = _count(_independent_pearson, t_pearson)
+        n_gprime = _count(
+            lambda a, b: float(1.0 - np.sqrt(np.dot(a - b, a - b)) / np.sqrt(2.0 * a.shape[0])),
+            t_gprime,
+        )
+        self.assertNotEqual(n_pearson, n_gprime)
+        got = permutation_p(
+            q_prev, q_new, "clumpp-largek", 0, n_perm, seed, "column", mask=mask,
+        )
+        self.assertEqual(got["n_extreme"], n_pearson)
+        self.assertNotEqual(got["n_extreme"], n_gprime)
+        self.assertEqual(got["null"], "column")
+        self.assertEqual(got["p"], (1 + n_pearson) / float(n_perm + 1))
+
+    def test_chain_uses_aligned_previous_matrix(self):
+        rng = np.random.default_rng(20261023)
+        n = 8
+        qs = {}
+        for k in (2, 3, 4):
+            drawn = rng.dirichlet(np.ones(k), size=n)
+            qs[k] = np.loadtxt(_six_decimals(drawn))
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = []
+            for k in (2, 3, 4):
+                path = os.path.join(tmp, "t.%d.Q" % k)
+                np.savetxt(path, qs[k], fmt="%.6f")
+                qs[k] = np.loadtxt(path)
+                paths.append(path)
+            ids = os.path.join(tmp, "ids.txt")
+            with open(ids, "w", encoding="utf-8") as handle:
+                handle.write("".join("s%d\n" % i for i in range(n)))
+            mask = np.ones(n, dtype=bool)
+            aligned = {2: np.asarray(qs[2], dtype=float)}
+            perm = {2: [0, 1]}
+            for k in (2, 3):
+                nxt = np.asarray(qs[k + 1], dtype=float)
+                perm[k + 1] = _brute_greedy_perm(aligned[k], nxt, mask)
+                aligned[k + 1] = nxt[:, perm[k + 1]]
+            self.assertTrue(any(perm[k] != list(range(k)) for k in (3, 4)))
+            out = os.path.join(tmp, "out")
+            n_perm = 5
+            seed = 2
+            qbar.main([
+                "--q", paths[0], paths[1], paths[2], "--ids", ids, "--outdir", out,
+                "--perm", str(n_perm), "--perm-seed", str(seed), "--perm-null", "rows",
+            ])
+            with open(os.path.join(out, "match_support.tsv"), encoding="utf-8") as handle:
+                body = [line.split("\t") for line in handle.read().splitlines()[1:]]
+            expected = []
+            for k_to in (3, 4):
+                for column in range(k_to):
+                    _raw, n_extreme, p_value = _oracle_rows_p(
+                        aligned[k_to - 1], qs[k_to], column, n_perm, seed,
+                    )
+                    expected.append((str(k_to), str(n_extreme), "%.6f" % p_value))
+            self.assertEqual(len(body), len(expected))
+            for row, (k_to, n_extreme, p_value) in zip(body, expected):
+                self.assertEqual(row[0], k_to)
+                self.assertEqual(row[10], n_extreme)
+                self.assertEqual(row[11], p_value)
+                self.assertEqual(row[12], "rows")
+
+
+def _six_decimals(matrix):
+    import io
+    buffer = io.StringIO()
+    np.savetxt(buffer, matrix, fmt="%.6f")
+    buffer.seek(0)
+    return buffer
 
 
 if __name__ == "__main__":

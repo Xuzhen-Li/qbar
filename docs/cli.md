@@ -304,3 +304,22 @@ Resample individuals with replacement this many times and write match_support.ts
 Seed for --bootstrap. Used only when --bootstrap is greater than 0. Default 0.
 
 - Default: 0
+
+### `--perm`
+
+Permute this many times and append n_perm, n_extreme, p, null, and zero_column to match_support.tsv. Default 0 adds no columns. When this is greater than 0, --perm-null is required.
+
+- Default: 0
+
+### `--perm-seed`
+
+Seed for --perm. Used only when --perm is greater than 0. Default 0.
+
+- Default: 0
+
+### `--perm-null`
+
+Null used when --perm is greater than 0. rows shuffles the K+1 matrix row order and reruns that one match. column shuffles the matched new column across individuals and recomputes its similarity. Required when --perm is greater than 0.
+
+- Choices: rows, column
+- Default: not set

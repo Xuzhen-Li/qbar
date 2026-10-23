@@ -11,6 +11,9 @@ bootstrap of ADMIXTURE.
 
 ``match_support.tsv`` prints ``support`` with ``%.6f``. Further columns,
 if a later summary needs them, are appended after ``n_empty_mask``.
+When a row carries ``n_perm``, the writer appends ``n_perm``,
+``n_extreme``, ``p``, ``null``, and ``zero_column``. ``p`` uses
+``%.6f``. ``zero_column`` is written as ``yes`` or ``no``.
 """
 from __future__ import annotations
 
@@ -30,6 +33,15 @@ MATCH_SUPPORT_COLS = (
     "seed",
     "method",
     "n_empty_mask",
+)
+
+# Appended only when a row has n_perm. Absent rows keep the ST1 header.
+PERM_SUPPORT_COLS = (
+    "n_perm",
+    "n_extreme",
+    "p",
+    "null",
+    "zero_column",
 )
 
 
@@ -65,16 +77,26 @@ def _row_count(q_by_k, language):
 
 
 def write_match_support(path, rows):
-    """Write ``match_support.tsv``. ``support`` uses ``%.6f``."""
+    """Write ``match_support.tsv``. ``support`` and ``p`` use ``%.6f``.
+
+    Rows without ``n_perm`` keep the ST1 header. ``NA`` is written as the
+    letters NA. ``zero_column`` is ``yes`` or ``no``.
+    """
+    columns = list(MATCH_SUPPORT_COLS)
+    if rows and "n_perm" in rows[0]:
+        columns.extend(PERM_SUPPORT_COLS)
     with open(path, "w") as handle:
-        handle.write("\t".join(MATCH_SUPPORT_COLS) + "\n")
+        handle.write("\t".join(columns) + "\n")
         for row in rows:
             cells = []
-            for col in MATCH_SUPPORT_COLS:
-                if col == "support":
-                    cells.append("%.6f" % float(row[col]))
+            for col in columns:
+                value = row[col]
+                if col in ("support", "p") and value != "NA":
+                    cells.append("%.6f" % float(value))
+                elif col == "zero_column":
+                    cells.append("yes" if value is True or value == "yes" else "no")
                 else:
-                    cells.append(str(row[col]))
+                    cells.append(str(value))
             handle.write("\t".join(cells) + "\n")
 
 

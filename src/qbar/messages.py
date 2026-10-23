@@ -551,6 +551,58 @@ _CATALOG = {
         "en": "Bootstrap mask has %(got)s entries, expected %(rows)s rows",
         "zh": "Bootstrap 掩码有 %(got)s 项，应为 %(rows)s 行",
     },
+    "help_perm": {
+        "en": "Permute this many times and append n_perm, n_extreme, p, null, and zero_column to match_support.tsv. Default 0 adds no columns. When this is greater than 0, --perm-null is required.",
+        "zh": "置换这么多次，并在 match_support.tsv 追加 n_perm、n_extreme、p、null、zero_column。默认 0，不追加列。大于 0 时必须给出 --perm-null。",
+    },
+    "help_perm_seed": {
+        "en": "Seed for --perm. Used only when --perm is greater than 0. Default 0.",
+        "zh": "--perm 的种子。仅在 --perm 大于 0 时使用。默认 0。",
+    },
+    "help_perm_null": {
+        "en": "Null used when --perm is greater than 0. rows shuffles the K+1 matrix row order and reruns that one match. column shuffles the matched new column across individuals and recomputes its similarity. Required when --perm is greater than 0.",
+        "zh": "--perm 大于 0 时的零假设。rows 打乱 K+1 矩阵的行序并重跑这一步匹配。column 在个体间打乱被匹配的新列并重算相似度。大于 0 时必填。",
+    },
+    "perm_negative": {
+        "en": "--perm must be an integer greater than or equal to 0, got %(n)s",
+        "zh": "--perm 必须是大于或等于 0 的整数，收到 %(n)s",
+    },
+    "perm_seed_negative": {
+        "en": "--perm-seed must be an integer greater than or equal to 0, got %(seed)s",
+        "zh": "--perm-seed 必须是大于或等于 0 的整数，收到 %(seed)s",
+    },
+    "perm_null_required": {
+        "en": "--perm requires --perm-null when --perm is greater than 0. Choices are rows and column.",
+        "zh": "--perm 大于 0 时必须给出 --perm-null。可选 rows 和 column。",
+    },
+    "perm_null_choice": {
+        "en": "--perm-null must be rows or column, got %(null)s",
+        "zh": "--perm-null 只能是 rows 或 column，收到 %(null)s",
+    },
+    "perm_column_range": {
+        "en": "Permutation column %(column)s is outside 0..%(last)s",
+        "zh": "置换列 %(column)s 不在 0..%(last)s 内",
+    },
+    "perm_not_matrix": {
+        "en": "--perm needs two matrices with 2 dimensions",
+        "zh": "--perm 需要两个二维矩阵",
+    },
+    "perm_row_count": {
+        "en": "--perm needs the same row count in both matrices, got %(prev)s and %(new)s",
+        "zh": "--perm 需要两个矩阵行数相同，收到 %(prev)s 和 %(new)s",
+    },
+    "perm_group_rows": {
+        "en": "--perm expected %(rows)s group labels, got %(got)s",
+        "zh": "--perm 需要 %(rows)s 个组名，收到 %(got)s",
+    },
+    "perm_mask_shape": {
+        "en": "--perm mask has %(got)s entries, expected %(rows)s rows",
+        "zh": "--perm 掩码有 %(got)s 项，应为 %(rows)s 行",
+    },
+    "perm_internal": {
+        "en": "Permutation row count does not match the alignment",
+        "zh": "置换行数和对齐结果不一致",
+    },
 }
 
 
