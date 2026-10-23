@@ -139,6 +139,33 @@ Order leaves with scipy optimal_leaf_ordering
 
 - Default: false
 
+### `--order-mode`
+
+within orders inside groups (default). global-hclust clusters every row as one tree. group-hclust keeps each group contiguous.
+
+- Choices: within, global-hclust, group-hclust
+- Default: within
+
+### `--group-order`
+
+Group order for --order-mode group-hclust. input keeps the first-seen order (default). hclust orders groups by the mean Q row.
+
+- Choices: input, hclust
+- Default: input
+
+### `--dendrogram`
+
+Dendrogram above the bars. none draws none (default). top is allowed for global-hclust, or for group-hclust with --group-order hclust.
+
+- Choices: none, top
+- Default: none
+
+### `--hclust-max-bytes`
+
+Refuse before the distance vector when N*(N-1)/2*8 exceeds this many bytes. 0 means no cap. When omitted, global-hclust and the between-group tree use 4294967296, and within-group trees have no cap.
+
+- Default: not set
+
 ### `--align`
 
 - Default: not set
