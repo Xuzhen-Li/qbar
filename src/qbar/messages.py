@@ -764,8 +764,8 @@ _CATALOG = {
         "zh": "条形图上方的树状图。none=不画（默认）。top 只用于 global-hclust，或 group-hclust 且 --group-order hclust。",
     },
     "help_hclust_max_bytes": {
-        "en": "Refuse before the distance vector when N*(N-1)/2*8 exceeds this many bytes. 0 means no cap. When omitted, global-hclust and the between-group tree use 4294967296, and within-group trees have no cap.",
-        "zh": "距离向量字节数 N*(N-1)/2*8 超过该值时，在建立向量前停止。0 表示不限制。省略时，global-hclust 和组间树用 4294967296，组内树不限制。",
+        "en": "Refuse before the distance vector when N*(N-1)/2*8 exceeds this many bytes. 0 means no cap. When omitted, global-hclust, the between-group tree, and --auto-groups hclust use 4294967296, and within-group trees have no cap.",
+        "zh": "距离向量字节数 N*(N-1)/2*8 超过该值时，在建立向量前停止。0 表示不限制。省略时，global-hclust、组间树和 --auto-groups hclust 用 4294967296，组内树不限制。",
     },
     "hclust_over_cap": {
         "en": "Hierarchical clustering of N=%(n)s needs %(nbytes)s bytes (N*(N-1)/2*8), which is above --hclust-max-bytes %(cap)s. Use within-group clustering or --hclust-pre dominant.",
@@ -826,6 +826,166 @@ _CATALOG = {
     "dendrogram_kind": {
         "en": "Internal error: unknown dendrogram layer %(kind)s.",
         "zh": "内部错误：未知的树状图层 %(kind)s。",
+    },
+    "help_auto_groups": {
+        "en": "Write groups_auto.tsv. none writes nothing (default). major uses the highest column. threshold uses --admix-cut. hclust and kmeans need --auto-g and name groups G1, G2, ... hclust and kmeans can read --pca.",
+        "zh": "写 groups_auto.tsv。none 不写（默认）。major 用最高列。threshold 用 --admix-cut。hclust 和 kmeans 需要 --auto-g，组名是 G1、G2。这两种也可以读 --pca。",
+    },
+    "help_auto_k": {
+        "en": "K of the aligned matrix used for max_q, top_column, and Q clustering. Default: the largest K.",
+        "zh": "用于 max_q、top_column 和 Q 聚类的对齐矩阵的 K。默认最大的 K。",
+    },
+    "help_admix_cut": {
+        "en": "Strict cut for --auto-groups threshold. A row is admixed only when its maximum is below this cut. Must be above 0 and at most 1. Default 0.5.",
+        "zh": "--auto-groups threshold 的严格阈值。最大值低于该值才标为 admixed。必须大于 0 且不超过 1。默认 0.5。",
+    },
+    "help_auto_g": {
+        "en": "Number of groups for --auto-groups hclust or kmeans. Required for those methods. At least 1, and at most the row count.",
+        "zh": "--auto-groups hclust 或 kmeans 的组数。这两种方法必须给出。至少为 1，且不能超过行数。",
+    },
+    "help_auto_seed": {
+        "en": "Seed for --auto-groups kmeans. One numpy Generator draws the 10 restarts. Default 0.",
+        "zh": "--auto-groups kmeans 的种子。一个 numpy Generator 抽出 10 次重启。默认 0。",
+    },
+    "help_pca": {
+        "en": "PLINK 1.9 eigenvec for --auto-groups hclust or kmeans. No header: FID, IID, then scores. Rows match on IID. Requires --pca-n.",
+        "zh": "给 --auto-groups hclust 或 kmeans 的 PLINK 1.9 eigenvec。无表头：FID、IID，然后是得分。按 IID 对齐。必须同时给 --pca-n。",
+    },
+    "help_pca_n": {
+        "en": "How many leading score columns to use from --pca. Required with --pca. From 1 up to the number of score columns.",
+        "zh": "从 --pca 取前几个得分列。和 --pca 一起必须给出。范围是 1 到文件里的得分列数。",
+    },
+    "auto_groups_choice": {
+        "en": "--auto-groups must be none, major, threshold, hclust, or kmeans, got %(method)s.",
+        "zh": "--auto-groups 只能是 none、major、threshold、hclust 或 kmeans，收到 %(method)s。",
+    },
+    "auto_k_needs_groups": {
+        "en": "--auto-k %(k)s requires --auto-groups major, threshold, hclust, or kmeans.",
+        "zh": "--auto-k %(k)s 需要 --auto-groups 为 major、threshold、hclust 或 kmeans。",
+    },
+    "admix_cut_needs_threshold": {
+        "en": "--admix-cut %(cut)s requires --auto-groups threshold.",
+        "zh": "--admix-cut %(cut)s 需要 --auto-groups threshold。",
+    },
+    "auto_g_needs_cluster": {
+        "en": "--auto-g %(g)s requires --auto-groups hclust or kmeans.",
+        "zh": "--auto-g %(g)s 需要 --auto-groups hclust 或 kmeans。",
+    },
+    "auto_g_required": {
+        "en": "--auto-groups %(method)s requires --auto-g.",
+        "zh": "--auto-groups %(method)s 需要 --auto-g。",
+    },
+    "auto_g_range": {
+        "en": "--auto-g must be an integer >= 1, got %(g)s.",
+        "zh": "--auto-g 必须是大于等于 1 的整数，收到 %(g)s。",
+    },
+    "auto_g_above_n": {
+        "en": "--auto-g %(g)s is greater than the number of rows %(n)s.",
+        "zh": "--auto-g %(g)s 大于行数 %(n)s。",
+    },
+    "auto_seed_needs_kmeans": {
+        "en": "--auto-seed %(seed)s requires --auto-groups kmeans.",
+        "zh": "--auto-seed %(seed)s 需要 --auto-groups kmeans。",
+    },
+    "pca_needs_cluster": {
+        "en": "--pca requires --auto-groups hclust or kmeans.",
+        "zh": "--pca 需要 --auto-groups hclust 或 kmeans。",
+    },
+    "pca_needs_n": {
+        "en": "--pca requires --pca-n.",
+        "zh": "--pca 需要 --pca-n。",
+    },
+    "pca_n_needs_pca": {
+        "en": "--pca-n requires --pca.",
+        "zh": "--pca-n 需要 --pca。",
+    },
+    "pca_n_low": {
+        "en": "--pca-n must be an integer >= 1, got %(n)s.",
+        "zh": "--pca-n 必须是大于等于 1 的整数，收到 %(n)s。",
+    },
+    "admix_cut_bounds": {
+        "en": "--admix-cut must be above 0 and at most 1, got %(cut)s.",
+        "zh": "--admix-cut 必须大于 0 且不超过 1，收到 %(cut)s。",
+    },
+    "auto_k_missing": {
+        "en": "--auto-k %(k)s is not a loaded K.",
+        "zh": "--auto-k %(k)s 不是已读入的 K。",
+    },
+    "pca_not_found": {
+        "en": "--pca file not found: %(path)s",
+        "zh": "找不到 --pca 文件：%(path)s",
+    },
+    "pca_empty": {
+        "en": "--pca file is empty: %(path)s",
+        "zh": "--pca 文件是空的：%(path)s",
+    },
+    "pca_layout": {
+        "en": "%(path)s: only the PLINK 1.9 eigenvec layout is read (no header, FID, IID, then scores).",
+        "zh": "%(path)s：只读取 PLINK 1.9 eigenvec（无表头，FID、IID，然后是得分）。",
+    },
+    "pca_blank": {
+        "en": "%(path)s line %(line)s is empty. Rows are not skipped.",
+        "zh": "%(path)s 第 %(line)s 行是空的。不跳过任何行。",
+    },
+    "pca_short": {
+        "en": "%(path)s line %(line)s does not have FID, IID, and scores.",
+        "zh": "%(path)s 第 %(line)s 行没有 FID、IID 和得分。",
+    },
+    "pca_score": {
+        "en": "%(path)s line %(line)s has a non-numeric score.",
+        "zh": "%(path)s 第 %(line)s 行有非数字得分。",
+    },
+    "pca_width": {
+        "en": "%(path)s line %(line)s has %(got)s score columns, expected %(want)s.",
+        "zh": "%(path)s 第 %(line)s 行有 %(got)s 个得分列，应为 %(want)s。",
+    },
+    "pca_dup": {
+        "en": "%(path)s has a duplicate IID %(iid)s.",
+        "zh": "%(path)s 的 IID %(iid)s 重复。",
+    },
+    "pca_missing": {
+        "en": "%(path)s has no row for id %(iid)s.",
+        "zh": "%(path)s 没有 id %(iid)s 的行。",
+    },
+    "pca_n_range": {
+        "en": "--pca-n must be from 1 to %(have)s score columns, got %(n)s.",
+        "zh": "--pca-n 必须在 1 到 %(have)s 个得分列之间，收到 %(n)s。",
+    },
+    "hclust_fewer": {
+        "en": "Hierarchical clustering returned %(got)s groups, not %(want)s. fcluster with criterion maxclust returns fewer groups when equal merge distances are cut together.",
+        "zh": "层次聚类得到 %(got)s 组，不是 %(want)s。合并距离相同时，fcluster 的 maxclust 会一次切开，组数更少。",
+    },
+    "kmeans_all_failed": {
+        "en": "kmeans2 had no successful restart in %(restarts)s (empty clusters count as failed restarts; %(failed)s failed).",
+        "zh": "kmeans2 在 %(restarts)s 次重启里没有成功（空簇算失败；失败 %(failed)s 次）。",
+    },
+    "hclust_pre_ignored": {
+        "en": "Warning: --hclust-pre is not used by --auto-groups hclust. The tree uses every row.",
+        "zh": "注意：--auto-groups hclust 不使用 --hclust-pre。树使用全部行。",
+    },
+    "auto_groups_ids": {
+        "en": "auto_groups needs one id per row, got %(ids)s ids and %(rows)s rows.",
+        "zh": "auto_groups 需要每行一个 id，收到 %(ids)s 个 id 和 %(rows)s 行。",
+    },
+    "auto_groups_shape": {
+        "en": "auto_groups needs a 2-d matrix, got shape %(shape)s.",
+        "zh": "auto_groups 需要二维矩阵，收到形状 %(shape)s。",
+    },
+    "auto_groups_method": {
+        "en": "auto_groups method must be major, threshold, hclust, or kmeans, got %(method)s.",
+        "zh": "auto_groups 的 method 只能是 major、threshold、hclust 或 kmeans，收到 %(method)s。",
+    },
+    "auto_pca_shape": {
+        "en": "PCA scores have %(rows)s rows, expected %(want)s.",
+        "zh": "PCA 得分有 %(rows)s 行，应为 %(want)s。",
+    },
+    "auto_pca_n_mismatch": {
+        "en": "PCA scores have %(got)s columns, expected --pca-n %(n)s.",
+        "zh": "PCA 得分有 %(got)s 列，--pca-n 为 %(n)s。",
+    },
+    "auto_dup_id": {
+        "en": "auto_groups ids contain a duplicate %(iid)s.",
+        "zh": "auto_groups 的 id %(iid)s 重复。",
     },
 }
 

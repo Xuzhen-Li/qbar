@@ -28,6 +28,13 @@ and can order the groups by the mean Q row. --dendrogram top draws that
 tree above the bars. The default none draws none. --hclust-max-bytes
 limits the distance vector. When it is omitted, the new modes use
 4294967296 bytes for the all-rows vector or the between-group vector.
+--auto-groups hclust uses that same cap on every row. --auto-groups none
+(the default) writes no groups file. major names a row C1, C2, ... from
+its highest column, lowest index on a tie. threshold names a row admixed
+only when the maximum is below --admix-cut. hclust and kmeans name groups
+G1, G2, ... in order of first appearance. Those two accept --pca with
+--pca-n, a PLINK 1.9 eigenvec with no header. Auto groups do not replace
+--groups.
 https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.hierarchy.linkage.html
 """
 from __future__ import annotations
@@ -250,6 +257,14 @@ def build_parser(language="en"):
                    help=say("help_cluster_flow"))
     p.add_argument("--flow-weight", choices=("share", "jaccard"), default="share",
                    help=say("help_flow_weight"))
+    p.add_argument("--auto-groups", choices=("none", "major", "threshold", "hclust", "kmeans"),
+                   default="none", help=say("help_auto_groups"))
+    p.add_argument("--auto-k", type=int, default=None, help=say("help_auto_k"))
+    p.add_argument("--admix-cut", type=float, default=0.5, help=say("help_admix_cut"))
+    p.add_argument("--auto-g", type=int, default=None, help=say("help_auto_g"))
+    p.add_argument("--auto-seed", type=int, default=0, help=say("help_auto_seed"))
+    p.add_argument("--pca", default=None, help=say("help_pca"))
+    p.add_argument("--pca-n", type=int, default=None, help=say("help_pca_n"))
     return p
 
 
