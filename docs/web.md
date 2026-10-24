@@ -26,7 +26,7 @@ The status line is one of: loading, ready, running, done, error.
 
 Your files stay in this browser. They are not uploaded. The page loads one pinned Pyodide build and the local qbar wheel while the status says loading. After the status says ready, the page does not make another network request. The run and the downloads stay in this browser.
 
-What that sentence covers: before ready, the page loads the pinned Pyodide files and the qbar wheel from this same server (`web/dist/`). Both are files the build wrote. The page does not request anything from another site, before ready or after. After ready, the run reads only the files you chose and the in-browser filesystem. Downloads use local object URLs. The page does not load fonts, images, or analytics, and it has no link that fetches a page on its own.
+What that sentence covers: before ready, the page loads the pinned Pyodide files and the qbar wheel from this same server (`web/dist/`). Both are files the build wrote. After ready, the run reads only the files you chose and the in-browser filesystem. Downloads use local object URLs. The page does not load fonts, images, or analytics, and it has no link that fetches a page on its own. What a local browser check saw, and what it could not see, is in `docs/factpacks/F10.md`.
 
 ## Build
 
@@ -91,7 +91,7 @@ Vector PDF and SVG ask qbar for a TrueType file in `FONT_CANDIDATES`. Those path
 
 The page does not offer logs, replicates, polygon, map pies, auto groups, or a config file. Those stay at the command-line defaults, which is off or omitted.
 
-No zip file is built. There is no time target. A browser recording of requests after ready, and a timed run of 2000 samples for K from 2 to 10, are left to a later step.
+No zip file is built. There is no time target. On 2026-10-24 a local browser check of 2000 samples, K from 2 to 10, took 2.046 s, 1.443 s, and 2.033 s from click to done. The request record and its limits are in `docs/factpacks/F10.md`.
 
 K from and K to must both be integers when any Q file name includes a K. A blank value, or a value that is not an integer, is an error and the run does not start. It does not mean every K. File names with no K have no range. Those inputs stay unused and every such Q file is used.
 
