@@ -223,18 +223,45 @@ def write_greyscale_png(path, source):
 
 
 def ancestry_image(q, hexes, height):
-    """One pixel column per sample. Column 0 of q is the bottom of the bar."""
+    """One pixel column per sample. Column 0 of q is the bottom of the bar.
+
+    The pixel key is ``(height - 1 - y) / height + 1e-12``, the same value
+    the previous per-pixel ``searchsorted`` used. On a finite
+    non-decreasing cumulative row, ``searchsorted(..., side="right")`` is
+    the number of bounds that are <= that key. Any other row uses
+    ``searchsorted`` on ``cumsum`` of that row and the same keys.
+    """
     n, k = q.shape
     rgb = np.full((height, n, 3), 255, dtype=np.uint8)
-    cols = [hex_rgb(h) for h in hexes]
+    if n == 0 or height == 0 or k == 0:
+        return rgb
+    palette = np.stack([hex_rgb(h) for h in hexes], axis=0)
+    keys = np.empty(height, dtype=np.float64)
+    for y in range(height):
+        keys[y] = (height - 1 - y) / float(height) + 1e-12
+    bounds = np.cumsum(q, axis=1)
+    finite = bool(np.isfinite(bounds).all())
+    if k < 2:
+        monotone = True
+    else:
+        monotone = bool(np.all(bounds[:, 1:] >= bounds[:, :-1]))
+    if finite and monotone:
+        # Keep the temporary comparison under a few million entries.
+        chunk = 4096
+        for start in range(0, n, chunk):
+            stop = min(start + chunk, n)
+            block_bounds = bounds[start:stop]
+            chosen = np.sum(block_bounds[:, None, :] <= keys[None, :, None], axis=2)
+            valid = (chosen < k).T
+            painted = palette[np.minimum(chosen, k - 1).T]
+            block = rgb[:, start:stop]
+            block[valid] = painted[valid]
+        return rgb
     for i in range(n):
-        bounds = np.cumsum(q[i])
-        for y in range(height):
-            t = (height - 1 - y) / float(height)
-            c = int(np.searchsorted(bounds, t + 1e-12, side="right"))
-            if c >= k:
-                continue
-            rgb[y, i] = cols[c]
+        chosen = np.searchsorted(np.cumsum(q[i]), keys, side="right")
+        valid = chosen < k
+        if np.any(valid):
+            rgb[valid, i] = palette[chosen[valid]]
     return rgb
 
 

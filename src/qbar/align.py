@@ -119,11 +119,85 @@ def match_next_hungarian(q_prev, q_new, mask, *, language="en"):
     return perm, rs
 
 
+def _pong_one(a, b):
+    """``pong_sim`` for two contiguous 1d float64 vectors of equal length.
+
+    When every entry has ``a + b > 0``, boolean indexing copies that whole
+    sequence. The full subtraction is the same sequence, so ``np.dot``
+    matches the previous body. A shorter mask still subtracts the kept
+    entries in index order and dots that vector.
+    """
+    keep = (a + b) > 0
+    n = int(keep.sum())
+    if n == 0:
+        return 0.0
+    if n == a.shape[0]:
+        d = a - b
+    else:
+        d = a[keep] - b[keep]
+    return float(1.0 - np.sqrt(np.dot(d, d) / (2.0 * n)))
+
+
+def _pong_vector(column):
+    """1d float64 vector. This is the conversion ``pong_sim`` applies."""
+    column = np.asarray(column, dtype=float)
+    return np.ascontiguousarray(column)
+
+
+def _pong_columns(matrix):
+    """Contiguous float64 columns. A column that is already contiguous is kept."""
+    matrix = np.asarray(matrix, dtype=float)
+    cols = []
+    for index in range(int(matrix.shape[1])):
+        col = matrix[:, index]
+        if col.dtype == np.float64 and col.ndim == 1 and col.flags.c_contiguous:
+            cols.append(col)
+        else:
+            cols.append(np.ascontiguousarray(col, dtype=np.float64))
+    return cols
+
+
+def _pong_score_cols(left_cols, right_cols):
+    """``out[c, j]`` equals ``_pong_one(left_cols[c], right_cols[j])``."""
+    out = np.empty((len(left_cols), len(right_cols)), dtype=float)
+    for c, left in enumerate(left_cols):
+        for j, right in enumerate(right_cols):
+            out[c, j] = _pong_one(left, right)
+    return out
+
+
+def _pong_merge_block(n_rows, n_pairs, merge_buf):
+    """F-order float64 block for ``n_pairs`` columns of length ``n_rows``.
+
+    ``merge_buf`` is used when it already has room. Otherwise this allocates
+    a block for this call. The block is not stored on the module.
+    """
+    rows = int(n_rows)
+    pairs = int(n_pairs)
+    if (
+        isinstance(merge_buf, np.ndarray)
+        and merge_buf.dtype == np.float64
+        and merge_buf.ndim == 2
+        and merge_buf.flags.f_contiguous
+        and int(merge_buf.shape[0]) >= rows
+        and int(merge_buf.shape[1]) >= pairs
+    ):
+        return merge_buf
+    return np.empty((rows, pairs), dtype=np.float64, order="F")
+
+
+def _pong_sim_matrix(left, right):
+    """``out[c, j]`` equals ``pong_sim(left[:, c], right[:, j])``."""
+    return _pong_score_cols(_pong_columns(left), _pong_columns(right))
+
+
 def pong_sim(a, b):
     """pong default similarity (Behr et al. 2016, manual eq. 1):
     1 - sqrt(sum((a-b)^2 over N*) / (2|N*|)), N* = people with a+b > 0."""
     a = np.asarray(a, dtype=float)
     b = np.asarray(b, dtype=float)
+    if a.ndim == 1 and b.ndim == 1 and a.shape[0] == b.shape[0]:
+        return _pong_one(np.ascontiguousarray(a), np.ascontiguousarray(b))
     keep = (a + b) > 0
     n = int(keep.sum())
     if n == 0:
@@ -132,7 +206,7 @@ def pong_sim(a, b):
     return float(1.0 - np.sqrt(np.dot(d, d) / (2.0 * n)))
 
 
-def match_next_pong(q_prev, q_new, mask, *, language="en"):
+def match_next_pong(q_prev, q_new, mask, *, language="en", merge_buf=None):
     """Split-aware matching between adjacent K, after pong (Behr et al. 2016).
 
     For each pair (a, b) of new columns, sum them into one column, match the k old
@@ -151,23 +225,53 @@ def match_next_pong(q_prev, q_new, mask, *, language="en"):
         raise SystemExit(_msg("k_columns_differ", language))
     old = q_prev[mask]
     new = q_new[mask]
+    # Each raw pair is scored once. Each merged column a+b is scored once.
+    # Both values are the pong_sim floats, so the assignment uses the same
+    # matrix the pair loop used to rebuild on every visit.
+    # The sum is taken in the input dtype. ``pong_sim`` upcasts that sum.
+    # The upcast columns are written into one F-order block. ``align_qs``
+    # passes a block sized for the largest step. A column of that block is
+    # already contiguous, so scoring does not allocate a second copy.
+    # Column views are dropped before this function returns.
+    old_cols = _pong_columns(old)
+    new_cols = _pong_columns(new)
+    base = _pong_score_cols(old_cols, new_cols)
+    pairs = [(a, b) for a in range(k_new) for b in range(a + 1, k_new)]
+    if pairs:
+        buf = _pong_merge_block(int(old.shape[0]), len(pairs), merge_buf)
+        block = buf[: int(old.shape[0]), : len(pairs)]
+        for index, (a, b) in enumerate(pairs):
+            added = new[:, a] + new[:, b]
+            block[:, index] = _pong_vector(added)
+        merged_cols = [block[:, index] for index in range(len(pairs))]
+        del new_cols, added
+        merged_sim = _pong_score_cols(old_cols, merged_cols)
+        del old_cols, merged_cols
+        pair_at = {pair: index for index, pair in enumerate(pairs)}
+    else:
+        merged_sim = None
+        pair_at = {}
+        del old_cols, new_cols
     best = None
-    for a in range(k_new):
-        for b in range(a + 1, k_new):
-            cols = [j for j in range(k_new) if j not in (a, b)] + [(a, b)]
-            merged = [new[:, j] if not isinstance(j, tuple) else new[:, a] + new[:, b] for j in cols]
-            sim = np.array([[pong_sim(old[:, c], m) for m in merged] for c in range(k_old)])
-            rows, cidx = linear_sum_assignment(sim, maximize=True)
-            score = float(sim[rows, cidx].mean())
-            if best is None or score > best[0]:
-                best = (score, cols, dict(zip(rows.tolist(), cidx.tolist())), sim)
+    for a, b in pairs:
+        cols = [j for j in range(k_new) if j not in (a, b)] + [(a, b)]
+        sim = np.empty((k_old, len(cols)), dtype=float)
+        for m_i, j in enumerate(cols):
+            if isinstance(j, tuple):
+                sim[:, m_i] = merged_sim[:, pair_at[j]]
+            else:
+                sim[:, m_i] = base[:, j]
+        rows, cidx = linear_sum_assignment(sim, maximize=True)
+        score = float(sim[rows, cidx].mean())
+        if best is None or score > best[0]:
+            best = (score, cols, dict(zip(rows.tolist(), cidx.tolist())), sim)
     _score, cols, by_row, sim = best
     perm, sims, split = [], [], None
     for c in range(k_old):
         j = cols[by_row[c]]
         if isinstance(j, tuple):
             a, b = j
-            sa, sb = pong_sim(old[:, c], new[:, a]), pong_sim(old[:, c], new[:, b])
+            sa, sb = float(base[c, a]), float(base[c, b])
             keep, rest = (a, b) if sa >= sb else (b, a)
             perm.append(int(keep))
             split = {"parent": c, "pair": (int(keep), int(rest))}
@@ -539,53 +643,68 @@ def align_qs(q_by_k, groups, anchor, mode, align_groups, qmax_cut, do_align, met
         return aligned, perm, meta
     perm[ks[0]] = anchor_perm(q_by_k[ks[0]], groups, anchor, language=language)
     aligned[ks[0]] = q_by_k[ks[0]][:, perm[ks[0]]]
-    for k in ks[:-1]:
-        if mode == "core":
-            if not align_groups:
-                raise SystemExit(_msg("core_needs_groups", language))
-            mask = core_mask(aligned[k], q_by_k[k + 1], groups, align_groups, qmax_cut, language=language)
-        else:
-            if align_groups:
-                mask = np.array([g in set(align_groups) for g in groups])
+    # One merged-column block for this call, sized for the largest step.
+    # It is passed down and dropped when this alignment returns. Another
+    # call, including one on another thread, gets its own block.
+    merge_buf = None
+    if method == "pong":
+        n_rows = int(q_by_k[ks[0]].shape[0])
+        max_k = int(ks[-1])
+        n_pairs = max_k * (max_k - 1) // 2
+        if n_pairs > 0:
+            merge_buf = np.empty((n_rows, n_pairs), dtype=np.float64, order="F")
+    try:
+        for k in ks[:-1]:
+            if mode == "core":
+                if not align_groups:
+                    raise SystemExit(_msg("core_needs_groups", language))
+                mask = core_mask(aligned[k], q_by_k[k + 1], groups, align_groups, qmax_cut, language=language)
             else:
-                mask = np.ones(len(groups), dtype=bool)
-            if not mask.any():
-                raise SystemExit(_msg("align_empty", language))
-        if row_mask is not None:
-            extra = np.asarray(row_mask, dtype=bool)
-            if extra.ndim != 1 or extra.shape[0] != mask.shape[0]:
-                got = int(extra.shape[0]) if extra.ndim >= 1 else int(extra.size)
-                raise SystemExit(_msg(
-                    "bootstrap_mask_shape", language, rows=int(mask.shape[0]), got=got,
-                ))
-            mask = mask & extra
-            if not mask.any():
-                raise SystemExit(_msg("align_empty", language))
-        if method == "pong":
-            p, rs, split = match_next_pong(aligned[k], q_by_k[k + 1], mask, language=language)
-        elif method == "jaccard":
-            p, rs = match_next_jaccard(
-                aligned[k], q_by_k[k + 1], mask, jaccard_set, jaccard_cut, language=language,
-            )
-        else:
-            p, rs = match_next(aligned[k], q_by_k[k + 1], mask, method, language=language)
-        perm[k + 1] = p
-        aligned[k + 1] = q_by_k[k + 1][:, p]
-        meta[k + 1] = {"n_mask": int(mask.sum()), "pearson": rs, "mask": mask}
-        if method == "pong":
-            meta[k + 1]["split_parent"] = split["parent"]
-            continue
-        if method == "jaccard":
-            meta[k + 1]["jaccard"] = True
-            continue
-        if method in GPRIME_METHODS:
-            meta[k + 1]["gprime"] = True
-            continue
-        # Pearson < 0.5 on stderr is only for greedy and hungarian.
-        low = [r for r in rs[:-1] if r is not None and r < 0.5]
-        if warn and low:
-            print(
-                _msg("pearson_low", language, k_from=k, k_to=k + 1, n=len(low)),
-                file=sys.stderr,
-            )
-    return aligned, perm, meta
+                if align_groups:
+                    mask = np.array([g in set(align_groups) for g in groups])
+                else:
+                    mask = np.ones(len(groups), dtype=bool)
+                if not mask.any():
+                    raise SystemExit(_msg("align_empty", language))
+            if row_mask is not None:
+                extra = np.asarray(row_mask, dtype=bool)
+                if extra.ndim != 1 or extra.shape[0] != mask.shape[0]:
+                    got = int(extra.shape[0]) if extra.ndim >= 1 else int(extra.size)
+                    raise SystemExit(_msg(
+                        "bootstrap_mask_shape", language, rows=int(mask.shape[0]), got=got,
+                    ))
+                mask = mask & extra
+                if not mask.any():
+                    raise SystemExit(_msg("align_empty", language))
+            if method == "pong":
+                p, rs, split = match_next_pong(
+                    aligned[k], q_by_k[k + 1], mask, language=language, merge_buf=merge_buf,
+                )
+            elif method == "jaccard":
+                p, rs = match_next_jaccard(
+                    aligned[k], q_by_k[k + 1], mask, jaccard_set, jaccard_cut, language=language,
+                )
+            else:
+                p, rs = match_next(aligned[k], q_by_k[k + 1], mask, method, language=language)
+            perm[k + 1] = p
+            aligned[k + 1] = q_by_k[k + 1][:, p]
+            meta[k + 1] = {"n_mask": int(mask.sum()), "pearson": rs, "mask": mask}
+            if method == "pong":
+                meta[k + 1]["split_parent"] = split["parent"]
+                continue
+            if method == "jaccard":
+                meta[k + 1]["jaccard"] = True
+                continue
+            if method in GPRIME_METHODS:
+                meta[k + 1]["gprime"] = True
+                continue
+            # Pearson < 0.5 on stderr is only for greedy and hungarian.
+            low = [r for r in rs[:-1] if r is not None and r < 0.5]
+            if warn and low:
+                print(
+                    _msg("pearson_low", language, k_from=k, k_to=k + 1, n=len(low)),
+                    file=sys.stderr,
+                )
+        return aligned, perm, meta
+    finally:
+        merge_buf = None
