@@ -52,6 +52,11 @@ page reuses that canvas. It can move a sample within its group, reorder
 groups, swap two columns at one K, rename a column, and set a column
 colour. --state replays state.json after alignment. It cannot be combined
 with --order-file, --color, or --color-file.
+--config reads a YAML file of settings and is omitted by default.
+Precedence is the command line, then the file, then the defaults. A flag
+on the command line wins even when its value equals the default. Keys are
+argparse dest names. Without PyYAML, --config exits and names
+pip install "qbar[config]".
 https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.hierarchy.linkage.html
 """
 from __future__ import annotations
@@ -252,6 +257,7 @@ def build_parser(language="en"):
     p.add_argument("--html", action="store_true", help=say("help_html"))
     p.add_argument("--editor", action="store_true", help=say("help_editor"))
     p.add_argument("--state", default=None, help=say("help_state"))
+    p.add_argument("--config", default=None, help=say("help_config"))
     p.add_argument("--title", default="")
     p.add_argument("--width", type=int, default=2200, help=say("help_width"))
     p.add_argument("--bar-height", type=int, default=0, help=say("help_bar_height"))
@@ -296,9 +302,149 @@ def build_parser(language="en"):
     return p
 
 
+def _consumes_value(action):
+    """True when this option takes the next argv token as its value."""
+    if isinstance(action, (
+        argparse._StoreTrueAction,
+        argparse._StoreFalseAction,
+        argparse._HelpAction,
+        argparse._AppendConstAction,
+        argparse._CountAction,
+        argparse._VersionAction,
+    )):
+        return False
+    if action.nargs == 0:
+        return False
+    return bool(action.option_strings)
+
+
+def _requests_help(argv, language):
+    """True when ``-h`` or ``--help`` is an option, not a consumed value."""
+    if not any(item in ("-h", "--help") for item in argv):
+        return False
+    consumes = set()
+    for action in build_parser(language)._actions:
+        if not _consumes_value(action):
+            continue
+        for opt in action.option_strings:
+            consumes.add(opt)
+    index = 0
+    while index < len(argv):
+        item = argv[index]
+        if item == "--":
+            return False
+        if item in ("-h", "--help"):
+            return True
+        if item in consumes:
+            index += 2
+            continue
+        index += 1
+    return False
+
+
+def _explicit_namespace(argv, language):
+    """Parse ``argv`` with defaults suppressed.
+
+    A dest that the user did not pass is absent. Comparing with the
+    ordinary default would miss a flag the user set to that default.
+    """
+    parser = build_parser(language)
+    parser._defaults.clear()
+    for action in parser._actions:
+        if isinstance(action, argparse._HelpAction):
+            continue
+        action.required = False
+        action.default = argparse.SUPPRESS
+    return parser.parse_args(argv)
+
+
+def _note_config_replaced_by_state(args, coerced, explicit, language):
+    """Ignore config colour and order files when ``--state`` replaces them.
+
+    Command-line ``--color``, ``--color-file``, and ``--order-file`` stay
+    on the namespace, so the existing conflict errors still run. Each
+    ignored key is recorded as the config value and ``used: state``.
+    One stderr line names every ignored key.
+    """
+    if not getattr(args, "state", None):
+        return {}
+    recorded = {}
+    names = []
+    for dest in ("color", "color_file", "order_file"):
+        if dest not in coerced or dest in explicit:
+            continue
+        value = coerced[dest]
+        if not value:
+            continue
+        if dest in ("color_file", "order_file"):
+            value = os.path.basename(value)
+        recorded[dest] = {"config": value, "used": "state"}
+        if dest == "color":
+            args.color = []
+        else:
+            setattr(args, dest, None)
+        names.append(dest)
+    if names:
+        print(
+            _msg("config_replaced_by_state", language, option=", ".join(names)),
+            file=sys.stderr,
+        )
+    return recorded
+
+
+def _state_align_override(args, coerced, explicit, language):
+    """Record a state override, and maybe use the state's align method.
+
+    Order and colours are replaced whenever ``--state`` is set. The align
+    method changes only when the config file set it, the command line did
+    not, and the state names another known method. A command-line
+    ``--align-method`` still has to match the state inside ``apply_state``.
+    """
+    if not getattr(args, "state", None):
+        return None
+    override = {"colours": "state", "order": "state"}
+    if "align_method" not in coerced or "align_method" in explicit:
+        return override
+    from .state import load_state
+    state = load_state(args.state, language=language)
+    method = state.get("align_method")
+    if method in ALIGN_METHODS and method != args.align_method:
+        override["align_method"] = {
+            "config": coerced["align_method"],
+            "state": method,
+        }
+        args.align_method = method
+    return override
+
+
 def main(argv=None):
-    args = build_parser(language=_language_from_argv(argv)).parse_args(argv)
+    language = _language_from_argv(argv)
+    passed = list(sys.argv[1:] if argv is None else argv)
+    if _requests_help(passed, language):
+        build_parser(language).parse_args(argv)
+        return 0
+    seen = _explicit_namespace(passed, language)
+    explicit = {key for key in vars(seen) if key != "help"}
+    if "config" not in explicit:
+        args = build_parser(language).parse_args(argv)
+        run(args, argv)
+        return 0
+    from .config import apply_file_defaults, load_config, resolved_text, write_resolved_text
+    data = load_config(seen.config, language=language)
+    parser = build_parser(language)
+    coerced = apply_file_defaults(parser, data, explicit, language=language)
+    args = parser.parse_args(argv)
+    override = _state_align_override(args, coerced, explicit, language)
+    replaced = _note_config_replaced_by_state(args, coerced, explicit, language)
+    if replaced:
+        override = dict(override or {})
+        override.update(replaced)
+    text = resolved_text(
+        args, build_parser(language), seen.config, explicit, coerced, override,
+        language,
+    )
     run(args, argv)
+    write_resolved_text(args.outdir, text)
     return 0
 
 

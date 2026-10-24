@@ -37,6 +37,9 @@ Issues = "https://github.com/Xuzhen-Li/qbar/issues"
 [project.scripts]
 qbar = "qbar.cli:main"
 
+[project.optional-dependencies]
+config = ["PyYAML>=6.0.1"]
+
 [tool.hatch.version]
 path = "src/qbar/__init__.py"
 
