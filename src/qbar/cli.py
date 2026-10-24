@@ -35,6 +35,10 @@ only when the maximum is below --admix-cut. hclust and kmeans name groups
 G1, G2, ... in order of first appearance. Those two accept --pca with
 --pca-n, a PLINK 1.9 eigenvec with no header. Auto groups do not replace
 --groups.
+--palette chooses bar colours. The default is science. classic is the
+previous 20 colours. --color-lock on keeps each aligned column's colour
+from the lowest K unless --color sets that column. The default is off.
+--greyscale-preview writes panel_grey.png and is off by default.
 https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.hierarchy.linkage.html
 """
 from __future__ import annotations
@@ -224,6 +228,12 @@ def build_parser(language="en"):
     p.add_argument("--anchor-group", default="", help=say("help_anchor_group"))
     p.add_argument("--color", action="append", default=[], help=say("help_color"))
     p.add_argument("--color-file", help=say("help_color_file"))
+    p.add_argument("--palette", choices=("science", "classic", "tab10", "set1", "dark2", "paired"),
+                   default="science", help=say("help_palette"))
+    p.add_argument("--color-lock", choices=("off", "on"), default="off",
+                   help=say("help_color_lock"))
+    p.add_argument("--greyscale-preview", action="store_true",
+                   help=say("help_greyscale_preview"))
     p.add_argument("--title", default="")
     p.add_argument("--width", type=int, default=2200, help=say("help_width"))
     p.add_argument("--bar-height", type=int, default=0, help=say("help_bar_height"))
