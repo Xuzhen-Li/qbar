@@ -187,6 +187,50 @@ _CATALOG = {
         "en": "Vector output path must end in .pdf or .svg, got %(path)s",
         "zh": "矢量路径必须以 .pdf 或 .svg 结尾，收到 %(path)s",
     },
+    "help_html": {
+        "en": "Also write panel.html, one offline file. A script draws the bars on a canvas and hover text shows the sample. Default off.",
+        "zh": "另写 panel.html，一个离线文件。脚本在画布上画条，悬停显示样本。默认关闭。",
+    },
+    "html_empty": {
+        "en": "HTML panel needs at least one K.",
+        "zh": "HTML 面板至少需要一个 K。",
+    },
+    "html_rows": {
+        "en": "HTML panel needs %(n)s rows, got %(n_id)s ids and %(n_group)s groups.",
+        "zh": "HTML 面板需要 %(n)s 行，收到 %(n_id)s 个 id 和 %(n_group)s 个分组。",
+    },
+    "html_order": {
+        "en": "HTML panel order must list each row once, got %(got)s entries for %(n)s rows.",
+        "zh": "HTML 面板的顺序必须每一行恰好出现一次，收到 %(got)s 项，行数是 %(n)s。",
+    },
+    "html_shape": {
+        "en": "HTML panel K=%(k)s has %(rows)s rows, expected %(n)s.",
+        "zh": "HTML 面板 K=%(k)s 有 %(rows)s 行，应为 %(n)s。",
+    },
+    "html_hex": {
+        "en": "HTML panel K=%(k)s has %(cols)s columns and %(n_hex)s colours.",
+        "zh": "HTML 面板 K=%(k)s 有 %(cols)s 列和 %(n_hex)s 个颜色。",
+    },
+    "html_missing_hex": {
+        "en": "HTML panel has no colours for K=%(k)s.",
+        "zh": "HTML 面板没有 K=%(k)s 的颜色。",
+    },
+    "html_runs": {
+        "en": "HTML panel runs has %(got)s labels for %(n)s values of K.",
+        "zh": "HTML 面板的 run 有 %(got)s 个标签，K 有 %(n)s 个。",
+    },
+    "html_width": {
+        "en": "HTML panel width must be at least 1 pixel, got %(width)s.",
+        "zh": "HTML 面板宽度至少 1 像素，收到 %(width)s。",
+    },
+    "html_height": {
+        "en": "HTML panel row height must be at least 1 pixel, got %(height)s.",
+        "zh": "HTML 面板行高至少 1 像素，收到 %(height)s。",
+    },
+    "html_legend": {
+        "en": "HTML panel legend has %(got)s rows for %(n)s values of K.",
+        "zh": "HTML 面板的图例有 %(got)s 行，K 有 %(n)s 个。",
+    },
     "vector_rows": {
         "en": "Vector output needs the Q matrix on each bar row.",
         "zh": "矢量输出需要每一行条上的 Q 矩阵。",

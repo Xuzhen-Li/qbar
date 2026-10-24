@@ -535,6 +535,12 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     ``off``. ``pdf`` writes the bar PDFs as vectors, ``svg`` also writes
     SVG and keeps those PDFs raster, and ``both`` writes both. PNG stays
     raster. A vector file above 200000 bar rectangles writes no output file.
+    ``args.html`` defaults to off. When set, the run also writes
+    ``panel.html``, including when there is only one K. The page embeds
+    the ordered samples and draws them on a canvas. With ``--replicates``,
+    each K row is labeled with the base name of the major-mode reference,
+    or with the base name of the single Q file when that K has one file.
+    The label has no directory. Otherwise the run label is empty.
     """
     if args.provenance:
         started = datetime.datetime.now().astimezone().isoformat()
@@ -800,6 +806,7 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         linkage_paths.append(_path)
         print(_path)
     grey_path = None
+    html_path = None
     if len(rows) == 1:
         out = os.path.join(args.outdir, "bar_K%d.png" % rows[0]["k"])
         render(
@@ -826,6 +833,35 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         grey_path = os.path.join(args.outdir, "panel_grey.png")
         write_greyscale_png(grey_path, grey_src)
         print(grey_path)
+    if bool(getattr(args, "html", False)):
+        # Offline panel. Written only when --html is set. One K still gets a file.
+        from .html_panel import write_panel_html
+        run_labels = None
+        if replicates_on:
+            run_labels = {}
+            for k in ks:
+                report = replicate_reports.get(k)
+                if report:
+                    run_labels[k] = os.path.basename(report["modes"][0]["reference"])
+                else:
+                    run_labels[k] = os.path.basename(src_paths[k][0])
+        html_path = os.path.join(args.outdir, "panel.html")
+        write_panel_html(
+            html_path,
+            aligned,
+            order,
+            groups,
+            hexes,
+            run_labels,
+            iids=iids,
+            bar_w=args.width,
+            bar_h=bar_h,
+            title=args.title or "",
+            rank=rank,
+            legend=[[text for _colour, text in row["legend"]] for row in rows],
+            language=language,
+        )
+        print(html_path)
     write_tables(args.outdir, iids, groups, order, spans, perm, owners, hexes, meta, aligned)
     groups_auto_tsv = None
     if auto_rows is not None:
@@ -986,6 +1022,8 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
             paths.append(os.path.splitext(_panel)[0] + ".svg")
     if grey_path is not None:
         paths.append(grey_path)
+    if html_path is not None:
+        paths.append(html_path)
     paths.append(os.path.join(args.outdir, "order.tsv"))
     paths.append(os.path.join(args.outdir, "blocks.tsv"))
     paths.extend(linkage_paths)
