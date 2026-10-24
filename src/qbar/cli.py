@@ -39,6 +39,11 @@ G1, G2, ... in order of first appearance. Those two accept --pca with
 previous 20 colours. --color-lock on keeps each aligned column's colour
 from the lowest K unless --color sets that column. The default is off.
 --greyscale-preview writes panel_grey.png and is off by default.
+--vector off (the default) keeps the PNG and the raster PDF. pdf writes
+bar_K*.pdf and panel.pdf as vectors. svg also writes SVG and keeps the
+PDF raster. both writes vector PDFs and SVGs. PNG stays raster. A vector
+file with more than 200000 bar rectangles is refused and no output file
+is written.
 https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.hierarchy.linkage.html
 """
 from __future__ import annotations
@@ -234,6 +239,8 @@ def build_parser(language="en"):
                    help=say("help_color_lock"))
     p.add_argument("--greyscale-preview", action="store_true",
                    help=say("help_greyscale_preview"))
+    p.add_argument("--vector", choices=("off", "pdf", "svg", "both"), default="off",
+                   help=say("help_vector"))
     p.add_argument("--title", default="")
     p.add_argument("--width", type=int, default=2200, help=say("help_width"))
     p.add_argument("--bar-height", type=int, default=0, help=say("help_bar_height"))

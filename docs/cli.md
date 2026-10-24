@@ -275,6 +275,13 @@ Also write panel_grey.png. Each pixel is round(0.2126*R + 0.7152*G + 0.0722*B) o
 
 - Default: false
 
+### `--vector`
+
+off, pdf, svg, or both. Default off. off keeps the PNG and the raster PDF. pdf writes bar_K*.pdf and panel.pdf as vectors. svg also writes bar_K*.svg and panel.svg, and the PDF stays raster. both writes vector PDFs and SVGs. PNG stays raster. A vector file with more than 200000 bar rectangles is refused and no output file is written.
+
+- Choices: off, pdf, svg, both
+- Default: off
+
 ### `--title`
 
 - Default: ""
