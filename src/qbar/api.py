@@ -54,6 +54,7 @@ from .order import (
     WITHIN,
     apply_order_mode,
     check_hclust_opts,
+    place_layers_on_order,
     validate_order_flags,
     write_linkage_index,
     write_linkage_tsv,
@@ -63,7 +64,10 @@ from .parentshare import (
     parent_interval_rows,
     write_parent_share_ci,
 )
-from .report import column_label, write_align_compare, write_align_report, write_tables
+from .report import (
+    column_label, refresh_swapped_scores, write_align_compare, write_align_report,
+    write_tables,
+)
 
 
 def column_owners(q, iids, groups, rank):
@@ -81,10 +85,13 @@ def column_owners(q, iids, groups, rank):
     return owners
 
 
-def legend_lines(q, groups, owners, hexes):
+def legend_lines(q, groups, owners, hexes, names=None):
     rows = []
     for c, hx in enumerate(hexes):
-        rows.append((hx, "C%d %s" % (c + 1, column_label(owners[c], q, groups, c))))
+        title = "C%d" % (c + 1)
+        if names is not None and c < len(names) and str(names[c]) != title:
+            title = str(names[c])
+        rows.append((hx, "%s %s" % (title, column_label(owners[c], q, groups, c))))
     return rows
 
 
@@ -541,6 +548,17 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     each K row is labeled with the base name of the major-mode reference,
     or with the base name of the single Q file when that K has one file.
     The label has no directory. Otherwise the run label is empty.
+    ``args.editor`` defaults to off. When set, the run also writes
+    ``editor.html`` and ``state.json``. The page reuses the panel drawing
+    code. ``args.state`` replays a state file after alignment: sample order,
+    group order, per-K column swaps, names, and colours. It is an error
+    together with ``--order-file``, ``--color``, or ``--color-file``.
+    A K list or align method in the state that differs from the command
+    is an error that names both values. Inputs in the state are base names
+    and SHA256 only. Where a state swap moves columns of a K, the alignment
+    scores for that step are computed again on the displayed columns, and a
+    dendrogram built from that K is built again on the displayed matrix.
+    A K that was not swapped keeps the scores and the tree from the alignment.
     """
     if args.provenance:
         started = datetime.datetime.now().astimezone().isoformat()
@@ -553,6 +571,16 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     )
 
     language = args.language
+    editor_on = bool(getattr(args, "editor", False))
+    state_arg = getattr(args, "state", None) or None
+    if state_arg and getattr(args, "order_file", None):
+        raise SystemExit(_msg("state_conflict_order", language))
+    if state_arg and (getattr(args, "color", None) or getattr(args, "color_file", None)):
+        raise SystemExit(_msg("state_conflict_color", language))
+    state_obj = None
+    if state_arg:
+        from .state import load_state
+        state_obj = load_state(state_arg, language=language)
     palette_name = getattr(args, "palette", "science")
     color_lock = getattr(args, "color_lock", "off")
     greyscale = bool(getattr(args, "greyscale_preview", False))
@@ -648,6 +676,16 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         src_paths = {k_value: [src[k_value]] for k_value in src}
         replicate_reports = {}
     groups = load_groups(args.groups, iids, args.id_col, args.group_col, args.rest_name, language=language)
+    if state_obj is not None:
+        from .state import check_state_inputs, command_inputs
+        check_state_inputs(
+            state_obj,
+            command_inputs(
+                files, fam=args.fam, ids_path=args.ids,
+                ind=getattr(args, "ind", None), groups=args.groups,
+            ),
+            language=language,
+        )
     within_group = parse_within(args.within_group, language=language)
     unknown = sorted(set(within_group) - set(groups))
     if unknown:
@@ -755,6 +793,57 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         )
         if color_lock == "on" and len(locked) < k:
             locked.extend(hexes[k][len(locked):])
+    state_names = None
+    kept_swaps = {k: list(range(int(k))) for k in ks}
+    kept_flag = False
+    editor_base_aligned = None
+    editor_base_owners = None
+    if editor_on:
+        # Copy before a state swap replaces columns. The editor reapplies swaps.
+        editor_base_aligned = {k: np.array(aligned[k], copy=True) for k in ks}
+        editor_base_owners = {k: list(owners[k]) for k in ks}
+    if state_obj is not None:
+        from .state import apply_state
+        applied = apply_state(
+            {
+                "iids": iids,
+                "groups": groups,
+                "aligned": aligned,
+                "perm": perm,
+                "hexes": hexes,
+                "order": order,
+                "align_method": args.align_method,
+                "language": language,
+            },
+            state_obj,
+        )
+        order = applied["order"]
+        spans = applied["spans"]
+        state_names = applied["names"]
+        kept_swaps = applied["swaps"]
+        kept_flag = applied["alignment_overridden"]
+        for k in ks:
+            owners[k] = column_owners(aligned[k], iids, groups, rank)
+        swapped_ks = refresh_swapped_scores(
+            aligned, meta, kept_swaps, args.align_method,
+            args.jaccard_set, args.jaccard_cut,
+        )
+        # The tree was built before the swap. Rebuild it from the displayed
+        # matrix and keep the sample order the state already chose.
+        if hclust_k in swapped_ks and (arranged["matrices"] or arranged["layers"]):
+            rebuilt = apply_order_mode(
+                iids, groups, blocks, args.within, within_group, args.rest_name,
+                aligned[sort_k], aligned[hclust_k], args.sort_col, None,
+                hc, order_mode, group_order, explicit_cap, language=language,
+            )
+            arranged["matrices"] = rebuilt["matrices"]
+            arranged["index_groups"] = rebuilt["index_groups"]
+            if dendro_spec is not None:
+                dendro_spec = {
+                    "layers": place_layers_on_order(
+                        rebuilt["layers"], rebuilt["order"], order, spans,
+                    ),
+                }
     bar_h = args.bar_height or (220 if len(ks) == 1 else 120)
     # Draw at native sample width, then scale to --width. Height here is the
     # pre-scale resolution; render() resizes the bar to bar_h.
@@ -763,7 +852,10 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         rows.append({
             "k": k,
             "image": ancestry_image(aligned[k][order], hexes[k], height=max(bar_h, 40)),
-            "legend": legend_lines(aligned[k], groups, owners[k], hexes[k]),
+            "legend": legend_lines(
+                aligned[k], groups, owners[k], hexes[k],
+                None if state_names is None else state_names[k],
+            ),
             # Draw order. render() ignores this. Vector bars read it.
             "q": aligned[k][order],
         })
@@ -807,6 +899,8 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         print(_path)
     grey_path = None
     html_path = None
+    editor_path = None
+    state_file = None
     if len(rows) == 1:
         out = os.path.join(args.outdir, "bar_K%d.png" % rows[0]["k"])
         render(
@@ -833,18 +927,28 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         grey_path = os.path.join(args.outdir, "panel_grey.png")
         write_greyscale_png(grey_path, grey_src)
         print(grey_path)
-    if bool(getattr(args, "html", False)):
-        # Offline panel. Written only when --html is set. One K still gets a file.
-        from .html_panel import write_panel_html
+    if bool(getattr(args, "html", False)) or editor_on:
+        # Run labels are base names only. Both pages use the same list.
         run_labels = None
+        run_list = [""] * len(ks)
         if replicates_on:
             run_labels = {}
+            run_list = []
             for k in ks:
                 report = replicate_reports.get(k)
                 if report:
-                    run_labels[k] = os.path.basename(report["modes"][0]["reference"])
+                    label = os.path.basename(report["modes"][0]["reference"])
                 else:
-                    run_labels[k] = os.path.basename(src_paths[k][0])
+                    label = os.path.basename(src_paths[k][0])
+                run_labels[k] = label
+                run_list.append(label)
+        legend_text = [[text for _colour, text in row["legend"]] for row in rows]
+        column_names = None
+        if state_names is not None:
+            column_names = [state_names[k] for k in ks]
+    if bool(getattr(args, "html", False)):
+        # Offline panel. Written only when --html is set. One K still gets a file.
+        from .html_panel import write_panel_html
         html_path = os.path.join(args.outdir, "panel.html")
         write_panel_html(
             html_path,
@@ -858,10 +962,79 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
             bar_h=bar_h,
             title=args.title or "",
             rank=rank,
-            legend=[[text for _colour, text in row["legend"]] for row in rows],
+            legend=legend_text,
             language=language,
+            column_names=column_names,
         )
         print(html_path)
+    if editor_on:
+        from .html_panel import build_editor_base, panel_payload, write_editor_html
+        from .state import command_inputs, state_from_run, write_state_json
+        recorded = []
+        for item in command_inputs(
+            files, fam=args.fam, ids_path=args.ids,
+            ind=getattr(args, "ind", None), groups=args.groups,
+        ):
+            recorded.append({
+                "role": item["role"],
+                "name": item["name"],
+                "sha256": item["sha256"],
+            })
+        cut = mode_sim_cut
+        if cut is not None:
+            cut = float(cut)
+        payload = panel_payload(
+            aligned, order, groups, hexes, run_labels,
+            iids=iids, bar_w=args.width, bar_h=bar_h, title=args.title or "",
+            rank=rank, legend=legend_text, language=language,
+            column_names=column_names,
+        )
+        base = build_editor_base(
+            iids, groups, editor_base_aligned, editor_base_owners, ks, run_list,
+            args.width, bar_h, args.title or "",
+        )
+        state_dict = state_from_run({
+            "iids": iids,
+            "groups": groups,
+            "order": order,
+            "colours": hexes,
+            "k": ks,
+            "align_method": args.align_method,
+            "inputs": recorded,
+            "names": state_names,
+            "swaps": kept_swaps,
+            "alignment_overridden": kept_flag,
+            "plot": {
+                "align": bool(do_align),
+                "align_mode": args.align_mode,
+                "anchor_group": args.anchor_group.strip(),
+                "align_groups": args.align_groups,
+                "qmax": float(args.qmax),
+                "jaccard_set": args.jaccard_set,
+                "jaccard_cut": float(args.jaccard_cut),
+                "palette": palette_name,
+                "color_lock": color_lock,
+                "order_mode": order_mode,
+                "group_order_flag": group_order,
+                "within": args.within,
+                "rest_name": args.rest_name,
+                "blocks": args.blocks,
+                "q_format": args.q_format,
+                "replicates": bool(replicates_on),
+                "mode_sim_cut": cut,
+                "width": int(args.width),
+                "bar_height": int(args.bar_height),
+                "title": args.title or "",
+            },
+            "qbar_version": _qbar_version(),
+            "git_commit": _git_commit(),
+        })
+        editor_path = os.path.join(args.outdir, "editor.html")
+        state_file = os.path.join(args.outdir, "state.json")
+        write_editor_html(editor_path, payload, state_dict, base)
+        write_state_json(state_file, state_dict)
+        print(editor_path)
+        print(state_file)
     write_tables(args.outdir, iids, groups, order, spans, perm, owners, hexes, meta, aligned)
     groups_auto_tsv = None
     if auto_rows is not None:
@@ -1024,6 +1197,9 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         paths.append(grey_path)
     if html_path is not None:
         paths.append(html_path)
+    if editor_path is not None:
+        paths.append(editor_path)
+        paths.append(state_file)
     paths.append(os.path.join(args.outdir, "order.tsv"))
     paths.append(os.path.join(args.outdir, "blocks.tsv"))
     paths.extend(linkage_paths)

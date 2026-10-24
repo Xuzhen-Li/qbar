@@ -553,6 +553,36 @@ def apply_order_mode(
     }
 
 
+def place_layers_on_order(layers, built_order, displayed_order, displayed_spans):
+    """Put dendrogram leaves on the order that is actually drawn.
+
+    ``built_order[rank]`` is the sample index of that leaf. The linkage
+    array is the tree of the matrix that was just clustered. A group leaf
+    uses the span of that name in ``displayed_spans``, which is where the
+    bars for that group are drawn.
+    """
+    position = {sample: index for index, sample in enumerate(displayed_order)}
+    span_of = {}
+    for span in displayed_spans:
+        span_of.setdefault(span["name"], span)
+    placed = []
+    for layer in layers:
+        kind = layer.get("kind")
+        if kind == "samples":
+            samples = [built_order[rank] for rank in layer["ranks"]]
+            placed.append({
+                "kind": "samples",
+                "Z": layer["Z"],
+                "ranks": [position[sample] for sample in samples],
+            })
+        elif kind == "groups":
+            spans = [span_of.get(span["name"], span) for span in layer["spans"]]
+            placed.append({"kind": "groups", "Z": layer["Z"], "spans": spans})
+        else:
+            placed.append(layer)
+    return placed
+
+
 def format_linkage_distance(value):
     """Six digits after the decimal, the same ``%.6f`` as the other TSV floats."""
     return "%.6f" % float(value)

@@ -288,6 +288,18 @@ Also write panel.html, one offline file. A script draws the bars on a canvas and
 
 - Default: false
 
+### `--editor`
+
+Also write editor.html and state.json, one offline editor. Default off.
+
+- Default: false
+
+### `--state`
+
+Replay order, colours, names, and column swaps from a state.json file.
+
+- Default: not set
+
 ### `--title`
 
 - Default: ""

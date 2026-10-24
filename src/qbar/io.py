@@ -35,7 +35,10 @@ def norm_hex(text, *, language="en"):
         h = "#" + h
     if len(h) != 7:
         raise SystemExit(_msg("color_hex", language, text=text))
-    int(h[1:], 16)
+    try:
+        int(h[1:], 16)
+    except ValueError:
+        raise SystemExit(_msg("color_hex", language, text=text)) from None
     return h.lower()
 
 

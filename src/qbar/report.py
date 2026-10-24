@@ -6,7 +6,10 @@ import os
 
 import numpy as np
 
-from .align import ALIGN_METHODS, CLUMPP_PERM_LIMIT, col_pearson, match_next
+from .align import (
+    ALIGN_METHODS, CLUMPP_PERM_LIMIT, GPRIME_METHODS, col_pearson, column_gprime,
+    jaccard_matrix, match_next, pong_sim,
+)
 
 REPORT_LOW = {"greedy": 0.5, "hungarian": 0.5, "pong": 0.8, "jaccard": 0.5}
 
@@ -67,7 +70,7 @@ def write_tables(outdir, iids, groups, order, spans, perm, owners, hexes, meta, 
                 header = "K_to\tn_mask\tpearson\n"
             f.write(header)
             for k, info in sorted(meta.items()):
-                rs = " ".join("%.3f" % r for r in info["pearson"][:-1])
+                rs = _align_score_text(info["pearson"])
                 if pong:
                     f.write("%d\t%d\t%s\tC%d\n" % (k, info["n_mask"], rs, info["split_parent"] + 1))
                 else:
@@ -134,20 +137,122 @@ def _low_confidence(shown, cut):
     return "yes" if float(shown) < cut else "no"
 
 
+def _pair_score(method, prev, new, mask, partner, dest, jac):
+    """Score displayed column ``dest`` against previous column ``partner``."""
+    left = prev[mask, partner]
+    right = new[mask, dest]
+    if method == "pong":
+        return pong_sim(left, right)
+    if method == "jaccard":
+        return float(jac[partner, dest])
+    if method in GPRIME_METHODS:
+        return column_gprime(left, right)
+    return col_pearson(left, right)
+
+
+def _align_score_text(scores):
+    """One token per display column, omitting a trailing unmatched column.
+
+    A trailing None is left off, which is the text written when no swap
+    has moved that column. A None in any earlier slot is written ``NA``,
+    in the same place as the report row whose ``matched_from`` is ``new``.
+    """
+    last = len(scores) - 1
+    parts = []
+    for index, value in enumerate(scores):
+        if value is None:
+            if index != last:
+                parts.append("NA")
+        else:
+            parts.append("%.3f" % value)
+    return " ".join(parts)
+
+
+def refresh_swapped_scores(aligned, meta, swaps, method, jaccard_set="dominant", jaccard_cut=0.5):
+    """Move scores with the displayed columns, then score the pairs again.
+
+    ``swaps[k][i]`` is the pre-swap column now drawn at i. The None that
+    marks the unmatched column moves with that column. Every other entry
+    is recomputed. When the display index still has a previous column,
+    the pair is those two displayed columns. When the matched column has
+    moved past the previous K, the pair is the previous column it was
+    aligned to. An identity permutation is not a swap. A step whose K
+    values were not swapped is left unchanged.
+    """
+    swapped = {}
+    for key, perm in (swaps or {}).items():
+        k = int(key)
+        order = [int(item) for item in perm]
+        if order != list(range(k)):
+            swapped[k] = order
+    if not swapped or not meta:
+        return set(swapped)
+    for k_to in sorted(meta):
+        k_prev = int(k_to) - 1
+        if int(k_to) not in swapped and k_prev not in swapped:
+            continue
+        info = meta[k_to]
+        prev = aligned[k_prev]
+        new = aligned[int(k_to)]
+        mask = info["mask"]
+        if "split_parent" in info and k_prev in swapped:
+            info["split_parent"] = swapped[k_prev].index(int(info["split_parent"]))
+        old = list(info["pearson"])
+        if int(k_to) in swapped:
+            perm = swapped[int(k_to)]
+            moved = [old[perm[i]] for i in range(len(perm))]
+        else:
+            perm = list(range(len(old)))
+            moved = old
+        prev_perm = swapped.get(k_prev)
+        n_prev = int(prev.shape[1])
+        jac = None
+        if method == "jaccard":
+            jac = jaccard_matrix(prev, new, mask, jaccard_set, jaccard_cut)
+        scores = []
+        partners = []
+        for index, marker in enumerate(moved):
+            if marker is None:
+                scores.append(None)
+                partners.append(None)
+                continue
+            source = perm[index]
+            if index < n_prev:
+                partner = index
+            elif source < n_prev:
+                if prev_perm is None:
+                    partner = source
+                else:
+                    partner = prev_perm.index(source)
+            else:
+                scores.append(None)
+                partners.append(None)
+                continue
+            scores.append(_pair_score(method, prev, new, mask, partner, index, jac))
+            partners.append(partner)
+        info["pearson"] = scores
+        info["pair"] = partners
+    return set(swapped)
+
+
 def align_report_rows(aligned, meta, groups, method, perm, low=None):
     cut = _report_cut(method, low)
     rows = []
     for k_to in sorted(meta):
         info = meta[k_to]
         prev, new, mask = aligned[k_to - 1], aligned[k_to], info["mask"]
-        k_old = prev.shape[1]
         for c in range(k_to):
             row = {"K_to": k_to, "column": "C%d" % (c + 1), "raw_column": perm[k_to][c] + 1, "method": method}
-            if c < k_old:
+            # None marks the unmatched column, wherever a swap has drawn it.
+            # pair[c] is the previous column the score was computed against.
+            # Without a swap that column is c, the same index as before.
+            pair = info.get("pair")
+            if info["pearson"][c] is not None:
+                partner = c if pair is None else pair[c]
                 sim = info["pearson"][c]
                 shown = "%.3f" % sim
-                row.update(matched_from="C%d" % (c + 1), similarity=shown,
-                           pearson="%.3f" % col_pearson(prev[mask, c], new[mask, c]),
+                row.update(matched_from="C%d" % (partner + 1), similarity=shown,
+                           pearson="%.3f" % col_pearson(prev[mask, partner], new[mask, c]),
                            split_parent="", parent_share="", runner_up="", runner_up_share="",
                            low_confidence=_low_confidence(shown, cut))
             else:

@@ -14,6 +14,11 @@ the feature spec. Sample ids are not among them, so ``iids`` is a
 required keyword. ``bar_w``, ``bar_h``, ``title``, ``rank``, ``legend``,
 and ``language`` are optional keywords. ``bar_h`` left unset is 220 when
 there is one K and 120 when there are more, the same rule as the PNG.
+``column_names`` replaces the default C1, C2, ... labels when it is set.
+
+``write_editor_html`` is the offline editor. It embeds a qbar-state
+object and draws the bars with ``panel_script``. The edit functions are
+separate from the page controls.
 
 Q values are rounded with ``float("%.6f" % value)`` and then stored as
 JSON numbers. The file uses compact JSON. Non-ASCII characters are
@@ -159,6 +164,7 @@ def _layout(ks, legends, spans, bar_w, bar_h, title):
 def panel_payload(
     aligned, order, groups, hexes, runs=None, *,
     iids, bar_w=2200, bar_h=None, title="", rank=None, legend=None, language="en",
+    column_names=None,
 ):
     """Return the object embedded in the HTML file.
 
@@ -241,6 +247,8 @@ def panel_payload(
             block.append([round_q(matrix[index, col]) for col in range(k)])
         q_rows.append(block)
         names.append(["C%d" % (col + 1) for col in range(k)])
+    if column_names is not None:
+        names = _column_name_rows(column_names, ks, language)
     if legend is None:
         legend_rows = _legend_text(
             aligned_map, group_list, {k: colour_rows[i] for i, k in enumerate(ks)},
@@ -598,19 +606,694 @@ def render_panel_html(payload):
     )
 
 
+def _column_name_rows(column_names, ks, language):
+    if isinstance(column_names, dict):
+        seq = []
+        for k in ks:
+            if k in column_names:
+                seq.append(column_names[k])
+            elif str(k) in column_names:
+                seq.append(column_names[str(k)])
+            else:
+                _exit("html_legend", language, got=0, n=k)
+    else:
+        seq = list(column_names)
+    if len(seq) != len(ks):
+        _exit("html_legend", language, got=len(seq), n=len(ks))
+    rows = []
+    for k, row in zip(ks, seq):
+        labels = [str(item) for item in row]
+        if len(labels) != k:
+            _exit("html_legend", language, got=len(labels), n=k)
+        rows.append(labels)
+    return rows
+
+
 def write_panel_html(
     path, aligned, order, groups, hexes, runs=None, *,
     iids, bar_w=2200, bar_h=None, title="", rank=None, legend=None, language="en",
+    column_names=None,
 ):
     """Write one offline HTML panel. See ``panel_payload`` for the keys."""
     payload = panel_payload(
         aligned, order, groups, hexes, runs,
         iids=iids, bar_w=bar_w, bar_h=bar_h, title=title, rank=rank,
-        legend=legend, language=language,
+        legend=legend, language=language, column_names=column_names,
     )
     folder = os.path.dirname(os.path.abspath(path))
     if folder:
         os.makedirs(folder, exist_ok=True)
     text = render_panel_html(payload)
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(text)
+
+
+def panel_functions():
+    """Drawing functions from ``panel_script``, without the panel boot call."""
+    script = panel_script()
+    suffix = "bootPanel();\n"
+    if not script.endswith(suffix):
+        raise RuntimeError("panel script has no boot call")
+    return script[: -len(suffix)]
+
+
+def editor_style():
+    """CSS for the editor controls. No remote font and no address."""
+    return "\n".join([
+        "#qbar-editor {",
+        "  padding: 12px 16px 28px;",
+        "  font: 14px sans-serif;",
+        "}",
+        "#qbar-editor button, #qbar-editor select, #qbar-editor input {",
+        "  font: 14px sans-serif;",
+        "  margin: 0 8px 8px 0;",
+        "}",
+        "#qbar-note {",
+        "  min-height: 1.2em;",
+        "  color: #991b1b;",
+        "}",
+        "#qbar-editor p {",
+        "  max-width: 760px;",
+        "  line-height: 1.4;",
+        "}",
+    ])
+
+
+def editor_script():
+    """Edit functions, then the page controls.
+
+    ``applyEdit(state, op)`` returns a new state and does not read the DOM.
+    Ops are ``move``, ``reorder_groups``, ``swap``, ``rename``, and ``colour``.
+    ``swap`` takes ``k``, ``i``, and ``j``. ``k`` can be omitted when the
+    state has one K. A swap sets ``alignment_overridden`` to true.
+    """
+    return r"""
+var qbarState = null;
+var qbarBase = null;
+var qbarView = null;
+
+function cloneState(state) {
+  return JSON.parse(JSON.stringify(state));
+}
+
+function applyEdit(state, op) {
+  var next = cloneState(state);
+  var kind = op.op;
+  if (kind === "move") {
+    moveSample(next, op.iid, op.index);
+  } else if (kind === "reorder_groups") {
+    reorderGroups(next, op.groups);
+  } else if (kind === "swap") {
+    swapColumns(next, op.k, op.i, op.j);
+  } else if (kind === "rename") {
+    renameColumn(next, op.k, op.column, op.name);
+  } else if (kind === "colour" || kind === "color") {
+    colourColumn(next, op.k, op.column, op.colour || op.color);
+  } else {
+    throw new Error("unknown edit");
+  }
+  return next;
+}
+
+function moveSample(state, iid, index) {
+  var from = state.sample_order.indexOf(iid);
+  if (from < 0) {
+    throw new Error("unknown iid " + iid);
+  }
+  var group = state.sample_groups[from];
+  var positions = [];
+  var i;
+  for (i = 0; i < state.sample_groups.length; i += 1) {
+    if (state.sample_groups[i] === group) {
+      positions.push(i);
+    }
+  }
+  var local = positions.indexOf(from);
+  index = Number(index);
+  if (index !== index || Math.floor(index) !== index || index < 0 || index >= positions.length) {
+    throw new Error("index");
+  }
+  var block = [];
+  var b;
+  for (b = 0; b < positions.length; b += 1) {
+    block.push(state.sample_order[positions[b]]);
+  }
+  block.splice(local, 1);
+  block.splice(index, 0, iid);
+  for (b = 0; b < positions.length; b += 1) {
+    state.sample_order[positions[b]] = block[b];
+  }
+}
+
+function reorderGroups(state, groups) {
+  if (!groups || groups.length !== state.group_order.length) {
+    throw new Error("group order");
+  }
+  var seen = Object.create(null);
+  var i;
+  for (i = 0; i < state.group_order.length; i += 1) {
+    var name = state.group_order[i];
+    seen[name] = (seen[name] || 0) + 1;
+  }
+  for (i = 0; i < groups.length; i += 1) {
+    if (!seen[groups[i]]) {
+      throw new Error("group order");
+    }
+    seen[groups[i]] -= 1;
+  }
+  for (i = 0; i < state.group_order.length; i += 1) {
+    if (seen[state.group_order[i]] !== 0) {
+      throw new Error("group order");
+    }
+  }
+  var byGroup = Object.create(null);
+  for (i = 0; i < state.sample_order.length; i += 1) {
+    var group = state.sample_groups[i];
+    if (!Object.prototype.hasOwnProperty.call(byGroup, group)) {
+      byGroup[group] = [];
+    }
+    byGroup[group].push(state.sample_order[i]);
+  }
+  var order = [];
+  var labels = [];
+  for (i = 0; i < groups.length; i += 1) {
+    var members = byGroup[groups[i]] || [];
+    var j;
+    for (j = 0; j < members.length; j += 1) {
+      order.push(members[j]);
+      labels.push(groups[i]);
+    }
+  }
+  if (order.length !== state.sample_order.length) {
+    throw new Error("group order");
+  }
+  state.group_order = groups.slice();
+  state.sample_order = order;
+  state.sample_groups = labels;
+}
+
+function swapColumns(state, k, i, j) {
+  var key;
+  if (k === undefined || k === null || k === "") {
+    if (!state.k || state.k.length !== 1) {
+      throw new Error("k");
+    }
+    key = String(state.k[0]);
+  } else {
+    key = String(k);
+  }
+  var perm = state.swaps[key];
+  var clusters = state.clusters[key];
+  if (!perm || !clusters) {
+    throw new Error("k");
+  }
+  i = Number(i);
+  j = Number(j);
+  if (i !== i || j !== j || Math.floor(i) !== i || Math.floor(j) !== j) {
+    throw new Error("column");
+  }
+  if (i < 0 || j < 0 || i >= perm.length || j >= perm.length) {
+    throw new Error("column");
+  }
+  var tmp = perm[i];
+  perm[i] = perm[j];
+  perm[j] = tmp;
+  tmp = clusters[i];
+  clusters[i] = clusters[j];
+  clusters[j] = tmp;
+  state.alignment_overridden = true;
+}
+
+function clusterAt(state, k, column) {
+  var clusters = state.clusters[String(k)];
+  column = Number(column);
+  if (!clusters || column !== column || Math.floor(column) !== column) {
+    throw new Error("column");
+  }
+  if (column < 0 || column >= clusters.length) {
+    throw new Error("column");
+  }
+  return clusters[column];
+}
+
+function renameColumn(state, k, column, name) {
+  clusterAt(state, k, column).name = String(name);
+}
+
+function colourColumn(state, k, column, colour) {
+  clusterAt(state, k, column).colour = String(colour);
+}
+
+function orderTxt(state) {
+  return state.sample_order.join("\n") + "\n";
+}
+
+function coloursTsv(state) {
+  var lines = [];
+  var i;
+  var c;
+  for (i = 0; i < state.k.length; i += 1) {
+    var cols = state.clusters[String(state.k[i])];
+    for (c = 0; c < cols.length; c += 1) {
+      lines.push(cols[c].name + "\t" + cols[c].colour);
+    }
+  }
+  return lines.join("\n") + "\n";
+}
+
+function stateJson(state) {
+  var text = JSON.stringify(state, null, 2);
+  if (text.charAt(text.length - 1) !== "\n") {
+    text = text + "\n";
+  }
+  return text;
+}
+
+function buildSpans(groups, barW, left) {
+  var n = groups.length;
+  var spans = [];
+  var start = 0;
+  var j;
+  for (j = 1; j <= n; j += 1) {
+    if (j === n || groups[j] !== groups[start]) {
+      spans.push({
+        name: groups[start],
+        start: start,
+        end: j,
+        x0: left + Math.floor(start * barW / n),
+        x1: left + Math.floor(j * barW / n)
+      });
+      start = j;
+    }
+  }
+  return spans;
+}
+
+function buildLayout(base, legend, spans) {
+  var longestLabel = 0;
+  var s;
+  for (s = 0; s < spans.length; s += 1) {
+    var chars = spans[s].name.length * 8;
+    if (chars > longestLabel) {
+      longestLabel = chars;
+    }
+  }
+  var nSpan = spans.length;
+  var rotate = nSpan > 12 || (nSpan > 0 && base.bar_w / nSpan < longestLabel + 8);
+  var labelH = rotate ? Math.floor(longestLabel * 0.75) + 28 : 31;
+  var titleH = base.title ? 32 : 8;
+  var longestLegend = 0;
+  var pitches = [];
+  var r;
+  for (r = 0; r < legend.length; r += 1) {
+    var texts = legend[r];
+    var t;
+    for (t = 0; t < texts.length; t += 1) {
+      if (texts[t].length > longestLegend) {
+        longestLegend = texts[t].length;
+      }
+    }
+    var need = 4 + texts.length * 18;
+    pitches.push(Math.max(base.bar_h, need));
+  }
+  var legW = Math.min(Math.max(longestLegend * 7 + 22, 80), 420);
+  var width = base.left + base.bar_w + base.gap + legW + 16;
+  var height = titleH;
+  for (r = 0; r < pitches.length; r += 1) {
+    height += pitches[r];
+  }
+  height += labelH + 12;
+  var rows = [];
+  var y = titleH;
+  for (r = 0; r < pitches.length; r += 1) {
+    rows.push({
+      y: y,
+      pitch: pitches[r],
+      bar_y: y + Math.floor((pitches[r] - base.bar_h) / 2)
+    });
+    y += pitches[r];
+  }
+  return {
+    width: width,
+    height: height,
+    left: base.left,
+    gap: base.gap,
+    bar_w: base.bar_w,
+    bar_h: base.bar_h,
+    leg_w: legW,
+    title: base.title,
+    title_h: titleH,
+    label_h: labelH,
+    rotate_labels: rotate,
+    n: null,
+    rows: rows
+  };
+}
+
+function viewFromState(base, state) {
+  var indexOf = Object.create(null);
+  var i;
+  for (i = 0; i < base.iid.length; i += 1) {
+    indexOf[base.iid[i]] = i;
+  }
+  var iid = [];
+  var group = [];
+  for (i = 0; i < state.sample_order.length; i += 1) {
+    var id = state.sample_order[i];
+    var src = indexOf[id];
+    iid.push(base.iid[src]);
+    group.push(base.group[src]);
+  }
+  var n = iid.length;
+  var q = [];
+  var hex = [];
+  var names = [];
+  var legend = [];
+  var r;
+  for (r = 0; r < state.k.length; r += 1) {
+    var key = String(state.k[r]);
+    var perm = state.swaps[key];
+    var clusters = state.clusters[key];
+    var rows = [];
+    for (i = 0; i < n; i += 1) {
+      var srcRow = indexOf[iid[i]];
+      var srcQ = base.q[r][srcRow];
+      var out = [];
+      var c;
+      for (c = 0; c < perm.length; c += 1) {
+        out.push(srcQ[perm[c]]);
+      }
+      rows.push(out);
+    }
+    q.push(rows);
+    var colours = [];
+    var colNames = [];
+    var texts = [];
+    for (c = 0; c < clusters.length; c += 1) {
+      colours.push(clusters[c].colour);
+      colNames.push(clusters[c].name);
+      texts.push(clusters[c].name + " " + base.legend_suffix[r][perm[c]]);
+    }
+    hex.push(colours);
+    names.push(colNames);
+    legend.push(texts);
+  }
+  var spans = buildSpans(group, base.bar_w, base.left);
+  var layout = buildLayout(base, legend, spans);
+  layout.n = n;
+  return {
+    iid: iid,
+    group: group,
+    k: state.k.slice(),
+    run: base.run,
+    q: q,
+    column_names: names,
+    hex: hex,
+    legend: legend,
+    spans: spans,
+    layout: layout
+  };
+}
+
+function copyOnto(target, next) {
+  var key;
+  var drop = [];
+  for (key in target) {
+    if (Object.prototype.hasOwnProperty.call(target, key)) {
+      drop.push(key);
+    }
+  }
+  var d;
+  for (d = 0; d < drop.length; d += 1) {
+    delete target[drop[d]];
+  }
+  for (key in next) {
+    if (Object.prototype.hasOwnProperty.call(next, key)) {
+      target[key] = next[key];
+    }
+  }
+}
+
+function fillSelect(select, values) {
+  var current = select.value;
+  while (select.options.length > 0) {
+    select.remove(0);
+  }
+  var i;
+  for (i = 0; i < values.length; i += 1) {
+    var opt = document.createElement("option");
+    opt.value = String(values[i]);
+    opt.textContent = String(values[i]);
+    select.appendChild(opt);
+  }
+  if (current) {
+    select.value = current;
+  }
+}
+
+function fillSelects() {
+  fillSelect(document.getElementById("qbar-move-iid"), qbarState.sample_order);
+  fillSelect(document.getElementById("qbar-group"), qbarState.group_order);
+  fillSelect(document.getElementById("qbar-k"), qbarState.k);
+}
+
+function redraw() {
+  var next = viewFromState(qbarBase, qbarState);
+  copyOnto(qbarView, next);
+  var canvas = document.getElementById("qbar-canvas");
+  var ctx = prepareCanvas(canvas, qbarView);
+  drawPanel(ctx, qbarView);
+  fillSelects();
+}
+
+function downloadText(name, text) {
+  var blob = new Blob([text], {type: "application/octet-stream"});
+  var link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = name;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(link.href);
+}
+
+function runOp(op) {
+  var note = document.getElementById("qbar-note");
+  try {
+    qbarState = applyEdit(qbarState, op);
+    note.textContent = "";
+    redraw();
+  } catch (err) {
+    note.textContent = String(err && err.message ? err.message : err);
+  }
+}
+
+function moveGroup(direction) {
+  var name = document.getElementById("qbar-group").value;
+  var groups = qbarState.group_order.slice();
+  var index = groups.indexOf(name);
+  var other = index + direction;
+  if (index < 0 || other < 0 || other >= groups.length) {
+    return;
+  }
+  var tmp = groups[index];
+  groups[index] = groups[other];
+  groups[other] = tmp;
+  runOp({op: "reorder_groups", groups: groups});
+}
+
+function bootEditor() {
+  if (typeof document === "undefined") {
+    return;
+  }
+  var stateNode = document.getElementById("qbar-state");
+  var baseNode = document.getElementById("qbar-base");
+  var dataNode = document.getElementById("qbar-data");
+  var canvas = document.getElementById("qbar-canvas");
+  var tip = document.getElementById("qbar-tip");
+  if (!stateNode || !baseNode || !dataNode || !canvas || !tip) {
+    return;
+  }
+  qbarState = JSON.parse(stateNode.textContent);
+  qbarBase = JSON.parse(baseNode.textContent);
+  qbarView = JSON.parse(dataNode.textContent);
+  var ctx = prepareCanvas(canvas, qbarView);
+  drawPanel(ctx, qbarView);
+  bindHover(canvas, qbarView, tip);
+  fillSelects();
+  document.getElementById("qbar-move").addEventListener("click", function () {
+    runOp({
+      op: "move",
+      iid: document.getElementById("qbar-move-iid").value,
+      index: Number(document.getElementById("qbar-move-index").value)
+    });
+  });
+  document.getElementById("qbar-group-up").addEventListener("click", function () {
+    moveGroup(-1);
+  });
+  document.getElementById("qbar-group-down").addEventListener("click", function () {
+    moveGroup(1);
+  });
+  document.getElementById("qbar-swap").addEventListener("click", function () {
+    runOp({
+      op: "swap",
+      k: Number(document.getElementById("qbar-k").value),
+      i: Number(document.getElementById("qbar-col-i").value),
+      j: Number(document.getElementById("qbar-col-j").value)
+    });
+  });
+  document.getElementById("qbar-rename").addEventListener("click", function () {
+    runOp({
+      op: "rename",
+      k: Number(document.getElementById("qbar-k").value),
+      column: Number(document.getElementById("qbar-col-i").value),
+      name: document.getElementById("qbar-name").value
+    });
+  });
+  document.getElementById("qbar-colour-btn").addEventListener("click", function () {
+    runOp({
+      op: "colour",
+      k: Number(document.getElementById("qbar-k").value),
+      column: Number(document.getElementById("qbar-col-i").value),
+      colour: document.getElementById("qbar-colour").value
+    });
+  });
+  document.getElementById("qbar-save-state").addEventListener("click", function () {
+    downloadText("state.json", stateJson(qbarState));
+  });
+  document.getElementById("qbar-save-order").addEventListener("click", function () {
+    downloadText("order.txt", orderTxt(qbarState));
+  });
+  document.getElementById("qbar-save-colours").addEventListener("click", function () {
+    downloadText("colours.tsv", coloursTsv(qbarState));
+  });
+}
+
+bootEditor();
+""".strip() + "\n"
+
+
+def build_editor_base(iids, groups, aligned, owners, ks, runs, bar_w, bar_h, title):
+    """Q in input order, columns in aligned order, before a later swap."""
+    from .report import column_label
+
+    q_rows = []
+    suffixes = []
+    group_list = [str(item) for item in groups]
+    for k in ks:
+        matrix = np.asarray(aligned[k], dtype=float)
+        block = []
+        for index in range(int(matrix.shape[0])):
+            block.append([round_q(matrix[index, col]) for col in range(int(k))])
+        q_rows.append(block)
+        own = owners[k]
+        suffix = []
+        for col in range(int(k)):
+            suffix.append(column_label(own[col], matrix, group_list, col))
+        suffixes.append(suffix)
+    if runs is None:
+        run_row = [""] * len(ks)
+    else:
+        run_row = ["" if item is None else str(item) for item in runs]
+    return {
+        "iid": [str(item) for item in iids],
+        "group": group_list,
+        "k": [int(k) for k in ks],
+        "run": run_row,
+        "q": q_rows,
+        "legend_suffix": suffixes,
+        "left": BAR_LEFT,
+        "gap": BAR_GAP,
+        "bar_w": int(bar_w),
+        "bar_h": int(bar_h),
+        "title": "" if title is None else str(title),
+    }
+
+
+def render_editor_html(payload, state, base):
+    """One offline editor page. The plot title stays inside the JSON."""
+    note = (
+        "order.txt is one sample id per line. "
+        "colours.tsv is a name, a tab, and a colour such as #rrggbb. "
+        "The reader joins the name and the colour with an equals sign. "
+        "A name that is C plus digits is a column colour. "
+        "Any other name is a group colour. "
+        "Lines run from low K to high K, and within a K from the bottom of the stack. "
+        "state.json is the replay file."
+    )
+    controls = "\n".join([
+        "<div id=\"qbar-editor\">",
+        "<p>%s</p>" % note,
+        "<p>",
+        "<label>Sample <select id=\"qbar-move-iid\"></select></label>",
+        "<label>Index in group <input id=\"qbar-move-index\" type=\"number\" min=\"0\" value=\"0\"></label>",
+        "<button id=\"qbar-move\" type=\"button\">Move in group</button>",
+        "</p>",
+        "<p>",
+        "<label>Group <select id=\"qbar-group\"></select></label>",
+        "<button id=\"qbar-group-up\" type=\"button\">Group up</button>",
+        "<button id=\"qbar-group-down\" type=\"button\">Group down</button>",
+        "</p>",
+        "<p>",
+        "<label>K <select id=\"qbar-k\"></select></label>",
+        "<label>Column from 0 <input id=\"qbar-col-i\" type=\"number\" min=\"0\" value=\"0\"></label>",
+        "<label>Other column <input id=\"qbar-col-j\" type=\"number\" min=\"0\" value=\"1\"></label>",
+        "<button id=\"qbar-swap\" type=\"button\">Swap columns</button>",
+        "</p>",
+        "<p>",
+        "<label>Name <input id=\"qbar-name\" type=\"text\" value=\"\"></label>",
+        "<button id=\"qbar-rename\" type=\"button\">Rename column</button>",
+        "<label>Colour <input id=\"qbar-colour\" type=\"text\" value=\"#4470b7\"></label>",
+        "<button id=\"qbar-colour-btn\" type=\"button\">Set colour</button>",
+        "</p>",
+        "<p>",
+        "<button id=\"qbar-save-state\" type=\"button\">Download state.json</button>",
+        "<button id=\"qbar-save-order\" type=\"button\">Download order.txt</button>",
+        "<button id=\"qbar-save-colours\" type=\"button\">Download colours.tsv</button>",
+        "</p>",
+        "<p id=\"qbar-note\"></p>",
+        "</div>",
+    ])
+    return (
+        "<!DOCTYPE html>\n"
+        "<html lang=\"en\">\n"
+        "<head>\n"
+        "<meta charset=\"utf-8\">\n"
+        "<title>qbar editor</title>\n"
+        "<style>\n"
+        + panel_style()
+        + "\n"
+        + editor_style()
+        + "\n</style>\n"
+        "</head>\n"
+        "<body>\n"
+        "<canvas id=\"qbar-canvas\" width=\"1\" height=\"1\"></canvas>\n"
+        "<div id=\"qbar-tip\" hidden></div>\n"
+        + controls
+        + "\n"
+        "<script type=\"application/json\" id=\"qbar-data\">\n"
+        + embed_json(payload)
+        + "\n</script>\n"
+        "<script type=\"application/json\" id=\"qbar-base\">\n"
+        + embed_json(base)
+        + "\n</script>\n"
+        "<script type=\"application/json\" id=\"qbar-state\">\n"
+        + embed_json(state)
+        + "\n</script>\n"
+        "<script id=\"qbar-draw\">\n"
+        + panel_functions()
+        + editor_script()
+        + "</script>\n"
+        "</body>\n"
+        "</html>\n"
+    )
+
+
+def write_editor_html(path, payload, state, base):
+    """Write ``editor.html``. ``payload`` is the F3 panel object."""
+    folder = os.path.dirname(os.path.abspath(path))
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    text = render_editor_html(payload, state, base)
     with open(path, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(text)
