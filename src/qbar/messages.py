@@ -1227,6 +1227,102 @@ _CATALOG = {
         "en": "auto_groups ids contain a duplicate %(iid)s.",
         "zh": "auto_groups 的 id %(iid)s 重复。",
     },
+    "help_sites": {
+        "en": "Optional TSV. Header: site, latitude, longitude, group, tab-separated. UTF-8, and a BOM is allowed. A site's samples are the people whose group equals that value. Omitted by default, so map_pies.png and map_pies.tsv are not written. --vector does not write a map PDF or SVG. A world file is not read. Nothing is downloaded.",
+        "zh": "可选 TSV。表头 site、latitude、longitude、group，制表符分隔。UTF-8，允许 BOM。一个点的样本是分组等于该值的人。默认不给，因此不写 map_pies.png 和 map_pies.tsv。--vector 不为地图写 PDF 或 SVG。不读 world file。不下载。",
+    },
+    "help_basemap_image": {
+        "en": "PNG stretched to --basemap-bbox. Requires --basemap-bbox and --sites. A missing file is an error. A world file is not read. Nothing is downloaded.",
+        "zh": "PNG，拉伸到 --basemap-bbox。必须同时给 --basemap-bbox 和 --sites。文件不存在则报错。不读 world file。不下载。",
+    },
+    "help_basemap_bbox": {
+        "en": "LON_MIN,LAT_MIN,LON_MAX,LAT_MAX for --basemap-image. A leading minus is accepted. Requires that image. The map uses this box instead of the site extent.",
+        "zh": "--basemap-image 的范围，格式 LON_MIN,LAT_MIN,LON_MAX,LAT_MAX。负数可以。必须同时给那张图。地图用这个范围，不用点的范围。",
+    },
+    "sites_missing": {
+        "en": "Sites file was not found: %(path)s",
+        "zh": "找不到位点文件：%(path)s",
+    },
+    "sites_read": {
+        "en": "Sites file could not be read as UTF-8: %(path)s",
+        "zh": "位点文件不是 UTF-8：%(path)s",
+    },
+    "sites_header": {
+        "en": "Sites file needs a tab header site, latitude, longitude, group, got %(header)s",
+        "zh": "位点文件需要制表符表头 site、latitude、longitude、group，收到 %(header)s",
+    },
+    "sites_row": {
+        "en": "Sites file line %(row)s is not four tab-separated fields.",
+        "zh": "位点文件第 %(row)s 行不是四个制表符字段。",
+    },
+    "sites_empty": {
+        "en": "Sites file has no data rows.",
+        "zh": "位点文件没有数据行。",
+    },
+    "sites_blank": {
+        "en": "Site %(site)s needs a site name and a group.",
+        "zh": "位点 %(site)s 需要名字和分组。",
+    },
+    "sites_duplicate_name": {
+        "en": "Site name %(site)s is repeated.",
+        "zh": "位点名 %(site)s 重复。",
+    },
+    "sites_duplicate_group": {
+        "en": "Group %(group)s is used by sites %(sites)s.",
+        "zh": "分组 %(group)s 被位点 %(sites)s 使用。",
+    },
+    "sites_latitude": {
+        "en": "Site %(site)s has latitude %(value)s, which must be finite and in [-90, 90].",
+        "zh": "位点 %(site)s 的纬度 %(value)s 必须是 [-90, 90] 内的有限数。",
+    },
+    "sites_longitude": {
+        "en": "Site %(site)s has longitude %(value)s, which must be finite and in [-180, 180].",
+        "zh": "位点 %(site)s 的经度 %(value)s 必须是 [-180, 180] 内的有限数。",
+    },
+    "sites_skip": {
+        "en": "Warning: site %(site)s group %(group)s has no samples and was skipped.",
+        "zh": "注意：位点 %(site)s 的分组 %(group)s 没有样本，已跳过。",
+    },
+    "sites_all_skipped": {
+        "en": "Every site was skipped because its group has no samples.",
+        "zh": "每个位点都因分组没有样本而被跳过。",
+    },
+    "sites_same_xy": {
+        "en": "Warning: sites %(sites)s share coordinates and each later pie is shifted a further 4 px right (4, 8, 12 px ...).",
+        "zh": "注意：位点 %(sites)s 坐标相同，后面每个饼再向右移 4 像素（4、8、12 像素）。",
+    },
+    "sites_outside": {
+        "en": "Warning: site %(site)s is outside the basemap box and is clipped.",
+        "zh": "注意：位点 %(site)s 在底图范围外，画出的部分会被裁切。",
+    },
+    "sites_shape": {
+        "en": "Map pies need one group per Q row, got %(got)s groups for %(rows)s rows.",
+        "zh": "饼图需要每个 Q 行一个分组，收到 %(got)s 个分组、%(rows)s 行。",
+    },
+    "sites_colours": {
+        "en": "Map pies need %(k)s colours, got %(got)s.",
+        "zh": "饼图需要 %(k)s 个颜色，收到 %(got)s 个。",
+    },
+    "basemap_pair": {
+        "en": "--basemap-image and --basemap-bbox must be given together.",
+        "zh": "--basemap-image 和 --basemap-bbox 必须同时给出。",
+    },
+    "basemap_needs_sites": {
+        "en": "--basemap-image and --basemap-bbox require --sites.",
+        "zh": "--basemap-image 和 --basemap-bbox 需要 --sites。",
+    },
+    "basemap_missing": {
+        "en": "Basemap image was not found: %(path)s",
+        "zh": "找不到底图：%(path)s",
+    },
+    "basemap_read": {
+        "en": "Basemap image could not be read: %(path)s",
+        "zh": "底图无法读取：%(path)s",
+    },
+    "basemap_bbox": {
+        "en": "--basemap-bbox must be four finite numbers LON_MIN,LAT_MIN,LON_MAX,LAT_MAX with a positive span, got %(value)s",
+        "zh": "--basemap-bbox 必须是四个有限数 LON_MIN,LAT_MIN,LON_MAX,LAT_MAX，且范围为正，收到 %(value)s",
+    },
 }
 
 
