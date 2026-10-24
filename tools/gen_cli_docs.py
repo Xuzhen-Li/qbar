@@ -92,7 +92,7 @@ def _config_lines():
 
 Precedence is the command line, then the config file, then the defaults from `build_parser`. A flag that is present on the command line wins, including when the value equals the default. A flag that is absent does not replace a value from the file.
 
-Keys are argparse dest names, such as `align_method` and `order_mode`. `align-method` and `--align-method` are accepted and mapped to `align_method`. The key `config` is rejected. The key `state` is allowed and means the same thing as `--state`. `--q` and `--outdir` may be omitted on the command line when the file sets them. A sample id file (`ids`, `fam`, or `ind`) can be set in the file as well. The run still requires one id source.
+Keys are argparse dest names, such as `align_method` and `order_mode`. `align-method` and `--align-method` are accepted and mapped to `align_method`. The key `config` is rejected. The key `state` is allowed and means the same thing as `--state`. The key `export` is a string, the same value as `--export`: `none`, `clumpp`, `pong`, or a comma-separated subset such as `clumpp,pong`. It is not a list. `--q` and `--outdir` may be omitted on the command line when the file sets them. A sample id file (`ids`, `fam`, or `ind`) can be set in the file as well. The run still requires one id source.
 
 `on`, `off`, `yes`, and `no` must be quoted when the option expects a string. PyYAML 1.1 reads those words as booleans. A repeated YAML key keeps the last value.
 

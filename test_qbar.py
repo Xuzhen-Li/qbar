@@ -1223,6 +1223,8 @@ class DocstringTests(unittest.TestCase):
         ``docs/factpacks/S7.md``.
         ``--sites``, ``--basemap-image``, and ``--basemap-bbox`` are
         documented in ``docs/cli.md`` and ``docs/factpacks/S6.md``.
+        ``--export`` is documented in ``docs/cli.md`` and
+        ``docs/factpacks/S12.md``.
         """
         import re
         # --select-k and --plateau-fraction are documented in docs/cli.md
@@ -1254,6 +1256,7 @@ class DocstringTests(unittest.TestCase):
         # --config is documented in docs/cli.md and docs/factpacks/S7.md.
         # --sites, --basemap-image, and --basemap-bbox are documented in
         # docs/cli.md and docs/factpacks/S6.md.
+        # --export is documented in docs/cli.md and docs/factpacks/S12.md.
         later = {
             "--provenance", "--q-format", "--ind", "--logs", "--logs-map",
             "--select-k", "--plateau-fraction",
@@ -1274,6 +1277,7 @@ class DocstringTests(unittest.TestCase):
             "--state",
             "--config",
             "--sites", "--basemap-image", "--basemap-bbox",
+            "--export",
         }
         flags = []
         for action in qbar.build_parser()._actions:
@@ -10587,6 +10591,441 @@ class SpeedTests(unittest.TestCase):
             par_right = fut_right.result()
         self._assert_same_align(seq_left, par_left)
         self._assert_same_align(seq_right, par_right)
+
+
+class ExportTests(unittest.TestCase):
+    def test_parser_defaults_stay(self):
+        parser = qbar.build_parser()
+        self.assertEqual(_cli_flag(parser, "--export").default, "none")
+        self.assertEqual(_cli_flag(parser, "--id-col").default, "analysis_IID")
+        self.assertEqual(_cli_flag(parser, "--group-col").default, "Dong_Grp")
+        self.assertEqual(_cli_flag(parser, "--palette").default, "science")
+        help_s = _cli_flag(parser, "--export").help or ""
+        self.assertTrue(all(ord(ch) < 128 for ch in help_s))
+        self.assertIn("clumpp", help_s)
+        self.assertIn("pong", help_s)
+        self.assertIn("none", help_s)
+
+    def test_indfile_columns_match_the_q(self):
+        """2 by 2 Q, ids a and b: 2 data rows and 7 columns.
+
+        Columns 6 and 7 are compared with the matrix in this test.
+        The expected width is K + 5. The file is not read back through
+        the Q reader.
+        """
+        q = np.array([[0.25, 0.75], [0.50, 0.50]], dtype=float)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "clumpp")
+            written = qbar.export_clumpp(path, {2: q}, ["a", "b"])
+            self.assertIn(os.path.join(path, "K2.indfile"), written)
+            with open(os.path.join(path, "K2.indfile"), encoding="utf-8", newline="\n") as handle:
+                lines = handle.read().splitlines()
+            self.assertEqual(len(lines), 2)
+            for index, line in enumerate(lines):
+                fields = line.split()
+                self.assertEqual(len(fields), int(q.shape[1]) + 5)
+                self.assertEqual(fields[0], str(index + 1))
+                self.assertEqual(fields[1], fields[0])
+                self.assertEqual(fields[2], "1")
+                self.assertEqual(fields[3], "1")
+                self.assertEqual(fields[4], ":")
+                self.assertEqual(float(fields[5]), float(q[index, 0]))
+                self.assertEqual(float(fields[6]), float(q[index, 1]))
+            with open(os.path.join(path, "ids.tsv"), encoding="utf-8", newline="\n") as handle:
+                self.assertEqual(handle.read(), "index\tiid\n1\ta\n2\tb\n")
+            self.assertFalse(any(name.startswith("drawparams") for name in os.listdir(path)))
+
+    def test_rows_are_not_renormalised(self):
+        q = np.array([[0.20, 0.20], [0.10, 0.70]], dtype=float)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "clumpp")
+            qbar.export_clumpp(path, {2: q}, ["a", "b"])
+            with open(os.path.join(path, "K2.indfile"), encoding="utf-8") as handle:
+                lines = handle.read().splitlines()
+            for index, line in enumerate(lines):
+                fields = line.split()
+                self.assertEqual(fields[5], "%.6f" % float(q[index, 0]))
+                self.assertEqual(fields[6], "%.6f" % float(q[index, 1]))
+                self.assertNotEqual(fields[5], "%.6f" % (float(q[index, 0]) / float(q[index].sum())))
+
+    def test_group_code_names_and_pop_mean(self):
+        """Column 4 follows the bar. The pop mean is summed in this test."""
+        with tempfile.TemporaryDirectory() as tmp:
+            q_path = os.path.join(tmp, "t.2.Q")
+            ids_path = os.path.join(tmp, "ids.txt")
+            groups_path = os.path.join(tmp, "groups.tsv")
+            _write_q_rows(q_path, [[1.0, 0.0], [0.0, 1.0], [0.25, 0.75]])
+            with open(ids_path, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("a\nb\nc\n")
+            with open(groups_path, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("id\tgroup\na\tZ\nb\tM\nc\tZ\n")
+            out = os.path.join(tmp, "out")
+            qbar.main([
+                "--q", q_path, "--ids", ids_path, "--groups", groups_path,
+                "--id-col", "id", "--group-col", "group",
+                "--within", "input", "--export", "clumpp,pong", "--outdir", out,
+            ])
+            with open(os.path.join(out, "order.tsv"), encoding="utf-8") as handle:
+                order_rows = [line.split("\t") for line in handle.read().splitlines()[1:]]
+            known = {
+                "a": [1.0, 0.0],
+                "b": [0.0, 1.0],
+                "c": [0.25, 0.75],
+            }
+            seen = []
+            for _rank, iid, group in order_rows:
+                if group not in seen:
+                    seen.append(group)
+            code_of = {name: str(index + 1) for index, name in enumerate(seen)}
+            with open(os.path.join(out, "export", "clumpp", "K2.indfile"), encoding="utf-8") as handle:
+                ind_lines = handle.read().splitlines()
+            self.assertEqual(len(ind_lines), len(order_rows))
+            for row, (line, (_rank, iid, group)) in enumerate(zip(ind_lines, order_rows), start=1):
+                fields = line.split()
+                self.assertEqual(len(fields), 7)
+                self.assertEqual(fields[0], str(row))
+                self.assertEqual(fields[1], fields[0])
+                self.assertEqual(fields[3], code_of[group])
+                self.assertEqual(float(fields[5]), known[iid][0])
+                self.assertEqual(float(fields[6]), known[iid][1])
+            with open(os.path.join(out, "export", "clumpp", "ids.tsv"), encoding="utf-8", newline="\n") as handle:
+                id_lines = handle.read().splitlines()
+            self.assertEqual(id_lines[0], "index\tiid")
+            self.assertEqual(
+                id_lines[1:],
+                ["%d\t%s" % (row, iid) for row, (_rank, iid, _group) in enumerate(order_rows, start=1)],
+            )
+            totals = {name: [0.0, 0.0] for name in seen}
+            counts = {name: 0 for name in seen}
+            for _rank, iid, group in order_rows:
+                totals[group][0] += known[iid][0]
+                totals[group][1] += known[iid][1]
+                counts[group] += 1
+            with open(os.path.join(out, "export", "clumpp", "K2.popq"), encoding="utf-8") as handle:
+                pop_lines = handle.read().splitlines()
+            self.assertEqual(len(pop_lines), len(seen))
+            for line, name in zip(pop_lines, seen):
+                fields = line.split()
+                self.assertEqual(len(fields), 4)
+                self.assertEqual(fields[0], "%s:" % code_of[name])
+                mean = [totals[name][col] / counts[name] for col in range(2)]
+                self.assertEqual(fields[1], "%.6f" % mean[0])
+                self.assertEqual(fields[2], "%.6f" % mean[1])
+                self.assertEqual(fields[3], str(counts[name]))
+            with open(os.path.join(out, "export", "clumpp", "names.txt"), encoding="utf-8") as handle:
+                name_lines = handle.read().splitlines()
+            self.assertEqual(name_lines, ["%s %s" % (code_of[name], name) for name in seen])
+            with open(os.path.join(out, "export", "pong", "ind2pop.txt"), encoding="utf-8") as handle:
+                self.assertEqual(
+                    handle.read().splitlines(),
+                    [group for _rank, _iid, group in order_rows],
+                )
+            with open(os.path.join(out, "export", "pong", "K2.Q"), encoding="utf-8") as handle:
+                q_lines = handle.read().splitlines()
+            for line, (_rank, iid, _group) in zip(q_lines, order_rows):
+                fields = line.split()
+                self.assertEqual(fields, ["%.6f" % value for value in known[iid]])
+            self.assertEqual(order_rows[0][1], "b")
+            self.assertEqual(code_of["M"], "1")
+            self.assertEqual(code_of["Z"], "2")
+
+    def test_group_name_with_a_space_is_kept(self):
+        q = np.array([[0.25, 0.75], [0.50, 0.50]], dtype=float)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "out")
+            import io
+            from contextlib import redirect_stderr
+            buf = io.StringIO()
+            with redirect_stderr(buf):
+                qbar.export_clumpp(path, {2: q}, ["a", "b"], groups=["East Asia", "East Asia"])
+                qbar.export_pong(os.path.join(tmp, "pong"), {2: q}, ["a", "b"], groups=["East Asia", "East Asia"])
+            self.assertEqual(buf.getvalue(), "")
+            with open(os.path.join(path, "names.txt"), encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "1 East Asia\n")
+            with open(os.path.join(tmp, "pong", "ind2pop.txt"), encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "East Asia\nEast Asia\n")
+
+    def test_hyphen_and_space_iids_export(self):
+        """Column 2 stays the running index. The iid is only in ids.tsv."""
+        q = np.array([[0.25, 0.75], [0.50, 0.50]], dtype=float)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "clumpp")
+            qbar.export_clumpp(path, {2: q}, ["106-A", "a b"])
+            with open(os.path.join(path, "K2.indfile"), encoding="utf-8", newline="\n") as handle:
+                lines = handle.read().splitlines()
+            self.assertEqual([line.split()[0] for line in lines], ["1", "2"])
+            self.assertEqual([line.split()[1] for line in lines], ["1", "2"])
+            with open(os.path.join(path, "ids.tsv"), encoding="utf-8", newline="\n") as handle:
+                self.assertEqual(handle.read(), "index\tiid\n1\t106-A\n2\ta b\n")
+            for bad, needle in (("a\tb", "tab-separated"), ("a\nb", "newline")):
+                refused = os.path.join(tmp, "refused-" + needle)
+                with self.assertRaises(SystemExit) as ctx:
+                    qbar.export_clumpp(refused, {2: q}, [bad, "c"])
+                self.assertIn(needle, ctx.exception.code)
+                self.assertFalse(os.path.exists(refused))
+            with self.assertRaises(SystemExit) as ctx_zh:
+                qbar.export_clumpp(os.path.join(tmp, "zh"), {2: q}, ["a\tb", "c"], language="zh")
+            self.assertIn("a\tb", ctx_zh.exception.code)
+            pong = os.path.join(tmp, "pong")
+            qbar.export_pong(pong, {2: q}, ["a b", "c"], groups=["East Asia", "M"])
+            with open(os.path.join(pong, "ind2pop.txt"), encoding="utf-8", newline="\n") as handle:
+                self.assertEqual(handle.read(), "East Asia\nM\n")
+
+    def test_empty_iid_is_kept_and_empty_group_is_refused(self):
+        q = np.array([[0.25, 0.75], [0.50, 0.50]], dtype=float)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "clumpp")
+            qbar.export_clumpp(path, {2: q}, ["", "b"])
+            with open(os.path.join(path, "ids.tsv"), encoding="utf-8", newline="\n") as handle:
+                self.assertEqual(handle.read(), "index\tiid\n1\t\n2\tb\n")
+            with open(os.path.join(path, "K2.indfile"), encoding="utf-8") as handle:
+                self.assertEqual(handle.read().splitlines()[0].split()[1], "1")
+            missing = os.path.join(tmp, "missing-group")
+            with self.assertRaises(SystemExit) as ctx_group:
+                qbar.export_clumpp(missing, {2: q}, ["a", "b"], groups=["", "M"])
+            self.assertIn("empty group", ctx_group.exception.code)
+            self.assertIn("not changed", ctx_group.exception.code)
+            self.assertFalse(os.path.exists(missing))
+
+    def test_pong_filemap_and_q_bytes(self):
+        q2 = np.array([[0.25, 0.75], [0.50, 0.50]], dtype=float)
+        q3 = np.array([[0.20, 0.20, 0.60], [0.10, 0.10, 0.80]], dtype=float)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "pong")
+            qbar.export_pong(path, {3: q3, 2: q2}, ["a", "b"])
+            with open(os.path.join(path, "filemap.txt"), encoding="utf-8", newline="\n") as handle:
+                text = handle.read()
+            self.assertEqual(text, "qbar_K2\t2\tK2.Q\nqbar_K3\t3\tK3.Q\n")
+            for line, matrix, name in (
+                (text.splitlines()[0], q2, "K2.Q"),
+                (text.splitlines()[1], q3, "K3.Q"),
+            ):
+                run_id, k_text, rel = line.split("\t")
+                self.assertEqual(len(line.split("\t")), 3)
+                self.assertEqual(run_id, "qbar_K%s" % k_text)
+                self.assertFalse(os.path.isabs(rel))
+                self.assertEqual(os.path.dirname(rel), "")
+                self.assertEqual(rel, name)
+                self.assertNotIn("#", rel)
+                with open(os.path.join(path, rel), encoding="utf-8", newline="\n") as handle:
+                    body = handle.read()
+                expect = []
+                for row in matrix:
+                    expect.append(" ".join("%.6f" % float(value) for value in row))
+                self.assertEqual(body, "\n".join(expect) + "\n")
+                for got, want in zip(body.splitlines(), matrix):
+                    for token, value in zip(got.split(), want):
+                        self.assertEqual(float(token), float(value))
+
+    def test_pong_gap_names_missing_k(self):
+        """K=2 and K=4 with --no-align still write. stderr names K=3."""
+        import io
+        from contextlib import redirect_stderr
+        warning = (
+            "Warning: pong filemap is missing K 3. "
+            "pong aborts when a K between Kmin and Kmax is missing. "
+            "The files were still written."
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            q2 = os.path.join(tmp, "t.2.Q")
+            q4 = os.path.join(tmp, "t.4.Q")
+            ids_path = os.path.join(tmp, "ids.txt")
+            _write_q_rows(q2, [[0.25, 0.75], [0.50, 0.50]])
+            _write_q_rows(q4, [[0.10, 0.20, 0.30, 0.40], [0.40, 0.30, 0.20, 0.10]])
+            with open(ids_path, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("a\nb\n")
+            out = os.path.join(tmp, "out")
+            buf = io.StringIO()
+            with redirect_stderr(buf):
+                qbar.main([
+                    "--q", q2, q4, "--ids", ids_path, "--no-align",
+                    "--export", "pong", "--outdir", out,
+                ])
+            self.assertIn(warning, buf.getvalue())
+            pong = os.path.join(out, "export", "pong")
+            self.assertTrue(os.path.isfile(os.path.join(pong, "K2.Q")))
+            self.assertTrue(os.path.isfile(os.path.join(pong, "K4.Q")))
+            self.assertFalse(os.path.exists(os.path.join(pong, "K3.Q")))
+            with open(os.path.join(pong, "filemap.txt"), encoding="utf-8", newline="\n") as handle:
+                self.assertEqual(handle.read(), "qbar_K2\t2\tK2.Q\nqbar_K4\t4\tK4.Q\n")
+            only = os.path.join(tmp, "clumpp")
+            quiet = io.StringIO()
+            with redirect_stderr(quiet):
+                qbar.main([
+                    "--q", q2, q4, "--ids", ids_path, "--no-align",
+                    "--export", "clumpp", "--outdir", only,
+                ])
+            self.assertNotIn("pong filemap is missing", quiet.getvalue())
+            q5 = np.array([[0.2, 0.2, 0.2, 0.2, 0.2], [0.1, 0.1, 0.1, 0.1, 0.6]], dtype=float)
+            q3 = np.array([[0.2, 0.2, 0.6], [0.1, 0.1, 0.8]], dtype=float)
+            gap = io.StringIO()
+            with redirect_stderr(gap):
+                qbar.export_pong(os.path.join(tmp, "wide"), {2: np.array([[0.25, 0.75], [0.5, 0.5]]), 5: q5}, ["a", "b"])
+            self.assertIn("missing K 3, 4.", gap.getvalue())
+            zh = io.StringIO()
+            with redirect_stderr(zh):
+                qbar.export_pong(
+                    os.path.join(tmp, "zh"),
+                    {4: np.array([[0.1, 0.2, 0.3, 0.4], [0.4, 0.3, 0.2, 0.1]]), 2: np.array([[0.25, 0.75], [0.5, 0.5]])},
+                    ["a", "b"], language="zh",
+                )
+            self.assertIn("缺少 K 3", zh.getvalue())
+            closed = io.StringIO()
+            with redirect_stderr(closed):
+                qbar.export_pong(os.path.join(tmp, "closed"), {2: np.array([[0.25, 0.75], [0.5, 0.5]]), 3: q3}, ["a", "b"])
+            self.assertNotIn("pong filemap is missing", closed.getvalue())
+
+    def test_k1_is_written_with_a_warning(self):
+        import io
+        from contextlib import redirect_stderr
+        q = np.array([[1.0], [1.0]], dtype=float)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "pong")
+            buf = io.StringIO()
+            with redirect_stderr(buf):
+                qbar.export_pong(path, {1: q}, ["a", "b"])
+            self.assertIn("K = 1", buf.getvalue())
+            self.assertIn("K1.Q", buf.getvalue())
+            self.assertTrue(os.path.isfile(os.path.join(path, "K1.Q")))
+            with open(os.path.join(path, "filemap.txt"), encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "qbar_K1\t1\tK1.Q\n")
+
+    def test_comma_subset_and_unknown_value(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            q_path = os.path.join(tmp, "t.2.Q")
+            ids_path = os.path.join(tmp, "ids.txt")
+            _write_q_rows(q_path, [[0.25, 0.75], [0.50, 0.50]])
+            with open(ids_path, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("a\nb\n")
+            both = os.path.join(tmp, "both")
+            flipped = os.path.join(tmp, "flipped")
+            only = os.path.join(tmp, "only")
+            qbar.main(["--q", q_path, "--ids", ids_path, "--export", "clumpp, pong", "--outdir", both])
+            qbar.main(["--q", q_path, "--ids", ids_path, "--export", "pong,clumpp", "--outdir", flipped])
+            qbar.main(["--q", q_path, "--ids", ids_path, "--export", "pong", "--outdir", only])
+            self.assertTrue(os.path.isdir(os.path.join(both, "export", "clumpp")))
+            self.assertTrue(os.path.isdir(os.path.join(both, "export", "pong")))
+            self.assertFalse(os.path.isdir(os.path.join(only, "export", "clumpp")))
+            self.assertTrue(os.path.isfile(os.path.join(only, "export", "pong", "filemap.txt")))
+            self.assertEqual(
+                _export_bytes(os.path.join(both, "export")),
+                _export_bytes(os.path.join(flipped, "export")),
+            )
+            for bad in ("nope", "clumpp,nope", "none,clumpp", "clumpp,", ""):
+                with self.assertRaises(SystemExit) as ctx:
+                    qbar.main([
+                        "--q", q_path, "--ids", ids_path,
+                        "--export", bad, "--outdir", os.path.join(tmp, "bad"),
+                    ])
+                self.assertIn("--export must be none", ctx.exception.code)
+                if bad == "":
+                    self.assertIn("got .", ctx.exception.code)
+                else:
+                    self.assertIn(bad, ctx.exception.code)
+                self.assertFalse(os.path.exists(os.path.join(tmp, "bad")))
+
+    def test_default_run_writes_no_export_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            q_path = os.path.join(tmp, "t.2.Q")
+            ids_path = os.path.join(tmp, "ids.txt")
+            _write_q_rows(q_path, [[0.25, 0.75], [0.50, 0.50]])
+            with open(ids_path, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("a\nb\n")
+            out = os.path.join(tmp, "out")
+            qbar.main(["--q", q_path, "--ids", ids_path, "--outdir", out])
+            self.assertFalse(os.path.exists(os.path.join(out, "export")))
+            none = os.path.join(tmp, "none")
+            qbar.main(["--q", q_path, "--ids", ids_path, "--export", "none", "--outdir", none])
+            self.assertFalse(os.path.exists(os.path.join(none, "export")))
+
+    def test_export_bytes_match_across_runs(self):
+        q = np.array([[0.25, 0.75], [0.40, 0.60]], dtype=float)
+        with tempfile.TemporaryDirectory() as tmp:
+            first = os.path.join(tmp, "a")
+            second = os.path.join(tmp, "b")
+            qbar.export_clumpp(first, {2: q}, ["a", "b"], groups=["M", "Z"])
+            qbar.export_pong(os.path.join(first, "pong"), {2: q}, ["a", "b"], groups=["M", "Z"])
+            qbar.export_clumpp(second, {2: q}, ["a", "b"], groups=["M", "Z"])
+            qbar.export_pong(os.path.join(second, "pong"), {2: q}, ["a", "b"], groups=["M", "Z"])
+            self.assertEqual(_export_bytes(first), _export_bytes(second))
+
+    def test_replicates_export_the_aligned_matrix_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            left = os.path.join(tmp, "a.2.Q")
+            right = os.path.join(tmp, "b.2.Q")
+            ids_path = os.path.join(tmp, "ids.txt")
+            _write_q_rows(left, [[1.0, 0.0], [0.0, 1.0]])
+            _write_q_rows(right, [[0.8, 0.2], [0.2, 0.8]])
+            with open(ids_path, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("s1\ns2\n")
+            out = os.path.join(tmp, "out")
+            argv = [
+                "--q", left, right, "--ids", ids_path, "--outdir", out,
+                "--replicates", "--mode-sim-cut", "0.5", "--export", "pong",
+            ]
+            result = qbar.run(qbar.build_parser().parse_args(argv), argv)
+            q_files = [
+                name for name in os.listdir(os.path.join(out, "export", "pong"))
+                if name.endswith(".Q")
+            ]
+            self.assertEqual(q_files, ["K2.Q"])
+            plotted = result.aligned[2][result.order]
+            expect = []
+            for row in plotted:
+                expect.append(" ".join("%.6f" % float(value) for value in row))
+            with open(os.path.join(out, "export", "pong", "K2.Q"), encoding="utf-8") as handle:
+                body = handle.read()
+            self.assertEqual(body, "\n".join(expect) + "\n")
+            with open(left, encoding="utf-8") as handle:
+                raw = handle.read()
+            self.assertNotEqual(body, raw)
+            with open(os.path.join(out, "export", "pong", "filemap.txt"), encoding="utf-8") as handle:
+                self.assertEqual(handle.read().splitlines(), ["qbar_K2\t2\tK2.Q"])
+
+    def test_config_key_is_accepted(self):
+        """The dest ``export`` is a config key. This does not import PyYAML."""
+        from qbar.config import validate_config
+        parser = qbar.build_parser()
+        coerced = validate_config({"export": "clumpp,pong"}, parser)
+        self.assertEqual(coerced["export"], "clumpp,pong")
+        with self.assertRaises(SystemExit) as ctx:
+            validate_config({"export": 1}, parser)
+        self.assertIn("export", ctx.exception.code)
+
+    @unittest.skipUnless(_yaml_mod is not None, "PyYAML is not installed")
+    def test_config_key_export(self):
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            q_path = os.path.join(tmp, "t.2.Q")
+            ids_path = os.path.join(tmp, "ids.txt")
+            cfg = os.path.join(tmp, "run.yaml")
+            _write_q_rows(q_path, [[0.25, 0.75], [0.50, 0.50]])
+            with open(ids_path, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("a\nb\n")
+            with open(cfg, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("export: pong\n")
+            out = os.path.join(tmp, "out")
+            qbar.main(["--config", cfg, "--q", q_path, "--ids", ids_path, "--outdir", out])
+            self.assertTrue(os.path.isfile(os.path.join(out, "export", "pong", "filemap.txt")))
+            self.assertFalse(os.path.isdir(os.path.join(out, "export", "clumpp")))
+            with open(os.path.join(out, "config_resolved.json"), encoding="utf-8") as handle:
+                payload = json.load(handle)
+            self.assertEqual(payload["export"], "pong")
+            self.assertEqual(payload["sources"]["export"], "config")
+            self.assertEqual(payload["id_col"], "analysis_IID")
+            self.assertEqual(payload["group_col"], "Dong_Grp")
+            self.assertEqual(payload["palette"], "science")
+
+
+def _export_bytes(root):
+    found = {}
+    for dirpath, _dirs, files in os.walk(root):
+        for name in files:
+            path = os.path.join(dirpath, name)
+            rel = os.path.relpath(path, root)
+            with open(path, "rb") as handle:
+                found[rel] = handle.read()
+    return found
 
 
 if __name__ == "__main__":
