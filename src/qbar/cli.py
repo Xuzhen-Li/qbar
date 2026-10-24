@@ -69,6 +69,14 @@ Indfile column 2 is the same running index as column 1. ids.tsv maps
 that index to the iid. pong writes K<k>.Q, filemap.txt, and ind2pop.txt
 under export/pong. A comma-separated list can name both. Rows follow
 the bar. Values are not rescaled.
+--polygon none (the default) writes no polygon file. simplex writes
+polygon_K<k>.png and polygon_K<k>.tsv for one K. The default K is the
+largest in the run. --polygon-k selects another K that is in the run.
+Each point is the Q-weighted mean of the vertices. C1 is at the top
+and later vertices go counter-clockwise. Rows follow the bar and are
+not rescaled. K=1 is refused. When K is above 3 the figure says that
+different Q can share one point. --vector does not write a polygon
+PDF or SVG.
 https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.hierarchy.linkage.html
 """
 from __future__ import annotations
@@ -346,6 +354,9 @@ def build_parser(language="en"):
     p.add_argument("--pca", default=None, help=say("help_pca"))
     p.add_argument("--pca-n", type=int, default=None, help=say("help_pca_n"))
     p.add_argument("--export", default="none", help=say("help_export"))
+    p.add_argument("--polygon", choices=("none", "simplex"), default="none",
+                   help=say("help_polygon"))
+    p.add_argument("--polygon-k", type=int, default=None, help=say("help_polygon_k"))
     return p
 
 

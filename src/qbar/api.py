@@ -587,6 +587,17 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     K is the aligned matrix, which is the major-mode mean when that K had
     more than one file.
 
+    ``args.polygon`` defaults to ``none`` and then writes no polygon
+    file. ``simplex`` writes ``polygon_K{k}.png`` and ``polygon_K{k}.tsv``
+    for one K. ``args.polygon_k`` defaults to ``None``, which means the
+    largest K in the run. A value that is not in the run is an error
+    that names the available K, including when ``args.polygon`` is
+    ``none``. K=1 is refused only when the mode is ``simplex``. Q is the
+    aligned matrix at that K, in bar order, with the same colours and
+    legend names as the bar. The alignment mask does not remove rows.
+    Values are not rescaled. ``--vector`` does not write a polygon PDF
+    or SVG.
+
     ``main`` applies ``--config`` before calling ``run``. ``run`` does not
     read YAML. ``config_resolved.json`` is written by ``main`` after a
     successful run when ``--config`` was passed. The config key ``export``
@@ -754,6 +765,18 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
             raise SystemExit(_msg("missing_q_for_k", language, name=name, k=k))
     if args.sort_col is not None and (args.sort_col < 1 or args.sort_col > sort_k):
         raise SystemExit(_msg("sort_col_range", language, k=sort_k))
+    polygon_mode = getattr(args, "polygon", "none") or "none"
+    if polygon_mode not in ("none", "simplex"):
+        raise SystemExit(_msg("polygon_choice", language, value=polygon_mode))
+    polygon_k_arg = getattr(args, "polygon_k", None)
+    if polygon_k_arg is not None and int(polygon_k_arg) not in aligned:
+        available = ", ".join(str(item) for item in ks)
+        raise SystemExit(_msg(
+            "polygon_missing_k", language, k=polygon_k_arg, available=available,
+        ))
+    polygon_k = ks[-1] if polygon_k_arg is None else int(polygon_k_arg)
+    if polygon_mode == "simplex" and polygon_k == 1:
+        raise SystemExit(_msg("polygon_k1", language))
     if args.order_file and blocks:
         print(_msg("order_file_ignores_blocks", language), file=sys.stderr)
     if order_mode != "within" and blocks:
@@ -928,6 +951,8 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         )
     map_image = None
     map_geometry = None
+    poly_image = None
+    poly_geometry = None
     if sites_arg:
         from .mappies import pies
         legend_for_k = None
@@ -944,6 +969,24 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
             k=sort_k,
             basemap_image=basemap_image,
             bbox=basemap_bbox,
+            language=language,
+        )
+    if polygon_mode == "simplex":
+        from .polygon import simplex
+        legend_for_k = None
+        for row in rows:
+            if row["k"] == polygon_k:
+                legend_for_k = row["legend"]
+                break
+        shown = [int(i) for i in order]
+        poly_image, poly_geometry = simplex(
+            aligned[polygon_k][shown],
+            [iids[i] for i in shown],
+            [groups[i] for i in shown],
+            hexes[polygon_k],
+            legend_for_k,
+            k=polygon_k,
+            has_groups=bool(getattr(args, "groups", None)),
             language=language,
         )
     if export_kinds:
@@ -965,6 +1008,11 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         map_png, map_tsv = write_map_files(args.outdir, map_image, map_geometry)
         print(map_png)
         print(map_tsv)
+    if poly_image is not None:
+        from .polygon import write_polygon_files
+        poly_png, poly_tsv = write_polygon_files(args.outdir, poly_image, poly_geometry)
+        print(poly_png)
+        print(poly_tsv)
     grey_path = None
     html_path = None
     editor_path = None
@@ -1273,6 +1321,9 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     if map_image is not None:
         paths.append(os.path.join(args.outdir, "map_pies.png"))
         paths.append(os.path.join(args.outdir, "map_pies.tsv"))
+    if poly_image is not None:
+        paths.append(os.path.join(args.outdir, "polygon_K%d.png" % polygon_k))
+        paths.append(os.path.join(args.outdir, "polygon_K%d.tsv" % polygon_k))
     if html_path is not None:
         paths.append(html_path)
     if editor_path is not None:
