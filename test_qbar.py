@@ -10278,5 +10278,316 @@ class MapPiesTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
 
 
+class SpeedTests(unittest.TestCase):
+    """Old pure-Python bodies stay next to the faster ones.
+
+    Equality is ``==`` on the floats and ``array_equal`` on the bar image.
+    """
+
+    def _pong_ref(self, a, b):
+        a = np.asarray(a, dtype=float)
+        b = np.asarray(b, dtype=float)
+        keep = (a + b) > 0
+        n = int(keep.sum())
+        if n == 0:
+            return 0.0
+        d = a[keep] - b[keep]
+        return float(1.0 - np.sqrt(np.dot(d, d) / (2.0 * n)))
+
+    def _match_pong_ref(self, q_prev, q_new, mask, *, language="en"):
+        from qbar.messages import text as _msg
+
+        try:
+            from scipy.optimize import linear_sum_assignment
+        except ImportError as exc:
+            raise SystemExit(_msg("align_needs_scipy", language, method="pong")) from exc
+        k_old = q_prev.shape[1]
+        k_new = q_new.shape[1]
+        if k_new != k_old + 1:
+            raise SystemExit(_msg("k_columns_differ", language))
+        old = q_prev[mask]
+        new = q_new[mask]
+        pong_sim = self._pong_ref
+        best = None
+        for a in range(k_new):
+            for b in range(a + 1, k_new):
+                cols = [j for j in range(k_new) if j not in (a, b)] + [(a, b)]
+                merged = [new[:, j] if not isinstance(j, tuple) else new[:, a] + new[:, b] for j in cols]
+                sim = np.array([[pong_sim(old[:, c], m) for m in merged] for c in range(k_old)])
+                rows, cidx = linear_sum_assignment(sim, maximize=True)
+                score = float(sim[rows, cidx].mean())
+                if best is None or score > best[0]:
+                    best = (score, cols, dict(zip(rows.tolist(), cidx.tolist())), sim)
+        _score, cols, by_row, sim = best
+        perm, sims, split = [], [], None
+        for c in range(k_old):
+            j = cols[by_row[c]]
+            if isinstance(j, tuple):
+                a, b = j
+                sa, sb = pong_sim(old[:, c], new[:, a]), pong_sim(old[:, c], new[:, b])
+                keep, rest = (a, b) if sa >= sb else (b, a)
+                perm.append(int(keep))
+                split = {"parent": c, "pair": (int(keep), int(rest))}
+            else:
+                perm.append(int(j))
+            sims.append(float(sim[c, by_row[c]]))
+        perm.append(int(split["pair"][1]))
+        sims.append(None)
+        return perm, sims, split
+
+    def _ancestry_ref(self, q, hexes, height):
+        n, k = q.shape
+        rgb = np.full((height, n, 3), 255, dtype=np.uint8)
+        cols = [qbar.hex_rgb(h) for h in hexes]
+        for i in range(n):
+            bounds = np.cumsum(q[i])
+            for y in range(height):
+                t = (height - 1 - y) / float(height)
+                c = int(np.searchsorted(bounds, t + 1e-12, side="right"))
+                if c >= k:
+                    continue
+                rgb[y, i] = cols[c]
+        return rgb
+
+    def _assert_pong_match(self, prev, nxt, mask, merge_buf=None):
+        old = self._match_pong_ref(prev, nxt, mask)
+        new = qbar.match_next_pong(prev, nxt, mask, merge_buf=merge_buf)
+        self.assertEqual(old[0], new[0])
+        self.assertEqual(old[2], new[2])
+        self.assertEqual(len(old[1]), len(new[1]))
+        for left, right in zip(old[1], new[1]):
+            if left is None or right is None:
+                self.assertIsNone(left)
+                self.assertIsNone(right)
+            else:
+                self.assertEqual(left, right)
+
+    def test_pong_and_bars_match_the_previous_bodies(self):
+        rng = np.random.default_rng(20261022)
+        n_pong = 0
+        for n in (1, 2, 4, 9, 15):
+            for _rep in range(10):
+                a = rng.normal(size=n)
+                b = rng.normal(size=n)
+                self.assertEqual(qbar.pong_sim(a, b), self._pong_ref(a, b))
+                n_pong += 1
+        self.assertGreaterEqual(n_pong, 50)
+        for n in (1, 2, 6):
+            zeros = np.zeros(n)
+            constant_a = np.full(n, 0.2)
+            constant_b = np.full(n, 0.8)
+            self.assertEqual(qbar.pong_sim(zeros, zeros), 0.0)
+            self.assertEqual(qbar.pong_sim(zeros, zeros), self._pong_ref(zeros, zeros))
+            self.assertEqual(qbar.pong_sim(constant_a, constant_b), self._pong_ref(constant_a, constant_b))
+            self.assertEqual(qbar.pong_sim(constant_a, zeros), self._pong_ref(constant_a, zeros))
+            self.assertEqual(qbar.col_pearson(constant_a, constant_b), 0.0)
+        for n in (1, 2, 8):
+            wide = rng.normal(size=(n, 5))
+            wide[::2, 0] = 0.0
+            if n > 1:
+                wide[1::2, 1] = 0.0
+            self.assertEqual(qbar.pong_sim(wide[:, 0], wide[:, 2]), self._pong_ref(wide[:, 0], wide[:, 2]))
+            merged = wide[:, 3] + wide[:, 4]
+            self.assertEqual(qbar.pong_sim(wide[:, 1], merged), self._pong_ref(wide[:, 1], merged))
+
+        hexes = ["#ff0000", "#00ff00", "#0000ff", "#112233", "#abcdef", "#010203"]
+        n_img = 0
+        for _rep in range(50):
+            n = int(rng.integers(1, 12))
+            k = int(rng.integers(1, 5))
+            height = int(rng.integers(1, 9))
+            q = rng.random((n, k))
+            got = qbar.ancestry_image(q, hexes[:k], height)
+            ref = self._ancestry_ref(q, hexes[:k], height)
+            self.assertTrue(np.array_equal(got, ref))
+            n_img += 1
+        self.assertGreaterEqual(n_img, 50)
+        for n, k, height in ((1, 1, 1), (1, 2, 3), (2, 1, 1), (2, 3, 4)):
+            q = np.zeros((n, k))
+            self.assertTrue(np.array_equal(
+                qbar.ancestry_image(q, hexes[:k], height),
+                self._ancestry_ref(q, hexes[:k], height),
+            ))
+            q = np.full((n, k), 1.0 / k)
+            self.assertTrue(np.array_equal(
+                qbar.ancestry_image(q, hexes[:k], height),
+                self._ancestry_ref(q, hexes[:k], height),
+            ))
+        negative = np.array([[0.2, -0.1, 0.9], [1.2, -0.2, 0.0], [0.0, 0.0, 0.0]])
+        self.assertTrue(np.array_equal(
+            qbar.ancestry_image(negative, hexes[:3], 8),
+            self._ancestry_ref(negative, hexes[:3], 8),
+        ))
+        small = rng.random((4, 2)).astype(np.float32)
+        self.assertTrue(np.array_equal(
+            qbar.ancestry_image(small, hexes[:2], 5),
+            self._ancestry_ref(small, hexes[:2], 5),
+        ))
+        fortran = np.asfortranarray(rng.random((6, 3)))
+        self.assertTrue(np.array_equal(
+            qbar.ancestry_image(fortran, hexes[:3], 7),
+            self._ancestry_ref(fortran, hexes[:3], 7),
+        ))
+        base = np.zeros((5, 6))
+        base[:, 1::2] = rng.random((5, 3))
+        view = base[:, 1::2]
+        self.assertFalse(view.flags.c_contiguous)
+        self.assertTrue(np.array_equal(
+            qbar.ancestry_image(view, hexes[:3], 6),
+            self._ancestry_ref(view, hexes[:3], 6),
+        ))
+        short = np.array([[0.1, 0.1], [0.0, 0.0], [2.0, 0.0]])
+        self.assertTrue(np.array_equal(
+            qbar.ancestry_image(short, hexes[:2], 10),
+            self._ancestry_ref(short, hexes[:2], 10),
+        ))
+        wide_q = rng.dirichlet(np.ones(4), size=4200)
+        self.assertTrue(np.array_equal(
+            qbar.ancestry_image(wide_q, hexes[:4], 9),
+            self._ancestry_ref(wide_q, hexes[:4], 9),
+        ))
+
+        n_align = 0
+        for n in (1, 2, 5, 11):
+            for k in (1, 2, 3, 4):
+                prev = rng.dirichlet(np.ones(k), size=n)
+                nxt = rng.dirichlet(np.ones(k + 1), size=n)
+                mask = np.ones(n, dtype=bool)
+                self._assert_pong_match(prev, nxt, mask)
+                if n > 1:
+                    partial = mask.copy()
+                    partial[0] = False
+                    self._assert_pong_match(prev, nxt, partial)
+                n_align += 1
+        self.assertGreaterEqual(n_align, 16)
+        for n in (1, 2, 7):
+            for k in (1, 2, 3):
+                mask = np.ones(n, dtype=bool)
+                self._assert_pong_match(np.zeros((n, k)), np.zeros((n, k + 1)), mask)
+                tied = np.full((n, k), 1.0 / k)
+                tied_next = np.full((n, k + 1), 1.0 / (k + 1))
+                self._assert_pong_match(tied, tied_next, mask)
+                column = np.array([1.0, 0.0, 0.0, 0.5][:n])
+                if column.shape[0] == n:
+                    prev = np.column_stack([column for _c in range(k)])
+                    nxt = np.column_stack([column for _c in range(k + 1)])
+                    self._assert_pong_match(prev, nxt, mask)
+        bad_prev = rng.random((4, 2))
+        bad_next = rng.random((4, 4))
+        bad_mask = np.ones(4, dtype=bool)
+        with self.assertRaises(SystemExit) as new_exit:
+            qbar.match_next_pong(bad_prev, bad_next, bad_mask)
+        with self.assertRaises(SystemExit) as old_exit:
+            self._match_pong_ref(bad_prev, bad_next, bad_mask)
+        self.assertEqual(str(old_exit.exception), str(new_exit.exception))
+        self.assertEqual(
+            str(old_exit.exception),
+            qbar.messages.text("k_columns_differ", "en"),
+        )
+
+        q_by_k = {}
+        for k in range(2, 6):
+            raw = rng.dirichlet(np.ones(k), size=9)
+            text = "\n".join(" ".join("%.6f" % float(v) for v in row) for row in raw)
+            q_by_k[k] = np.loadtxt(__import__("io").StringIO(text))
+        groups = ["g%02d" % (i % 20) for i in range(9)]
+        _aligned, perm, _meta = qbar.align_qs(
+            q_by_k, groups, "", "all", [], 0.75, True, "pong", warn=False,
+        )
+        ks = sorted(q_by_k)
+        prev = q_by_k[ks[0]][:, perm[ks[0]]]
+        for k in ks[:-1]:
+            mask = np.ones(9, dtype=bool)
+            ref_perm, _sims, _split = self._match_pong_ref(prev, q_by_k[k + 1], mask)
+            self.assertEqual(perm[k + 1], ref_perm)
+            prev = q_by_k[k + 1][:, ref_perm]
+
+        # Adding float32 columns, then upcasting, is not the same as upcasting
+        # first. The matcher has to follow the first order.
+        narrow = np.random.default_rng(0)
+        nxt32 = narrow.random((32, 3)).astype(np.float32)
+        prev32 = narrow.random((32, 2)).astype(np.float32)
+        added = nxt32[:, 0] + nxt32[:, 1]
+        up = nxt32.astype(np.float64)
+        added_up = up[:, 0] + up[:, 1]
+        self.assertNotEqual(
+            self._pong_ref(prev32[:, 0], added),
+            self._pong_ref(prev32[:, 0], added_up),
+        )
+        mask32 = np.ones(32, dtype=bool)
+        self._assert_pong_match(prev32, nxt32, mask32)
+        self._assert_pong_match(
+            prev32, nxt32, mask32, merge_buf=np.empty((32, 8), dtype=np.float64, order="F"),
+        )
+        self._assert_pong_match(
+            prev32, nxt32, mask32, merge_buf=np.empty((1, 1), dtype=np.float64, order="C"),
+        )
+        partial32 = mask32.copy()
+        partial32[0] = False
+        self._assert_pong_match(prev32, nxt32, partial32)
+        self._assert_pong_match(
+            prev32, nxt32, partial32,
+            merge_buf=np.empty((64, 8), dtype=np.float64, order="F"),
+        )
+        dtype_rng = np.random.default_rng(20261024)
+        for dtype in (np.float64, np.float32, np.float16, np.int32):
+            for n, k in ((1, 1), (5, 2), (8, 3)):
+                if np.issubdtype(dtype, np.integer):
+                    prev_d = dtype_rng.integers(0, 7, size=(n, k), dtype=dtype)
+                    nxt_d = dtype_rng.integers(0, 7, size=(n, k + 1), dtype=dtype)
+                else:
+                    prev_d = dtype_rng.dirichlet(np.ones(k), size=n).astype(dtype)
+                    nxt_d = dtype_rng.dirichlet(np.ones(k + 1), size=n).astype(dtype)
+                mask_d = np.ones(n, dtype=bool)
+                self._assert_pong_match(prev_d, nxt_d, mask_d)
+                if n > 1:
+                    partial_d = mask_d.copy()
+                    partial_d[-1] = False
+                    self._assert_pong_match(prev_d, nxt_d, partial_d)
+
+    def _assert_same_align(self, left, right):
+        aligned_l, perm_l, meta_l = left
+        aligned_r, perm_r, meta_r = right
+        self.assertEqual(perm_l, perm_r)
+        self.assertEqual(sorted(aligned_l), sorted(aligned_r))
+        for key in aligned_l:
+            self.assertTrue(np.array_equal(aligned_l[key], aligned_r[key]))
+        self.assertEqual(sorted(meta_l), sorted(meta_r))
+        for key in meta_l:
+            self.assertEqual(meta_l[key]["n_mask"], meta_r[key]["n_mask"])
+            self.assertEqual(meta_l[key]["pearson"], meta_r[key]["pearson"])
+            self.assertTrue(np.array_equal(meta_l[key]["mask"], meta_r[key]["mask"]))
+            self.assertEqual(meta_l[key].get("split_parent"), meta_r[key].get("split_parent"))
+
+    def test_two_align_qs_threads_match_sequential(self):
+        import concurrent.futures
+
+        def chain(n, k_max, seed, dtype):
+            draw = np.random.default_rng(seed)
+            q_by_k = {}
+            for k in range(2, k_max + 1):
+                q_by_k[k] = draw.dirichlet(np.ones(k), size=n).astype(dtype)
+            groups = ["g%02d" % (i % 7) for i in range(n)]
+            return q_by_k, groups
+
+        def run(item):
+            q_by_k, groups = item
+            return qbar.align_qs(
+                q_by_k, groups, "", "all", [], 0.75, True, "pong", warn=False,
+            )
+
+        left = chain(60, 6, 11, np.float64)
+        right = chain(40, 5, 29, np.float32)
+        seq_left = run(left)
+        seq_right = run(right)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            fut_left = pool.submit(run, left)
+            fut_right = pool.submit(run, right)
+            par_left = fut_left.result()
+            par_right = fut_right.result()
+        self._assert_same_align(seq_left, par_left)
+        self._assert_same_align(seq_right, par_right)
+
+
 if __name__ == "__main__":
     unittest.main()
