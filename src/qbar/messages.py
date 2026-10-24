@@ -143,6 +143,26 @@ _CATALOG = {
         "en": "Two columns: name and #rrggbb",
         "zh": "两列：名字 #rrggbb",
     },
+    "help_palette": {
+        "en": "Bar colours: science, classic, tab10, set1, dark2, or paired. Default science. classic is the previous 20 colours.",
+        "zh": "条的颜色：science、classic、tab10、set1、dark2 或 paired。默认 science。classic 是原来的 20 色。",
+    },
+    "help_color_lock": {
+        "en": "off or on. Default off. on keeps each aligned column's colour from the lowest K, unless --color sets that column.",
+        "zh": "off 或 on。默认 off。on 时每列沿用最低 K 的颜色，除非 --color 指定该列。",
+    },
+    "help_greyscale_preview": {
+        "en": "Also write panel_grey.png. Each pixel is round(0.2126*R + 0.7152*G + 0.0722*B) on all three channels. Default off.",
+        "zh": "另写 panel_grey.png。每个像素三通道都是 round(0.2126*R + 0.7152*G + 0.0722*B)。默认关闭。",
+    },
+    "palette_choice": {
+        "en": "--palette must be science, classic, tab10, set1, dark2, or paired, got %(name)s",
+        "zh": "--palette 只能是 science、classic、tab10、set1、dark2 或 paired，收到 %(name)s",
+    },
+    "color_lock_choice": {
+        "en": "--color-lock must be off or on, got %(mode)s",
+        "zh": "--color-lock 只能是 off 或 on，收到 %(mode)s",
+    },
     "help_width": {
         "en": "Bar plot width, in pixels",
         "zh": "条形图宽度，像素",

@@ -522,6 +522,16 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     4294967296 bytes before the distance vector is built. Within-group trees
     stay uncapped unless a byte value is set. ``0`` means no cap. A refusal
     writes no output file.
+
+    ``args.palette`` chooses bar colours. The default ``science`` is eight
+    hex values sampled from Fig. 1D of Dong et al. 2023, Science 379:892,
+    DOI 10.1126/science.add8655, then classic colours that are not already
+    used, then ``hsv_hex``. ``classic`` is the previous 20 colours and
+    restores the previous bar colours. ``tab10``, ``set1``, ``dark2``, and
+    ``paired`` follow the same continuation. ``args.color_lock`` defaults
+    to ``off``. ``on`` keeps the colour column c got at the lowest K,
+    unless ``--color`` sets that column. ``args.greyscale_preview`` defaults
+    to off and writes ``panel_grey.png``.
     """
     if args.provenance:
         started = datetime.datetime.now().astimezone().isoformat()
@@ -529,11 +539,18 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         started = None
     # Imported on call so this module can be imported without the drawing code.
     from .plot_static import (
-        ancestry_image, assign_colors, render, write_cv_loglik_plot, write_select_k_plot,
-        write_cluster_flow_plot,
+        PALETTE_NAMES, ancestry_image, assign_colors, render, write_cv_loglik_plot,
+        write_select_k_plot, write_cluster_flow_plot, write_greyscale_png,
     )
 
     language = args.language
+    palette_name = getattr(args, "palette", "science")
+    color_lock = getattr(args, "color_lock", "off")
+    greyscale = bool(getattr(args, "greyscale_preview", False))
+    if palette_name not in PALETTE_NAMES:
+        raise SystemExit(_msg("palette_choice", language, name=palette_name))
+    if color_lock not in ("off", "on"):
+        raise SystemExit(_msg("color_lock_choice", language, mode=color_lock))
     flow_mode = getattr(args, "cluster_flow", "none")
     flow_weight = getattr(args, "flow_weight", "share")
     if flow_mode not in ("none", "sankey"):
@@ -713,9 +730,18 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     group_color, col_color = parse_colors(args.color, args.color_file, language=language)
     owners = {}
     hexes = {}
+    # ks is ascending. A locked column keeps the colour from the lowest K
+    # that included it. --color is applied inside assign_colors first.
+    locked = []
     for k in ks:
         owners[k] = column_owners(aligned[k], iids, groups, rank)
-        hexes[k] = assign_colors(k, owners[k], group_color, col_color, language=language)
+        lock_from = locked if color_lock == "on" else None
+        hexes[k] = assign_colors(
+            k, owners[k], group_color, col_color,
+            language=language, lock_from=lock_from, palette=palette_name,
+        )
+        if color_lock == "on" and len(locked) < k:
+            locked.extend(hexes[k][len(locked):])
     bar_h = args.bar_height or (220 if len(ks) == 1 else 120)
     # Draw at native sample width, then scale to --width. Height here is the
     # pre-scale resolution; render() resizes the bar to bar_h.
@@ -738,10 +764,12 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         write_linkage_index(_path, arranged["index_groups"])
         linkage_paths.append(_path)
         print(_path)
+    grey_path = None
     if len(rows) == 1:
         out = os.path.join(args.outdir, "bar_K%d.png" % rows[0]["k"])
         render(out, rows, spans, args.width, bar_h, args.title, language=language, dendrogram=dendro_spec)
         print(out)
+        grey_src = out
     else:
         for row in rows:
             one = os.path.join(args.outdir, "bar_K%d.png" % row["k"])
@@ -749,6 +777,11 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         panel = os.path.join(args.outdir, "panel.png")
         render(panel, rows, spans, args.width, bar_h, args.title, language=language, dendrogram=dendro_spec)
         print(panel)
+        grey_src = panel
+    if greyscale:
+        grey_path = os.path.join(args.outdir, "panel_grey.png")
+        write_greyscale_png(grey_path, grey_src)
+        print(grey_path)
     write_tables(args.outdir, iids, groups, order, spans, perm, owners, hexes, meta, aligned)
     groups_auto_tsv = None
     if auto_rows is not None:
@@ -901,6 +934,8 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         _panel = os.path.join(args.outdir, "panel.png")
         paths.append(_panel)
         paths.append(os.path.splitext(_panel)[0] + ".pdf")
+    if grey_path is not None:
+        paths.append(grey_path)
     paths.append(os.path.join(args.outdir, "order.tsv"))
     paths.append(os.path.join(args.outdir, "blocks.tsv"))
     paths.extend(linkage_paths)
