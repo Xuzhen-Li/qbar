@@ -1219,6 +1219,8 @@ class DocstringTests(unittest.TestCase):
         ``docs/factpacks/F3.md``.
         ``--editor`` and ``--state`` are documented in ``docs/cli.md`` and
         ``docs/factpacks/F9.md``.
+        ``--config`` is documented in ``docs/cli.md`` and
+        ``docs/factpacks/S7.md``.
         """
         import re
         # --select-k and --plateau-fraction are documented in docs/cli.md
@@ -1247,6 +1249,7 @@ class DocstringTests(unittest.TestCase):
         # --html is documented in docs/cli.md and docs/factpacks/F3.md.
         # --editor and --state are documented in docs/cli.md and
         # docs/factpacks/F9.md.
+        # --config is documented in docs/cli.md and docs/factpacks/S7.md.
         later = {
             "--provenance", "--q-format", "--ind", "--logs", "--logs-map",
             "--select-k", "--plateau-fraction",
@@ -1265,6 +1268,7 @@ class DocstringTests(unittest.TestCase):
             "--html",
             "--editor",
             "--state",
+            "--config",
         }
         flags = []
         for action in qbar.build_parser()._actions:
@@ -8874,6 +8878,798 @@ def _html_payload_id(html, ident):
 def json_load(handle):
     import json
     return json.load(handle)
+
+
+try:
+    import yaml as _yaml_mod
+except ImportError:
+    _yaml_mod = None
+
+
+def _column_r(left, right):
+    left = np.asarray(left, dtype=float)
+    right = np.asarray(right, dtype=float)
+    left = left - left.mean()
+    right = right - right.mean()
+    left_norm = np.sqrt(np.dot(left, left))
+    right_norm = np.sqrt(np.dot(right, right))
+    if left_norm == 0 or right_norm == 0:
+        return 0.0
+    return float(np.dot(left, right) / (left_norm * right_norm))
+
+
+def _score_matrix(q_prev, q_new):
+    scores = np.zeros((q_prev.shape[1], q_new.shape[1]))
+    for old in range(q_prev.shape[1]):
+        for new in range(q_new.shape[1]):
+            scores[old, new] = _column_r(q_prev[:, old], q_new[:, new])
+    return scores
+
+
+def _greedy_perm(scores):
+    used = set()
+    perm = []
+    for old in range(scores.shape[0]):
+        best_j = None
+        best_v = None
+        for new in range(scores.shape[1]):
+            if new in used:
+                continue
+            if best_v is None or scores[old, new] > best_v:
+                best_v = scores[old, new]
+                best_j = new
+        used.add(best_j)
+        perm.append(best_j)
+    rest = [new for new in range(scores.shape[1]) if new not in used]
+    return perm + rest
+
+
+def _hungarian_perm(scores):
+    import itertools
+    n_old, n_new = scores.shape
+    best = None
+    best_score = None
+    second = None
+    for choice in itertools.permutations(range(n_new), n_old):
+        score = sum(scores[old, choice[old]] for old in range(n_old))
+        if best_score is None or score > best_score:
+            second = best_score
+            best_score = score
+            used = set(choice)
+            rest = [new for new in range(n_new) if new not in used]
+            best = list(choice) + rest
+        elif second is None or score > second:
+            second = score
+    return best, best_score, second
+
+
+class ConfigTests(unittest.TestCase):
+    def _matrices(self):
+        q2, q3, _mask = AlignTests()._greedy_vs_hungarian_case()
+        scores = _score_matrix(q2, q3)
+        greedy = _greedy_perm(scores)
+        hungarian, best, second = _hungarian_perm(scores)
+        self.assertNotEqual(greedy, hungarian)
+        self.assertIsNotNone(second)
+        self.assertGreater(best - second, 0.05)
+        return q2, q3, greedy, hungarian
+
+    def _write_q(self, folder, q2, q3):
+        os.makedirs(folder, exist_ok=True)
+        paths = []
+        for k, matrix in ((2, q2), (3, q3)):
+            path = os.path.join(folder, "t.%d.Q" % k)
+            np.savetxt(path, matrix + 1e-6, fmt="%.6f")
+            paths.append(path)
+        ids = os.path.join(folder, "ids.txt")
+        with open(ids, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write("".join("s%d\n" % i for i in range(q2.shape[0])))
+        return paths, ids
+
+    def _yaml(self, path, text):
+        folder = os.path.dirname(path)
+        if folder:
+            os.makedirs(folder, exist_ok=True)
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+            if not text.endswith("\n"):
+                handle.write("\n")
+
+    def _perm_raw(self, out, k=3):
+        with open(os.path.join(out, "perm_K%d.tsv" % k), encoding="utf-8") as handle:
+            rows = handle.read().splitlines()[1:]
+        return [line.split("\t")[1] for line in rows]
+
+    def _raw_labels(self, perm):
+        return [str(index + 1) for index in perm]
+
+    def _read_resolved(self, out):
+        import json
+        path = os.path.join(out, "config_resolved.json")
+        with open(path, encoding="utf-8") as handle:
+            raw = handle.read()
+        self.assertTrue(raw.endswith("\n"))
+        data = json.loads(raw)
+        again = json.dumps(data, indent=2, sort_keys=True, ensure_ascii=True)
+        if not again.endswith("\n"):
+            again += "\n"
+        self.assertEqual(raw, again)
+        return data, raw
+
+    def _assert_file_values_have_no_slash(self, data, forbidden):
+        from qbar.config import FILE_DESTS
+        for dest in FILE_DESTS:
+            value = data[dest]
+            if value is None:
+                continue
+            if isinstance(value, list):
+                for item in value:
+                    self.assertNotIn("/", str(item))
+            else:
+                self.assertNotIn("/", str(value))
+        self.assertNotIn("/", data["config_file"])
+        self.assertNotIn("/", data["config_sha256"])
+        blob = json_dumps(data)
+        self.assertNotIn(forbidden, blob)
+        for value in data["sources"].values():
+            self.assertIn(value, ("cli", "config", "default"))
+
+    def test_yaml_import_is_inside_load_config(self):
+        import inspect
+        import qbar.config as config_mod
+        src = inspect.getsource(config_mod)
+        before = src.split("def load_config", 1)[0]
+        self.assertNotIn("import yaml", before)
+        body = inspect.getsource(config_mod.load_config)
+        self.assertIn("import yaml", body)
+        self.assertIn("safe_load", body)
+        self.assertNotIn("unsafe_load", body)
+        self.assertNotIn("PIL", src)
+        self.assertNotIn("import yaml", inspect.getsource(qbar.cli))
+
+    def test_config_install_message_has_chinese(self):
+        from qbar.messages import text
+        en = text("config_needs_yaml", "en")
+        zh = text("config_needs_yaml", "zh")
+        self.assertIn('pip install "qbar[config]"', en)
+        self.assertIn('pip install "qbar[config]"', zh)
+        self.assertNotIn("qbar[yaml]", en)
+        self.assertNotIn("qbar[yaml]", zh)
+        self.assertNotEqual(en, zh)
+
+    def test_missing_pyyaml_names_install(self):
+        import builtins
+        from unittest import mock
+        real = builtins.__import__
+
+        def fake(name, *args, **kwargs):
+            if name == "yaml" or (isinstance(name, str) and name.startswith("yaml.")):
+                raise ImportError("no yaml")
+            return real(name, *args, **kwargs)
+
+        removed = {}
+        for key in list(sys.modules):
+            if key == "yaml" or key.startswith("yaml."):
+                removed[key] = sys.modules.pop(key)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                cfg = os.path.join(tmp, "run.yaml")
+                with open(cfg, "w", encoding="utf-8", newline="\n") as handle:
+                    handle.write('title: ""\n')
+                with mock.patch("builtins.__import__", side_effect=fake):
+                    with self.assertRaises(SystemExit) as caught:
+                        qbar.main([
+                            "--q", "missing.Q",
+                            "--outdir", os.path.join(tmp, "out"),
+                            "--config", cfg,
+                        ])
+                text = str(caught.exception)
+                self.assertIn('pip install "qbar[config]"', text)
+                self.assertNotIn("qbar[yaml]", text)
+                with mock.patch("builtins.__import__", side_effect=fake):
+                    with self.assertRaises(SystemExit) as caught_zh:
+                        qbar.main([
+                            "--q", "missing.Q",
+                            "--outdir", os.path.join(tmp, "out"),
+                            "--config", cfg,
+                            "--language", "zh",
+                        ])
+                zh = str(caught_zh.exception)
+                self.assertIn('pip install "qbar[config]"', zh)
+                self.assertNotEqual(zh, text)
+        finally:
+            sys.modules.update(removed)
+
+    def test_default_run_writes_no_config_resolved(self):
+        parser = qbar.build_parser()
+        defaults = parser.parse_args(["--q", "x.Q", "--outdir", "o"])
+        self.assertIsNone(defaults.config)
+        self.assertEqual(defaults.id_col, "analysis_IID")
+        self.assertEqual(defaults.group_col, "Dong_Grp")
+        self.assertEqual(defaults.palette, "science")
+        self.assertEqual(defaults.align_method, "greedy")
+        with tempfile.TemporaryDirectory() as tmp:
+            qpath = os.path.join(tmp, "t.2.Q")
+            np.savetxt(qpath, [[0.2, 0.8], [0.7, 0.3]], fmt="%.6f")
+            ids = os.path.join(tmp, "ids.txt")
+            with open(ids, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("a\nb\n")
+            out = os.path.join(tmp, "out")
+            qbar.main(["--q", qpath, "--ids", ids, "--outdir", out])
+            self.assertTrue(os.path.isfile(os.path.join(out, "order.tsv")))
+            self.assertFalse(os.path.exists(os.path.join(out, "config_resolved.json")))
+            with open(os.path.join(out, "args.txt"), encoding="utf-8") as handle:
+                self.assertNotIn("--config", handle.readline())
+
+    @unittest.skipUnless(_yaml_mod is not None, "PyYAML is not installed")
+    def test_config_hungarian_without_cli_flag(self):
+        import hashlib
+        import json
+        q2, q3, greedy, hungarian = self._matrices()
+        with tempfile.TemporaryDirectory() as tmp:
+            nested = os.path.join(tmp, "nested")
+            paths, ids = self._write_q(nested, q2, q3)
+            cfg = os.path.join(nested, "run.yaml")
+            self._yaml(cfg, "align_method: hungarian\n")
+            self.assertEqual(qbar.config.load_config(cfg)["align_method"], "hungarian")
+            out = os.path.join(nested, "out")
+            qbar.main([
+                "--q", paths[0], paths[1],
+                "--ids", ids,
+                "--config", cfg,
+                "--outdir", out,
+            ])
+            self.assertEqual(self._perm_raw(out), self._raw_labels(hungarian))
+            self.assertNotEqual(self._perm_raw(out), self._raw_labels(greedy))
+            data, raw = self._read_resolved(out)
+            self.assertNotIn(tmp, raw)
+            self._assert_file_values_have_no_slash(data, tmp)
+            self.assertEqual(data["align_method"], "hungarian")
+            self.assertEqual(data["sources"]["align_method"], "config")
+            self.assertEqual(data["sources"]["q"], "cli")
+            self.assertEqual(data["sources"]["palette"], "default")
+            self.assertEqual(data["sources"]["config"], "cli")
+            self.assertEqual(data["q"], ["t.2.Q", "t.3.Q"])
+            self.assertEqual(data["ids"], "ids.txt")
+            self.assertEqual(data["outdir"], "out")
+            self.assertEqual(data["config"], "run.yaml")
+            self.assertEqual(data["config_file"], "run.yaml")
+            with open(cfg, "rb") as handle:
+                digest = hashlib.sha256(handle.read()).hexdigest()
+            self.assertEqual(data["config_sha256"], digest)
+            self.assertNotIn("state_override", data)
+            meta = {"sources", "config_file", "config_sha256"}
+            self.assertEqual(set(data["sources"]), set(data) - meta)
+            with open(os.path.join(out, "args.txt"), encoding="utf-8") as handle:
+                self.assertIn("--config", handle.readline())
+            self.assertEqual(list(data), sorted(data))
+            self.assertIsNone(data["state"])
+
+    @unittest.skipUnless(_yaml_mod is not None, "PyYAML is not installed")
+    def test_explicit_default_beats_config(self):
+        q2, q3, greedy, hungarian = self._matrices()
+        with tempfile.TemporaryDirectory() as tmp:
+            nested = os.path.join(tmp, "nested")
+            paths, ids = self._write_q(nested, q2, q3)
+            cfg = os.path.join(nested, "run.yaml")
+            self._yaml(cfg, "\n".join([
+                "align_method: hungarian",
+                "palette: classic",
+                "width: 11",
+                "",
+            ]))
+            out = os.path.join(nested, "out")
+            qbar.main([
+                "--q", paths[0], paths[1],
+                "--ids", ids,
+                "--config", cfg,
+                "--align-method", "greedy",
+                "--palette", "science",
+                "--width", "2200",
+                "--outdir", out,
+            ])
+            self.assertEqual(self._perm_raw(out), self._raw_labels(greedy))
+            self.assertNotEqual(self._perm_raw(out), self._raw_labels(hungarian))
+            data, raw = self._read_resolved(out)
+            self.assertNotIn(tmp, raw)
+            self._assert_file_values_have_no_slash(data, tmp)
+            self.assertEqual(data["align_method"], "greedy")
+            self.assertEqual(data["sources"]["align_method"], "cli")
+            self.assertEqual(data["palette"], "science")
+            self.assertEqual(data["sources"]["palette"], "cli")
+            self.assertEqual(data["width"], 2200)
+            self.assertEqual(data["sources"]["width"], "cli")
+
+    @unittest.skipUnless(_yaml_mod is not None, "PyYAML is not installed")
+    def test_unknown_config_key_names_the_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = os.path.join(tmp, "run.yaml")
+            self._yaml(cfg, "not_a_real_option: 1\n")
+            with self.assertRaises(SystemExit) as caught:
+                qbar.main([
+                    "--q", "missing.Q",
+                    "--outdir", os.path.join(tmp, "out"),
+                    "--config", cfg,
+                ])
+            self.assertIn("not_a_real_option", str(caught.exception))
+            self.assertFalse(os.path.exists(os.path.join(tmp, "out", "config_resolved.json")))
+
+    @unittest.skipUnless(_yaml_mod is not None, "PyYAML is not installed")
+    def test_bad_config_type_names_the_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = os.path.join(tmp, "run.yaml")
+            self._yaml(cfg, "width: wide\n")
+            with self.assertRaises(SystemExit) as caught:
+                qbar.main([
+                    "--q", "missing.Q",
+                    "--outdir", os.path.join(tmp, "out"),
+                    "--config", cfg,
+                ])
+            text = str(caught.exception)
+            self.assertIn("width", text)
+            self.assertIn("int", text)
+            self.assertIn("str", text)
+
+    @unittest.skipUnless(_yaml_mod is not None, "PyYAML is not installed")
+    def test_unquoted_off_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = os.path.join(tmp, "run.yaml")
+            self._yaml(cfg, "color_lock: off\n")
+            with self.assertRaises(SystemExit) as caught:
+                qbar.main([
+                    "--q", "missing.Q",
+                    "--outdir", os.path.join(tmp, "out"),
+                    "--config", cfg,
+                ])
+            text = str(caught.exception)
+            self.assertIn("color_lock", text)
+            self.assertIn("bool", text)
+
+    @unittest.skipUnless(_yaml_mod is not None, "PyYAML is not installed")
+    def test_config_top_level_must_be_mapping(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = os.path.join(tmp, "run.yaml")
+            self._yaml(cfg, "- a\n- b\n")
+            with self.assertRaises(SystemExit) as caught:
+                qbar.main([
+                    "--q", "missing.Q",
+                    "--outdir", os.path.join(tmp, "out"),
+                    "--config", cfg,
+                ])
+            self.assertIn("mapping", str(caught.exception))
+
+    @unittest.skipUnless(_yaml_mod is not None, "PyYAML is not installed")
+    def test_config_key_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = os.path.join(tmp, "run.yaml")
+            self._yaml(cfg, "config: other.yaml\n")
+            with self.assertRaises(SystemExit) as caught:
+                qbar.main([
+                    "--q", "missing.Q",
+                    "--outdir", os.path.join(tmp, "out"),
+                    "--config", cfg,
+                ])
+            self.assertIn("config", str(caught.exception).lower())
+            self.assertIn("cannot set", str(caught.exception))
+
+    @unittest.skipUnless(_yaml_mod is not None, "PyYAML is not installed")
+    def test_duplicate_dest_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = os.path.join(tmp, "run.yaml")
+            self._yaml(cfg, "align_method: greedy\nalign-method: hungarian\n")
+            with self.assertRaises(SystemExit) as caught:
+                qbar.main([
+                    "--q", "missing.Q",
+                    "--outdir", os.path.join(tmp, "out"),
+                    "--config", cfg,
+                ])
+            self.assertIn("align_method", str(caught.exception))
+
+    @unittest.skipUnless(_yaml_mod is not None, "PyYAML is not installed")
+    def test_hyphenated_key_maps_to_dest(self):
+        q2, q3, _greedy, hungarian = self._matrices()
+        with tempfile.TemporaryDirectory() as tmp:
+            nested = os.path.join(tmp, "nested")
+            paths, ids = self._write_q(nested, q2, q3)
+            cfg = os.path.join(nested, "run.yaml")
+            self._yaml(cfg, "align-method: hungarian\n")
+            out = os.path.join(nested, "out")
+            qbar.main([
+                "--q", paths[0], paths[1],
+                "--ids", ids,
+                "--config", cfg,
+                "--outdir", out,
+            ])
+            self.assertEqual(self._perm_raw(out), self._raw_labels(hungarian))
+            data, _raw = self._read_resolved(out)
+            self.assertEqual(data["sources"]["align_method"], "config")
+
+    @unittest.skipUnless(_yaml_mod is not None, "PyYAML is not installed")
+    def test_q_and_outdir_may_come_from_config(self):
+        import json
+        q2, q3, _greedy, hungarian = self._matrices()
+        with tempfile.TemporaryDirectory() as tmp:
+            nested = os.path.join(tmp, "nested")
+            paths, ids = self._write_q(nested, q2, q3)
+            out = os.path.join(nested, "out")
+            cfg = os.path.join(nested, "run.yaml")
+            self._yaml(cfg, "\n".join([
+                "q:",
+                "  - %s" % json.dumps(paths[0]),
+                "  - %s" % json.dumps(paths[1]),
+                "ids: %s" % json.dumps(ids),
+                "outdir: %s" % json.dumps(out),
+                "align_method: hungarian",
+                "",
+            ]))
+            qbar.main(["--config", cfg])
+            self.assertEqual(self._perm_raw(out), self._raw_labels(hungarian))
+            data, raw = self._read_resolved(out)
+            self.assertNotIn(tmp, raw)
+            self._assert_file_values_have_no_slash(data, tmp)
+            self.assertEqual(data["sources"]["q"], "config")
+            self.assertEqual(data["sources"]["outdir"], "config")
+            self.assertEqual(data["sources"]["ids"], "config")
+            self.assertEqual(data["q"], ["t.2.Q", "t.3.Q"])
+            self.assertEqual(data["outdir"], "out")
+
+    def _editor_state(self, tmp, q2, q3):
+        nested = os.path.join(tmp, "nested")
+        paths, ids = self._write_q(nested, q2, q3)
+        editor = os.path.join(nested, "editor")
+        qbar.main([
+            "--q", paths[0], paths[1],
+            "--ids", ids,
+            "--editor",
+            "--outdir", editor,
+        ])
+        return paths, ids, os.path.join(editor, "state.json")
+
+    @unittest.skipUnless(_yaml_mod is not None, "PyYAML is not installed")
+    def test_state_align_override_is_recorded(self):
+        import json
+        q2, q3, greedy, hungarian = self._matrices()
+        with tempfile.TemporaryDirectory() as tmp:
+            paths, ids, state = self._editor_state(tmp, q2, q3)
+            with open(state, encoding="utf-8") as handle:
+                saved = json.load(handle)
+            self.assertEqual(saved["align_method"], "greedy")
+            cfg = os.path.join(tmp, "nested", "run.yaml")
+            self._yaml(cfg, "align_method: hungarian\n")
+            out = os.path.join(tmp, "nested", "replay")
+            qbar.main([
+                "--q", paths[0], paths[1],
+                "--ids", ids,
+                "--config", cfg,
+                "--state", state,
+                "--outdir", out,
+            ])
+            self.assertEqual(self._perm_raw(out), self._raw_labels(greedy))
+            self.assertNotEqual(self._perm_raw(out), self._raw_labels(hungarian))
+            data, raw = self._read_resolved(out)
+            self.assertNotIn(tmp, raw)
+            self._assert_file_values_have_no_slash(data, tmp)
+            self.assertEqual(data["align_method"], "greedy")
+            self.assertEqual(data["sources"]["align_method"], "config")
+            self.assertEqual(data["state"], "state.json")
+            self.assertEqual(data["sources"]["state"], "cli")
+            recorded = data["state_override"]["align_method"]
+            self.assertEqual(recorded["config"], "hungarian")
+            self.assertEqual(recorded["state"], "greedy")
+            self.assertEqual(data["state_override"]["order"], "state")
+            self.assertEqual(data["state_override"]["colours"], "state")
+
+    @unittest.skipUnless(_yaml_mod is not None, "PyYAML is not installed")
+    def test_explicit_align_method_must_match_state(self):
+        q2, q3, _greedy, _hungarian = self._matrices()
+        with tempfile.TemporaryDirectory() as tmp:
+            paths, ids, state = self._editor_state(tmp, q2, q3)
+            cfg = os.path.join(tmp, "nested", "run.yaml")
+            self._yaml(cfg, "align_method: hungarian\n")
+            out = os.path.join(tmp, "nested", "clash")
+            with self.assertRaises(SystemExit) as caught:
+                qbar.main([
+                    "--q", paths[0], paths[1],
+                    "--ids", ids,
+                    "--config", cfg,
+                    "--align-method", "hungarian",
+                    "--state", state,
+                    "--outdir", out,
+                ])
+            text = str(caught.exception)
+            self.assertIn("greedy", text)
+            self.assertIn("hungarian", text)
+            self.assertFalse(os.path.exists(os.path.join(out, "config_resolved.json")))
+
+    def test_config_help_names_an_explicit_flag(self):
+        from qbar.messages import text
+        en = text("help_config", "en")
+        zh = text("help_config", "zh")
+        self.assertIn("wins even when it repeats the default", en)
+        self.assertIn("命令行上写了的参数优先，即使它和默认值相同。", zh)
+        self.assertNotEqual(en, zh)
+        finite_en = text("config_nonfinite", "en", option="jaccard_cut")
+        finite_zh = text("config_nonfinite", "zh", option="jaccard_cut")
+        self.assertIn("jaccard_cut", finite_en)
+        self.assertIn("jaccard_cut", finite_zh)
+        self.assertNotEqual(finite_en, finite_zh)
+        replaced_en = text("config_replaced_by_state", "en", option="color")
+        replaced_zh = text("config_replaced_by_state", "zh", option="color")
+        self.assertIn("color", replaced_en)
+        self.assertIn("state", replaced_en)
+        self.assertIn("color", replaced_zh)
+        self.assertNotEqual(replaced_en, replaced_zh)
+
+    def _exit_text(self, argv):
+        import io
+        from contextlib import redirect_stderr
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            with self.assertRaises(SystemExit) as caught:
+                qbar.main(argv)
+        return str(caught.exception), buf.getvalue()
+
+    def test_non_utf8_config_names_the_base_name(self):
+        import builtins
+        from unittest import mock
+        from qbar.messages import text
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = os.path.join(tmp, "broken.yaml")
+            with open(cfg, "wb") as handle:
+                handle.write(b"\xff")
+            message, err = self._exit_text([
+                "--q", "missing.Q",
+                "--outdir", os.path.join(tmp, "out"),
+                "--config", cfg,
+            ])
+            expected = text("config_yaml", "en", name="broken.yaml")
+            self.assertEqual(message, expected)
+            self.assertNotIn("Traceback", message)
+            self.assertNotIn("Traceback", err)
+            self.assertNotIn('pip install "qbar[config]"', message)
+            real = builtins.__import__
+
+            def fake(name, *args, **kwargs):
+                if name == "yaml" or (isinstance(name, str) and name.startswith("yaml.")):
+                    raise ImportError("no yaml")
+                return real(name, *args, **kwargs)
+
+            removed = {}
+            for key in list(sys.modules):
+                if key == "yaml" or key.startswith("yaml."):
+                    removed[key] = sys.modules.pop(key)
+            try:
+                with mock.patch("builtins.__import__", side_effect=fake):
+                    patched, _err = self._exit_text([
+                        "--q", "missing.Q",
+                        "--outdir", os.path.join(tmp, "out"),
+                        "--config", cfg,
+                    ])
+                self.assertEqual(patched, expected)
+            finally:
+                sys.modules.update(removed)
+
+    @unittest.skipUnless(_yaml_mod is not None, "PyYAML is not installed")
+    def test_invalid_yaml_names_the_base_name(self):
+        from qbar.messages import text
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, body in (("flow.yaml", "a: [\n"), ("bare.yaml", "[\n")):
+                cfg = os.path.join(tmp, name)
+                with open(cfg, "w", encoding="utf-8", newline="\n") as handle:
+                    handle.write(body)
+                message, err = self._exit_text([
+                    "--q", "missing.Q",
+                    "--outdir", os.path.join(tmp, "out"),
+                    "--config", cfg,
+                ])
+                self.assertEqual(message, text("config_yaml", "en", name=name))
+                self.assertNotIn("Traceback", message)
+                self.assertNotIn("Traceback", err)
+                self.assertFalse(os.path.exists(os.path.join(tmp, "out", "config_resolved.json")))
+
+    @unittest.skipUnless(_yaml_mod is not None, "PyYAML is not installed")
+    def test_nonfinite_config_float_names_the_key(self):
+        from qbar.messages import text
+        bodies = (
+            "jaccard_cut: .nan\n",
+            "jaccard_cut: .inf\n",
+            "jaccard_cut: -.inf\n",
+            'jaccard_cut: "NaN"\n',
+        )
+        expected = text("config_nonfinite", "en", option="jaccard_cut")
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = os.path.join(tmp, "run.yaml")
+            for body in bodies:
+                self._yaml(cfg, body)
+                message, err = self._exit_text([
+                    "--q", "missing.Q",
+                    "--outdir", os.path.join(tmp, "out"),
+                    "--config", cfg,
+                ])
+                self.assertEqual(message, expected)
+                self.assertNotIn("Traceback", message)
+                self.assertNotIn("Traceback", err)
+
+    @unittest.skipUnless(_yaml_mod is not None, "PyYAML is not installed")
+    def test_cli_nan_with_config_names_the_key(self):
+        from qbar.messages import text
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = os.path.join(tmp, "run.yaml")
+            self._yaml(cfg, 'title: ""\n')
+            out = os.path.join(tmp, "out")
+            message, err = self._exit_text([
+                "--q", "missing.Q",
+                "--ids", "ids.txt",
+                "--config", cfg,
+                "--jaccard-cut", "nan",
+                "--outdir", out,
+            ])
+            self.assertEqual(message, text("config_nonfinite", "en", option="jaccard_cut"))
+            self.assertNotIn("Traceback", message)
+            self.assertNotIn("Traceback", err)
+            self.assertFalse(os.path.exists(os.path.join(out, "config_resolved.json")))
+
+    def _tiny_state(self, tmp):
+        folder = os.path.join(tmp, "src")
+        os.makedirs(folder)
+        qpath = os.path.join(folder, "t.2.Q")
+        np.savetxt(qpath, [[0.2, 0.8], [0.7, 0.3]], fmt="%.6f")
+        ids = os.path.join(folder, "ids.txt")
+        with open(ids, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write("a\nb\n")
+        editor = os.path.join(tmp, "editor")
+        qbar.main(["--q", qpath, "--ids", ids, "--editor", "--outdir", editor])
+        return qpath, ids, os.path.join(editor, "state.json")
+
+    def _stderr_main(self, argv):
+        import io
+        from contextlib import redirect_stderr
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            qbar.main(argv)
+        return buf.getvalue()
+
+    @unittest.skipUnless(_yaml_mod is not None, "PyYAML is not installed")
+    def test_config_color_is_replaced_by_state(self):
+        from qbar.messages import text
+        with tempfile.TemporaryDirectory() as tmp:
+            qpath, ids, state = self._tiny_state(tmp)
+            cfg = os.path.join(tmp, "run.yaml")
+            self._yaml(cfg, 'color:\n  - "C1=#112233"\n')
+            out = os.path.join(tmp, "out")
+            err = self._stderr_main([
+                "--q", qpath, "--ids", ids, "--config", cfg, "--state", state, "--outdir", out,
+            ])
+            self.assertEqual(err.strip(), text("config_replaced_by_state", "en", option="color"))
+            data, raw = self._read_resolved(out)
+            self.assertNotIn(tmp, raw)
+            self._assert_file_values_have_no_slash(data, tmp)
+            self.assertEqual(data["color"], [])
+            self.assertEqual(data["sources"]["color"], "config")
+            self.assertEqual(data["state_override"]["color"], {
+                "config": ["C1=#112233"],
+                "used": "state",
+            })
+            self.assertEqual(data["state_override"]["order"], "state")
+            self.assertEqual(data["state_override"]["colours"], "state")
+            with open(os.path.join(out, "perm_K2.tsv"), encoding="utf-8") as handle:
+                self.assertNotIn("112233", handle.read().lower())
+
+    @unittest.skipUnless(_yaml_mod is not None, "PyYAML is not installed")
+    def test_config_color_file_is_replaced_by_state(self):
+        from qbar.messages import text
+        with tempfile.TemporaryDirectory() as tmp:
+            qpath, ids, state = self._tiny_state(tmp)
+            nested = os.path.join(tmp, "nested")
+            os.makedirs(nested)
+            color_file = os.path.join(nested, "colours.tsv")
+            with open(color_file, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("C1 #112233\n")
+            cfg = os.path.join(tmp, "run.yaml")
+            self._yaml(cfg, "color_file: %s\n" % json_dumps(color_file))
+            out = os.path.join(tmp, "out")
+            err = self._stderr_main([
+                "--q", qpath, "--ids", ids, "--config", cfg, "--state", state, "--outdir", out,
+            ])
+            self.assertEqual(err.strip(), text("config_replaced_by_state", "en", option="color_file"))
+            data, raw = self._read_resolved(out)
+            self.assertNotIn(tmp, raw)
+            self._assert_file_values_have_no_slash(data, tmp)
+            self.assertIsNone(data["color_file"])
+            self.assertEqual(data["sources"]["color_file"], "config")
+            recorded = data["state_override"]["color_file"]
+            self.assertEqual(recorded, {"config": "colours.tsv", "used": "state"})
+            self.assertNotIn("/", recorded["config"])
+            with open(os.path.join(out, "perm_K2.tsv"), encoding="utf-8") as handle:
+                self.assertNotIn("112233", handle.read().lower())
+
+    @unittest.skipUnless(_yaml_mod is not None, "PyYAML is not installed")
+    def test_config_order_file_is_replaced_by_state(self):
+        from qbar.messages import text
+        with tempfile.TemporaryDirectory() as tmp:
+            qpath, ids, state = self._tiny_state(tmp)
+            nested = os.path.join(tmp, "nested")
+            os.makedirs(nested)
+            order_file = os.path.join(nested, "order.txt")
+            with open(order_file, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("b\na\n")
+            cfg = os.path.join(tmp, "run.yaml")
+            self._yaml(cfg, "order_file: %s\n" % json_dumps(order_file))
+            out = os.path.join(tmp, "out")
+            err = self._stderr_main([
+                "--q", qpath, "--ids", ids, "--config", cfg, "--state", state, "--outdir", out,
+            ])
+            self.assertEqual(err.strip(), text("config_replaced_by_state", "en", option="order_file"))
+            data, raw = self._read_resolved(out)
+            self.assertNotIn(tmp, raw)
+            self._assert_file_values_have_no_slash(data, tmp)
+            self.assertIsNone(data["order_file"])
+            self.assertEqual(data["sources"]["order_file"], "config")
+            self.assertEqual(data["state_override"]["order_file"], {
+                "config": "order.txt",
+                "used": "state",
+            })
+            with open(os.path.join(out, "order.tsv"), encoding="utf-8") as handle:
+                rows = handle.read().splitlines()
+            self.assertEqual([line.split("\t")[1] for line in rows[1:]], ["a", "b"])
+
+    @unittest.skipUnless(_yaml_mod is not None, "PyYAML is not installed")
+    def test_cli_color_and_order_with_state_still_error(self):
+        from qbar.messages import text
+        with tempfile.TemporaryDirectory() as tmp:
+            qpath, ids, state = self._tiny_state(tmp)
+            cfg = os.path.join(tmp, "run.yaml")
+            self._yaml(cfg, 'title: ""\n')
+            out = os.path.join(tmp, "out")
+            base = ["--q", qpath, "--ids", ids, "--config", cfg, "--state", state, "--outdir", out]
+            color_message, color_err = self._exit_text(base + ["--color", "C1=#abcdef"])
+            self.assertEqual(color_message, text("state_conflict_color", "en"))
+            self.assertNotIn("replaced", color_err)
+            file_message, file_err = self._exit_text(base + ["--color-file", "colours.tsv"])
+            self.assertEqual(file_message, text("state_conflict_color", "en"))
+            self.assertNotIn("replaced", file_err)
+            order_message, order_err = self._exit_text(base + ["--order-file", "order.txt"])
+            self.assertEqual(order_message, text("state_conflict_order", "en"))
+            self.assertNotIn("replaced", order_err)
+            self._yaml(cfg, 'color:\n  - "C1=#112233"\n')
+            both_message, both_err = self._exit_text(base + ["--color", "C1=#abcdef"])
+            self.assertEqual(both_message, text("state_conflict_color", "en"))
+            self.assertNotIn("replaced", both_err)
+            self.assertFalse(os.path.exists(os.path.join(out, "config_resolved.json")))
+
+    @unittest.skipUnless(_yaml_mod is not None, "PyYAML is not installed")
+    def test_relative_config_paths_use_the_working_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work = os.path.join(tmp, "work")
+            cfg_dir = os.path.join(tmp, "cfg")
+            os.makedirs(work)
+            os.makedirs(cfg_dir)
+            qpath = os.path.join(work, "t.2.Q")
+            np.savetxt(qpath, [[0.2, 0.8], [0.7, 0.3]], fmt="%.6f")
+            with open(os.path.join(work, "ids.txt"), "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("a\nb\n")
+            cfg = os.path.join(cfg_dir, "run.yaml")
+            self._yaml(cfg, "q:\n  - t.2.Q\nids: ids.txt\noutdir: out\n")
+            previous = os.getcwd()
+            try:
+                os.chdir(work)
+                qbar.main(["--config", cfg])
+            finally:
+                os.chdir(previous)
+            out = os.path.join(work, "out")
+            self.assertTrue(os.path.isfile(os.path.join(out, "order.tsv")))
+            self.assertFalse(os.path.isfile(os.path.join(cfg_dir, "t.2.Q")))
+            data, raw = self._read_resolved(out)
+            self.assertNotIn(tmp, raw)
+            self.assertEqual(data["q"], ["t.2.Q"])
+            self.assertEqual(data["ids"], "ids.txt")
+            self.assertEqual(data["outdir"], "out")
+            self.assertEqual(data["sources"]["q"], "config")
+
+
+def json_dumps(data):
+    import json
+    return json.dumps(data)
 
 
 if __name__ == "__main__":

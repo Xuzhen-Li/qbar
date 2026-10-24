@@ -199,6 +199,54 @@ _CATALOG = {
         "en": "Replay order, colours, names, and column swaps from a state.json file.",
         "zh": "用 state.json 重放顺序、颜色、列名和列对调。",
     },
+    "help_config": {
+        "en": "YAML file of settings. Omitted by default. Keys are argparse dest names. Precedence is the command line, then this file, then the defaults. A flag on the command line wins even when it repeats the default.",
+        "zh": "YAML 设置文件，默认不给。键是 argparse 的 dest 名。优先级是命令行，然后是该文件，然后是默认值。命令行上写了的参数优先，即使它和默认值相同。",
+    },
+    "config_needs_yaml": {
+        "en": 'Reading --config needs PyYAML. Install it with pip install "qbar[config]".',
+        "zh": '读取 --config 需要 PyYAML。请用 pip install "qbar[config]" 安装。',
+    },
+    "config_open": {
+        "en": "Config file %(path)s cannot be read.",
+        "zh": "读不到配置文件 %(path)s。",
+    },
+    "config_yaml": {
+        "en": "Config file %(name)s is not valid YAML.",
+        "zh": "配置文件 %(name)s 不是合法的 YAML。",
+    },
+    "config_mapping": {
+        "en": "Config file must be a mapping, got %(got)s.",
+        "zh": "配置文件必须是映射，收到 %(got)s。",
+    },
+    "config_unknown": {
+        "en": "Config key %(option)s is unknown.",
+        "zh": "配置项 %(option)s 无法识别。",
+    },
+    "config_type": {
+        "en": "Config key %(option)s expects %(expected)s, got %(got)s.",
+        "zh": "配置项 %(option)s 需要 %(expected)s，收到 %(got)s。",
+    },
+    "config_rejected": {
+        "en": "Config file cannot set config.",
+        "zh": "配置文件不能设置 config。",
+    },
+    "config_duplicate": {
+        "en": "Config key %(option)s is set more than once.",
+        "zh": "配置项 %(option)s 被设置了多次。",
+    },
+    "config_key_type": {
+        "en": "Config key must be a string, got %(got)s.",
+        "zh": "配置项的键必须是字符串，收到 %(got)s。",
+    },
+    "config_nonfinite": {
+        "en": "%(option)s must be a finite number.",
+        "zh": "%(option)s 必须是有限数字。",
+    },
+    "config_replaced_by_state": {
+        "en": "The state replaced the config value for %(option)s.",
+        "zh": "state 已替换配置项 %(option)s 的值。",
+    },
     "state_conflict_order": {
         "en": "--state cannot be combined with --order-file.",
         "zh": "--state 不能和 --order-file 一起用。",
