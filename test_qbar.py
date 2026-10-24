@@ -1215,6 +1215,8 @@ class DocstringTests(unittest.TestCase):
         documented in ``docs/cli.md`` and ``docs/factpacks/S4.md``.
         ``--vector`` is documented in ``docs/cli.md`` and
         ``docs/factpacks/S5.md``.
+        ``--html`` is documented in ``docs/cli.md`` and
+        ``docs/factpacks/F3.md``.
         """
         import re
         # --select-k and --plateau-fraction are documented in docs/cli.md
@@ -1240,6 +1242,7 @@ class DocstringTests(unittest.TestCase):
         # --palette, --color-lock, and --greyscale-preview are documented
         # in docs/cli.md and docs/factpacks/S4.md.
         # --vector is documented in docs/cli.md and docs/factpacks/S5.md.
+        # --html is documented in docs/cli.md and docs/factpacks/F3.md.
         later = {
             "--provenance", "--q-format", "--ind", "--logs", "--logs-map",
             "--select-k", "--plateau-fraction",
@@ -1255,6 +1258,7 @@ class DocstringTests(unittest.TestCase):
             "--auto-seed", "--pca", "--pca-n",
             "--palette", "--color-lock", "--greyscale-preview",
             "--vector",
+            "--html",
         }
         flags = []
         for action in qbar.build_parser()._actions:
@@ -7781,6 +7785,379 @@ class VectorTests(unittest.TestCase):
                 "import sys\n"
                 "sys.path.insert(0, %r)\n"
                 "import qbar.plot_vector\n"
+                "raise SystemExit(0 if 'PIL' not in sys.modules else 1)\n"
+            ) % src
+        env = os.environ.copy()
+        env.pop("PYTHONPATH", None)
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env["PYTHONHASHSEED"] = "0"
+        with tempfile.TemporaryDirectory() as cwd:
+            proc = subprocess.run(
+                [sys.executable, "-c", code],
+                cwd=cwd,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+
+
+def _html_script(html, ident):
+    needle = 'id="%s">' % ident
+    start = html.index(needle) + len(needle)
+    end = html.index("</script>", start)
+    return html[start:end]
+
+
+def _html_payload(html):
+    import json
+    return json.loads(_html_script(html, "qbar-data").strip())
+
+
+def _assert_html_offline(case, html):
+    import re
+    tag = re.compile(
+        r"(?is)<(?:script|link|img)\b[^>]*>.*?</(?:script|link|img)>"
+        r"|<(?:script|link|img)\b[^>]*/>"
+    )
+    attr = re.compile(
+        r"""(?is)\b(?:src|href)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)"""
+    )
+    chunks = [match.group(0) for match in tag.finditer(html)]
+    chunks.extend(match.group(0) for match in attr.finditer(html))
+    case.assertTrue(chunks, "expected at least one script tag")
+    for chunk in chunks:
+        case.assertNotIn("http", chunk.lower())
+        case.assertNotIn("//", chunk)
+    case.assertNotIn("innerHTML", html)
+    case.assertNotIn("<svg", html.lower())
+    case.assertNotIn("<rect", html.lower())
+    case.assertNotRegex(html, r"(?i)<\s*link\b")
+    case.assertNotRegex(html, r"(?i)<\s*img\b")
+
+
+class HtmlPanelTests(unittest.TestCase):
+    def _ids(self, directory, names):
+        path = os.path.join(directory, "ids.txt")
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            for name in names:
+                handle.write("%s\n" % name)
+        return path
+
+    def _groups(self, directory, names, labels):
+        path = os.path.join(directory, "groups.tsv")
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write("analysis_IID\tDong_Grp\n")
+            for name, label in zip(names, labels):
+                handle.write("%s\t%s\n" % (name, label))
+        return path
+
+    def test_flag_defaults_and_help_stay_ascii(self):
+        parser = qbar.build_parser()
+        flag = _cli_flag(parser, "--html")
+        self.assertFalse(flag.default)
+        self.assertEqual(_cli_flag(parser, "--id-col").default, "analysis_IID")
+        self.assertEqual(_cli_flag(parser, "--group-col").default, "Dong_Grp")
+        self.assertEqual(_cli_flag(parser, "--palette").default, "science")
+        help_s = flag.help or ""
+        self.assertTrue(all(ord(ch) < 128 for ch in help_s), help_s)
+        self.assertNotIn("\u2013", help_s)
+        self.assertNotIn("\u2014", help_s)
+        self.assertIn("panel.html", help_s)
+        args = parser.parse_args(["--q", "x.Q", "--outdir", "o"])
+        self.assertFalse(args.html)
+        self.assertTrue(parser.parse_args(["--q", "x.Q", "--html", "--outdir", "o"]).html)
+        zh = _cli_flag(qbar.build_parser(language="zh"), "--html").help or ""
+        self.assertIn("\u753b\u5e03", zh)
+        self.assertNotEqual(help_s, zh)
+
+    def test_json_matches_order_aligned_q_and_hex(self):
+        from qbar.html_panel import round_q
+        names = ["c", "a", "b"]
+        third = 1.0 / 3.0
+        rows2 = [
+            [third, 1.0 - third],
+            [0.2, 0.8],
+            [0.0, 1.0],
+        ]
+        rows3 = [
+            [0.1, 0.2, 0.7],
+            [0.5, 0.25, 0.25],
+            [0.0, 0.0, 1.0],
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            q2 = os.path.join(tmp, "sim.2.Q")
+            q3 = os.path.join(tmp, "sim.3.Q")
+            _write_q_rows(q2, rows2)
+            _write_q_rows(q3, rows3)
+            ids = self._ids(tmp, names)
+            groups = self._groups(tmp, names, ["B", "A", "A"])
+            out = os.path.join(tmp, "out")
+            cmd = ["--q", q2, q3, "--ids", ids, "--groups", groups, "--html", "--outdir", out]
+            args = qbar.build_parser().parse_args(cmd)
+            result = qbar.run(args, cmd)
+            html_path = os.path.join(out, "panel.html")
+            self.assertTrue(os.path.isfile(html_path))
+            self.assertIn(html_path, result.paths)
+            self.assertFalse(os.path.exists(os.path.join(out, "cluster_flow.html")))
+            with open(html_path, encoding="utf-8") as handle:
+                html = handle.read()
+            _assert_html_offline(self, html)
+            payload = _html_payload(html)
+            with open(os.path.join(out, "order.tsv"), encoding="utf-8") as handle:
+                order_lines = handle.read().splitlines()
+            self.assertEqual(order_lines[0], "rank\tiid\tgroup")
+            order_iids = [line.split("\t")[1] for line in order_lines[1:]]
+            order_groups = [line.split("\t")[2] for line in order_lines[1:]]
+            self.assertEqual(payload["iid"], order_iids)
+            self.assertEqual(payload["group"], order_groups)
+            self.assertEqual(payload["k"], sorted(result.aligned))
+            self.assertEqual(payload["run"], [""] * len(payload["k"]))
+            self.assertEqual(
+                [names[index] for index in result.order],
+                order_iids,
+            )
+            for key_index, k in enumerate(payload["k"]):
+                matrix = result.aligned[k]
+                block = payload["q"][key_index]
+                self.assertEqual(len(block), len(result.order))
+                self.assertEqual(payload["column_names"][key_index], ["C%d" % (c + 1) for c in range(k)])
+                with open(os.path.join(out, "perm_K%d.tsv" % k), encoding="utf-8") as handle:
+                    perm_lines = handle.read().splitlines()
+                self.assertEqual(perm_lines[0], "C\traw\thex\towners")
+                perm_hex = [line.split("\t")[2] for line in perm_lines[1:]]
+                self.assertEqual(payload["hex"][key_index], perm_hex)
+                for pos, row_index in enumerate(result.order):
+                    for col in range(k):
+                        raw = float(matrix[row_index, col])
+                        got = float(block[pos][col])
+                        self.assertLessEqual(abs(got - raw), 1e-6)
+                        self.assertLessEqual(abs(got - round_q(raw)), 1e-12)
+
+    def test_script_breakout_iid_round_trips(self):
+        from qbar.html_panel import write_panel_html
+        nasty = '</script><b>"&'
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "panel.html")
+            write_panel_html(
+                path,
+                {2: np.array([[0.4, 0.6]], dtype=float)},
+                [0],
+                ["NA"],
+                {2: ["#112233", "#445566"]},
+                iids=[nasty],
+            )
+            with open(path, encoding="utf-8") as handle:
+                html = handle.read()
+            self.assertNotIn("</script><b>", html)
+            self.assertEqual(html.count("</script>"), 2)
+            payload = _html_payload(html)
+            self.assertEqual(payload["iid"], [nasty])
+            self.assertEqual(payload["group"], ["NA"])
+            self.assertEqual(payload["q"][0][0], [0.4, 0.6])
+            _assert_html_offline(self, html)
+
+    def test_no_network_tokens_in_tags(self):
+        from qbar.html_panel import panel_script, write_panel_html
+        script = panel_script()
+        self.assertNotIn("http", script.lower())
+        self.assertNotIn("//", script)
+        self.assertNotIn("innerHTML", script)
+        self.assertIn("textContent", script)
+        self.assertIn("function sampleIndexAt", script)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "panel.html")
+            write_panel_html(
+                path,
+                {2: np.array([[1.0, 0.0], [0.0, 1.0]], dtype=float)},
+                [1, 0],
+                ["A", "B"],
+                {2: ["#4470b7", "#dc1f26"]},
+                iids=["s0", "s1"],
+            )
+            with open(path, encoding="utf-8") as handle:
+                html = handle.read()
+            _assert_html_offline(self, html)
+            payload = _html_payload(html)
+            self.assertEqual(payload["iid"], ["s1", "s0"])
+            self.assertEqual(payload["hex"][0], ["#4470b7", "#dc1f26"])
+
+    def test_n1_and_missing_groups_use_rest_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            q2 = os.path.join(tmp, "sim.2.Q")
+            q3 = os.path.join(tmp, "sim.3.Q")
+            _write_q_rows(q2, [[0.25, 0.75]])
+            _write_q_rows(q3, [[0.2, 0.3, 0.5]])
+            ids = self._ids(tmp, ["only"])
+            both = os.path.join(tmp, "both")
+            one = os.path.join(tmp, "one")
+            named = os.path.join(tmp, "named")
+            self.assertEqual(qbar.main([
+                "--q", q2, q3, "--ids", ids, "--html", "--no-align", "--outdir", both,
+            ]), 0)
+            self.assertEqual(qbar.main([
+                "--q", q2, "--ids", ids, "--html", "--no-align", "--outdir", one,
+            ]), 0)
+            self.assertEqual(qbar.main([
+                "--q", q2, q3, "--ids", ids, "--html", "--no-align",
+                "--rest-name", "NONE", "--outdir", named,
+            ]), 0)
+            with open(os.path.join(both, "panel.html"), encoding="utf-8") as handle:
+                both_payload = _html_payload(handle.read())
+            self.assertEqual(both_payload["iid"], ["only"])
+            self.assertEqual(both_payload["group"], ["NA",])
+            self.assertEqual(len(both_payload["k"]), 2)
+            self.assertEqual(len(both_payload["q"][0][0]), 2)
+            self.assertEqual(len(both_payload["q"][1][0]), 3)
+            self.assertFalse(os.path.exists(os.path.join(one, "panel.png")))
+            self.assertTrue(os.path.isfile(os.path.join(one, "bar_K2.png")))
+            with open(os.path.join(one, "panel.html"), encoding="utf-8") as handle:
+                one_payload = _html_payload(handle.read())
+            self.assertEqual(one_payload["iid"], ["only"])
+            self.assertEqual(one_payload["k"], [2])
+            self.assertEqual(one_payload["q"], [[[0.25, 0.75]]])
+            with open(os.path.join(named, "panel.html"), encoding="utf-8") as handle:
+                named_payload = _html_payload(handle.read())
+            self.assertEqual(named_payload["group"], ["NONE",])
+
+    def test_default_writes_no_panel_html(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            q2 = os.path.join(tmp, "sim.2.Q")
+            q3 = os.path.join(tmp, "sim.3.Q")
+            _write_q_rows(q2, [[0.8, 0.2], [0.1, 0.9]])
+            _write_q_rows(q3, [[0.7, 0.2, 0.1], [0.1, 0.2, 0.7]])
+            ids = self._ids(tmp, ["s0", "s1"])
+            out = os.path.join(tmp, "out")
+            self.assertEqual(qbar.main([
+                "--q", q2, q3, "--ids", ids, "--no-align", "--outdir", out,
+            ]), 0)
+            self.assertTrue(os.path.isfile(os.path.join(out, "panel.png")))
+            self.assertFalse(os.path.exists(os.path.join(out, "panel.html")))
+            self.assertFalse(os.path.exists(os.path.join(out, "cluster_flow.html")))
+
+    def test_replicates_fill_run_otherwise_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            qdir = os.path.join(tmp, "batch")
+            os.makedirs(qdir)
+            first = os.path.join(qdir, "a.2.Q")
+            second = os.path.join(qdir, "b.2.Q")
+            third = os.path.join(qdir, "c.3.Q")
+            self.assertIn(os.sep, first)
+            self.assertIn(os.sep, third)
+            rows2 = [[0.75, 0.25], [0.1, 0.9]]
+            rows3 = [[0.2, 0.3, 0.5], [0.0, 0.2, 0.8]]
+            _write_q_rows(first, rows2)
+            _write_q_rows(second, rows2)
+            _write_q_rows(third, rows3)
+            ids = self._ids(tmp, ["s0", "s1"])
+            plain = os.path.join(tmp, "plain")
+            grouped = os.path.join(tmp, "grouped")
+            self.assertEqual(qbar.main([
+                "--q", first, third, "--ids", ids, "--html", "--no-align", "--outdir", plain,
+            ]), 0)
+            self.assertEqual(qbar.main([
+                "--q", first, second, third, "--ids", ids, "--html",
+                "--replicates", "--mode-sim-cut", "0.5", "--outdir", grouped,
+            ]), 0)
+            with open(os.path.join(plain, "panel.html"), encoding="utf-8") as handle:
+                plain_payload = _html_payload(handle.read())
+            self.assertEqual(plain_payload["run"], ["", ""])
+            with open(os.path.join(grouped, "panel.html"), encoding="utf-8") as handle:
+                grouped_html = handle.read()
+            grouped_payload = _html_payload(grouped_html)
+            with open(os.path.join(grouped, "replicates_K2.tsv"), encoding="utf-8") as handle:
+                rep_lines = handle.read().splitlines()
+            self.assertEqual(
+                rep_lines[0].split("\t"),
+                ["K", "replicate_file", "mode_id", "is_mode_rep", "sim_to_k_ref", "sim_to_mode_ref", "perm"],
+            )
+            reps = [
+                line.split("\t") for line in rep_lines[1:]
+                if line.split("\t")[2] == "1" and line.split("\t")[3] == "yes"
+            ]
+            self.assertEqual(len(reps), 1)
+            by_k = {k: grouped_payload["run"][index] for index, k in enumerate(grouped_payload["k"])}
+            self.assertEqual(by_k[2], os.path.basename(reps[0][1]))
+            self.assertEqual(by_k[3], os.path.basename(third))
+            self.assertNotIn(os.sep, by_k[2])
+            self.assertNotIn(os.sep, by_k[3])
+            self.assertNotIn(qdir, grouped_html)
+            self.assertNotEqual(by_k[2], "")
+
+    def test_node_check_and_sample_index(self):
+        import shutil
+        import subprocess
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed")
+        from qbar.html_panel import write_panel_html
+        harness = "\n".join([
+            'var fs = require("fs");',
+            'var assert = require("assert");',
+            'var src = fs.readFileSync(process.argv[2], "utf8");',
+            'var api = new Function(src + "\\nreturn {sampleIndexAt: sampleIndexAt, rowIndexAt: rowIndexAt, formatQ3: formatQ3};")();',
+            "assert.strictEqual(api.sampleIndexAt(0, 100, 4), 0);",
+            "assert.strictEqual(api.sampleIndexAt(25, 100, 4), 1);",
+            "assert.strictEqual(api.sampleIndexAt(50, 100, 4), 2);",
+            "assert.strictEqual(api.sampleIndexAt(75, 100, 4), 3);",
+            "assert.strictEqual(api.sampleIndexAt(99.9, 100, 4), 3);",
+            "assert.strictEqual(api.sampleIndexAt(100, 100, 4), -1);",
+            "assert.strictEqual(api.sampleIndexAt(-0.01, 2200, 1), -1);",
+            "assert.strictEqual(api.sampleIndexAt(0, 2200, 1), 0);",
+            "assert.strictEqual(api.sampleIndexAt(2199.5, 2200, 1), 0);",
+            "assert.strictEqual(api.sampleIndexAt(0, 0, 4), -1);",
+            'assert.strictEqual(api.formatQ3(1 / 3), "0.333");',
+            'assert.strictEqual(api.formatQ3(2 / 3), "0.667");',
+            'assert.strictEqual(api.formatQ3(0.1234), "0.123");',
+            "assert.strictEqual(api.rowIndexAt(10, [{y: 8, pitch: 120}, {y: 128, pitch: 120}]), 0);",
+            "assert.strictEqual(api.rowIndexAt(128, [{y: 8, pitch: 120}, {y: 128, pitch: 120}]), 1);",
+            "assert.strictEqual(api.rowIndexAt(0, [{y: 8, pitch: 120}]), -1);",
+            "",
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            html_path = os.path.join(tmp, "panel.html")
+            write_panel_html(
+                html_path,
+                {2: np.array([[0.5, 0.5]], dtype=float)},
+                [0],
+                ["NA"],
+                {2: ["#000000", "#ffffff"]},
+                iids=["s0"],
+            )
+            with open(html_path, encoding="utf-8") as handle:
+                script = _html_script(handle.read(), "qbar-draw")
+            script_path = os.path.join(tmp, "draw.js")
+            harness_path = os.path.join(tmp, "hit.js")
+            with open(script_path, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(script)
+            with open(harness_path, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(harness)
+            checked = subprocess.run(
+                [node, "--check", script_path],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(checked.returncode, 0, checked.stderr)
+            ran = subprocess.run(
+                [node, harness_path, script_path],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(ran.returncode, 0, ran.stderr + ran.stdout)
+
+    def test_html_panel_import_does_not_load_pil(self):
+        src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src")
+        if os.environ.get("QBAR_TEST_INSTALLED") == "1":
+            code = (
+                "import qbar.html_panel\n"
+                "import sys\n"
+                "raise SystemExit(0 if 'PIL' not in sys.modules else 1)\n"
+            )
+        else:
+            code = (
+                "import sys\n"
+                "sys.path.insert(0, %r)\n"
+                "import qbar.html_panel\n"
                 "raise SystemExit(0 if 'PIL' not in sys.modules else 1)\n"
             ) % src
         env = os.environ.copy()

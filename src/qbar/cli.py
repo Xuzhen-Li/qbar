@@ -44,6 +44,9 @@ bar_K*.pdf and panel.pdf as vectors. svg also writes SVG and keeps the
 PDF raster. both writes vector PDFs and SVGs. PNG stays raster. A vector
 file with more than 200000 bar rectangles is refused and no output file
 is written.
+--html writes panel.html and is off by default. The file embeds the
+sample rows and draws the bars on a canvas. Hover text shows the sample.
+It does not load a network file.
 https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.hierarchy.linkage.html
 """
 from __future__ import annotations
@@ -241,6 +244,7 @@ def build_parser(language="en"):
                    help=say("help_greyscale_preview"))
     p.add_argument("--vector", choices=("off", "pdf", "svg", "both"), default="off",
                    help=say("help_vector"))
+    p.add_argument("--html", action="store_true", help=say("help_html"))
     p.add_argument("--title", default="")
     p.add_argument("--width", type=int, default=2200, help=say("help_width"))
     p.add_argument("--bar-height", type=int, default=0, help=say("help_bar_height"))
