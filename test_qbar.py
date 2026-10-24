@@ -1213,6 +1213,8 @@ class DocstringTests(unittest.TestCase):
         ``docs/cli.md`` and ``docs/factpacks/F8.md``.
         ``--palette``, ``--color-lock``, and ``--greyscale-preview`` are
         documented in ``docs/cli.md`` and ``docs/factpacks/S4.md``.
+        ``--vector`` is documented in ``docs/cli.md`` and
+        ``docs/factpacks/S5.md``.
         """
         import re
         # --select-k and --plateau-fraction are documented in docs/cli.md
@@ -1237,6 +1239,7 @@ class DocstringTests(unittest.TestCase):
         # docs/factpacks/F8.md.
         # --palette, --color-lock, and --greyscale-preview are documented
         # in docs/cli.md and docs/factpacks/S4.md.
+        # --vector is documented in docs/cli.md and docs/factpacks/S5.md.
         later = {
             "--provenance", "--q-format", "--ind", "--logs", "--logs-map",
             "--select-k", "--plateau-fraction",
@@ -1251,6 +1254,7 @@ class DocstringTests(unittest.TestCase):
             "--auto-groups", "--auto-k", "--admix-cut", "--auto-g",
             "--auto-seed", "--pca", "--pca-n",
             "--palette", "--color-lock", "--greyscale-preview",
+            "--vector",
         }
         flags = []
         for action in qbar.build_parser()._actions:
@@ -7343,6 +7347,455 @@ class PaletteTests(unittest.TestCase):
             self.assertTrue(os.path.isfile(os.path.join(one, "panel_grey.png")))
             self.assertFalse(os.path.exists(os.path.join(one, "panel.png")))
             self.assertTrue(os.path.isfile(os.path.join(one, "bar_K2.png")))
+
+
+def _vector_pdf_contents(data):
+    """Inflate the page content stream and return its bytes.
+
+    The xref offset is the integer after ``startxref``. Font streams carry
+    ``/Length1`` and are skipped. ``re`` is then a whitespace-separated token.
+    """
+    import re
+    import zlib
+    match = re.search(br"startxref\s+(\d+)", data)
+    if match is None:
+        raise AssertionError("PDF has no startxref")
+    xref_at = int(match.group(1))
+    section = data[xref_at:data.find(b"trailer", xref_at)]
+    offsets = [int(item) for item in re.findall(br"(\d{10}) 00000 n ", section)]
+    chunks = []
+    for offset in offsets:
+        endobj = data.find(b"\nendobj", offset)
+        stream_at = data.find(b"\nstream\n", offset)
+        if stream_at < 0 or (endobj >= 0 and endobj < stream_at):
+            continue
+        header = data[offset:stream_at]
+        if b"/Length1" in header or b"/FlateDecode" not in header:
+            continue
+        length = int(re.search(br"/Length\s+(\d+)", header).group(1))
+        begin = stream_at + len(b"\nstream\n")
+        chunks.append(zlib.decompress(data[begin:begin + length]))
+    return b"\n".join(chunks)
+
+
+def _vector_media_box(data):
+    import re
+    match = re.search(br"/MediaBox\s*\[\s*([^\]]+)\]", data)
+    if match is None:
+        raise AssertionError("PDF has no MediaBox")
+    return [float(item) for item in match.group(1).split()]
+
+
+class VectorTests(unittest.TestCase):
+    def _prepare(self, tmp, rows):
+        ids = os.path.join(tmp, "ids.txt")
+        with open(ids, "w", encoding="utf-8", newline="\n") as handle:
+            for index in range(len(rows)):
+                handle.write("s%d\n" % index)
+        k = len(rows[0])
+        qpath = os.path.join(tmp, "sim.%d.Q" % k)
+        with open(qpath, "w", encoding="utf-8", newline="\n") as handle:
+            for row in rows:
+                handle.write(" ".join("%.6f" % float(value) for value in row) + "\n")
+        return ["--q", qpath, "--ids", ids, "--no-align"]
+
+    def _draw_rows(self, out, written):
+        with open(os.path.join(out, "order.tsv"), encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+        self.assertEqual(lines[0], "rank\tiid\tgroup")
+        return [written[line.split("\t")[1]] for line in lines[1:]]
+
+    def _perm_hexes(self, out, k):
+        with open(os.path.join(out, "perm_K%d.tsv" % k), encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+        self.assertEqual(lines[0], "C\traw\thex\towners")
+        return [line.split("\t")[2] for line in lines[1:]]
+
+    def _bar_expectations(self, draw_rows, hexes, bar_w, bar_h):
+        """Geometry from the overlap rule, not from ``_bar_commands``.
+
+        A single K with no title puts the bar at y = 8 when the legend
+        fits inside ``bar_h``. Each sample except the last is 0.5 px
+        wider, to the right. Each segment except the one that reaches
+        cumulative share 1 is 0.5 px taller, upward. A column is kept
+        only where its cumulative span meets [0, 1].
+        """
+        import qbar.plot_static as plot_static
+        left = float(plot_static.BAR_LEFT)
+        n = len(draw_rows)
+        pitch = max(int(bar_h), 4 + len(hexes) * 18)
+        bar_y = 8 + (pitch - int(bar_h)) // 2
+        slot = float(bar_w) / float(n)
+        expected = []
+        for index, row in enumerate(draw_rows):
+            x = left + index * slot
+            sample_w = slot if index == n - 1 else slot + 0.5
+            total = 0.0
+            for column, value in enumerate(row):
+                frac = float(value)
+                start = total
+                total += frac
+                if frac <= 0.0:
+                    continue
+                vis_lo = start
+                vis_hi = total
+                if vis_hi <= 0.0 or vis_lo >= 1.0:
+                    continue
+                if vis_lo < 0.0:
+                    vis_lo = 0.0
+                if vis_hi > 1.0:
+                    vis_hi = 1.0
+                if vis_hi <= vis_lo:
+                    continue
+                y = float(bar_y) + float(bar_h) - vis_hi * float(bar_h)
+                height = (vis_hi - vis_lo) * float(bar_h)
+                if vis_hi < 1.0:
+                    y -= 0.5
+                    height += 0.5
+                expected.append((x, y, sample_w, height, hexes[column].lower()))
+        return expected
+
+    def test_flag_defaults_stay_ascii(self):
+        parser = qbar.build_parser()
+        flag = _cli_flag(parser, "--vector")
+        self.assertEqual(flag.default, "off")
+        self.assertEqual(list(flag.choices), ["off", "pdf", "svg", "both"])
+        self.assertEqual(_cli_flag(parser, "--id-col").default, "analysis_IID")
+        self.assertEqual(_cli_flag(parser, "--group-col").default, "Dong_Grp")
+        help_s = flag.help or ""
+        self.assertTrue(all(ord(ch) < 128 for ch in help_s))
+        self.assertNotIn("\u2013", help_s)
+        self.assertNotIn("\u2014", help_s)
+        self.assertIn("200000", help_s)
+        zh = _cli_flag(qbar.build_parser(language="zh"), "--vector").help or ""
+        self.assertIn("矢量", zh)
+        import qbar.plot_vector as plot_vector
+        self.assertEqual(plot_vector.VECTOR_RECT_CAP, 200000)
+
+    def test_svg_rect_x_matches_bar_formula_and_perm_hex(self):
+        import re
+        import qbar.plot_static as plot_static
+        written = {"s0": [0.25, 0.75], "s1": [0.0, 1.0]}
+        rows = [written["s0"], written["s1"]]
+        nonzero = sum(1 for row in rows for value in row if float(value) > 0.0)
+        self.assertEqual(nonzero, 3)
+        with tempfile.TemporaryDirectory() as tmp:
+            cmd = self._prepare(tmp, rows)
+            out = os.path.join(tmp, "out")
+            self.assertEqual(qbar.main(cmd + ["--vector", "svg", "--outdir", out]), 0)
+            svg_path = os.path.join(out, "bar_K2.svg")
+            pdf_path = os.path.join(out, "bar_K2.pdf")
+            png_path = os.path.join(out, "bar_K2.png")
+            self.assertTrue(os.path.isfile(svg_path))
+            self.assertTrue(os.path.isfile(pdf_path))
+            self.assertTrue(os.path.isfile(png_path))
+            with open(svg_path, encoding="utf-8") as handle:
+                svg = handle.read()
+            rects = re.findall(r"<rect\b([^>]*)/?>", svg)
+            self.assertEqual(len(rects), nonzero)
+            parsed = []
+            for body in rects:
+                attrs = dict(re.findall(r'([A-Za-z]+)="([^"]*)"', body))
+                parsed.append(attrs)
+            bar_w = _cli_flag(qbar.build_parser(), "--width").default
+            bar_h = 220
+            draw_rows = self._draw_rows(out, written)
+            expected = self._bar_expectations(
+                draw_rows, self._perm_hexes(out, 2), bar_w, bar_h,
+            )
+            self.assertEqual(len(parsed), len(expected))
+            for attrs, (x, y, width, height, fill) in zip(parsed, expected):
+                self.assertAlmostEqual(float(attrs["x"]), x, places=4)
+                self.assertAlmostEqual(float(attrs["y"]), y, places=4)
+                self.assertAlmostEqual(float(attrs["width"]), width, places=4)
+                self.assertAlmostEqual(float(attrs["height"]), height, places=4)
+                self.assertEqual(attrs["fill"].lower(), fill)
+            left = plot_static.BAR_LEFT
+            self.assertAlmostEqual(float(parsed[0]["x"]), float(left), places=4)
+            self.assertAlmostEqual(float(parsed[0]["width"]), float(bar_w) / 2.0 + 0.5, places=4)
+            self.assertAlmostEqual(float(parsed[-1]["width"]), float(bar_w) / 2.0, places=4)
+            face = None
+            for path in plot_static.FONT_CANDIDATES:
+                if os.path.isfile(path):
+                    from PIL import ImageFont
+                    face = ImageFont.truetype(path, 32).getname()[0]
+                    break
+            self.assertIsNotNone(face)
+            self.assertIn(face, svg)
+            self.assertIn("sans-serif", svg)
+            self.assertIn("does not embed", svg)
+            self.assertNotIn("@font-face", svg)
+            with open(pdf_path, "rb") as handle:
+                raster = handle.read()
+            self.assertIn(b"/DCTDecode", raster)
+            self.assertNotIn(b"/FontFile2", raster)
+
+    def test_row_sum_above_one_is_clipped_to_the_bar(self):
+        import re
+        written = {"s0": [0.5, 0.55]}
+        rounded = [float("%.6f" % value) for value in written["s0"]]
+        self.assertGreater(sum(rounded), 1.0)
+        self.assertAlmostEqual(sum(rounded), 1.05, places=6)
+        with tempfile.TemporaryDirectory() as tmp:
+            cmd = self._prepare(tmp, [written["s0"]])
+            out = os.path.join(tmp, "out")
+            self.assertEqual(qbar.main(cmd + ["--vector", "svg", "--outdir", out]), 0)
+            with open(os.path.join(out, "bar_K2.svg"), encoding="utf-8") as handle:
+                svg = handle.read()
+            rects = re.findall(r"<rect\b([^>]*)/?>", svg)
+            parsed = []
+            for body in rects:
+                attrs = dict(re.findall(r'([A-Za-z]+)="([^"]*)"', body))
+                parsed.append(attrs)
+            bar_w = _cli_flag(qbar.build_parser(), "--width").default
+            bar_h = 220
+            expected = self._bar_expectations(
+                [rounded], self._perm_hexes(out, 2), bar_w, bar_h,
+            )
+            self.assertEqual(len(parsed), 2)
+            self.assertEqual(len(expected), 2)
+            upper = (1.0 - rounded[0]) * float(bar_h)
+            self.assertLess(upper, rounded[1] * float(bar_h))
+            self.assertAlmostEqual(expected[1][3], upper, places=4)
+            self.assertAlmostEqual(expected[0][3], rounded[0] * float(bar_h) + 0.5, places=4)
+            for attrs, (x, y, width, height, fill) in zip(parsed, expected):
+                self.assertAlmostEqual(float(attrs["x"]), x, places=4)
+                self.assertAlmostEqual(float(attrs["y"]), y, places=4)
+                self.assertAlmostEqual(float(attrs["width"]), width, places=4)
+                self.assertAlmostEqual(float(attrs["height"]), height, places=4)
+                self.assertEqual(attrs["fill"].lower(), fill)
+            self.assertAlmostEqual(float(parsed[-1]["y"]) + float(parsed[-1]["height"]), float(parsed[0]["y"]) + 0.5, places=4)
+
+    def test_api_bad_vector_value_names_the_choice(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cmd = self._prepare(tmp, [[1.0, 0.0]])
+            out = os.path.join(tmp, "out")
+            argv = cmd + ["--outdir", out]
+            args = qbar.build_parser().parse_args(argv)
+            args.vector = "sideways"
+            with self.assertRaises(SystemExit) as ctx:
+                qbar.api.run(args, argv)
+            message = str(ctx.exception.code)
+            self.assertEqual(
+                message,
+                "--vector must be off, pdf, svg, or both, got sideways",
+            )
+            self.assertFalse(os.path.exists(out))
+
+    def test_vector_pdf_re_count_mediabox_font_and_repeat(self):
+        import re
+        written = {"s0": [0.25, 0.75], "s1": [0.0, 1.0]}
+        rows = [written["s0"], written["s1"]]
+        nonzero = sum(1 for row in rows for value in row if float(value) > 0.0)
+        with tempfile.TemporaryDirectory() as tmp:
+            cmd = self._prepare(tmp, rows)
+            first = os.path.join(tmp, "first")
+            second = os.path.join(tmp, "second")
+            raster_dir = os.path.join(tmp, "raster")
+            both = os.path.join(tmp, "both")
+            self.assertEqual(qbar.main(cmd + ["--vector", "pdf", "--outdir", first]), 0)
+            self.assertEqual(qbar.main(cmd + ["--vector", "pdf", "--outdir", second]), 0)
+            self.assertEqual(qbar.main(cmd + ["--outdir", raster_dir]), 0)
+            self.assertEqual(qbar.main(cmd + ["--vector", "both", "--outdir", both]), 0)
+            pdf_path = os.path.join(first, "bar_K2.pdf")
+            with open(pdf_path, "rb") as handle:
+                data = handle.read()
+            with open(os.path.join(second, "bar_K2.pdf"), "rb") as handle:
+                again = handle.read()
+            self.assertEqual(data, again)
+            self.assertNotIn(b"/CreationDate", data)
+            self.assertNotIn(b"/ModDate", data)
+            self.assertIn(b"/FontFile2", data)
+            self.assertIn(b"/FirstChar 32", data)
+            self.assertIn(b"/LastChar 126", data)
+            self.assertIn(b"/WinAnsiEncoding", data)
+            content = _vector_pdf_contents(data)
+            self.assertEqual(content.split().count(b"re"), nonzero)
+            self.assertFalse(os.path.exists(os.path.join(first, "bar_K2.svg")))
+            with Image.open(os.path.join(first, "bar_K2.png")) as img:
+                pixel_w, pixel_h = img.size
+            box = _vector_media_box(data)
+            with open(os.path.join(raster_dir, "bar_K2.pdf"), "rb") as handle:
+                raster = handle.read()
+            raster_box = _vector_media_box(raster)
+            self.assertEqual(len(box), 4)
+            self.assertEqual(len(raster_box), 4)
+            self.assertAlmostEqual(box[2], raster_box[2], delta=0.01)
+            self.assertAlmostEqual(box[3], raster_box[3], delta=0.01)
+            self.assertAlmostEqual(box[2], pixel_w * 72.0 / 150.0, delta=0.01)
+            self.assertAlmostEqual(box[3], pixel_h * 72.0 / 150.0, delta=0.01)
+            with open(os.path.join(both, "bar_K2.pdf"), "rb") as handle:
+                both_pdf = handle.read()
+            with open(os.path.join(both, "bar_K2.svg"), encoding="utf-8") as handle:
+                both_svg = handle.read()
+            self.assertIn(b"/FontFile2", both_pdf)
+            self.assertNotIn(b"/CreationDate", both_pdf)
+            self.assertEqual(len(re.findall(r"<rect\b", both_svg)), nonzero)
+
+    def test_xref_offsets_point_at_objects(self):
+        import re
+        rows = [[0.25, 0.75], [0.0, 1.0]]
+        with tempfile.TemporaryDirectory() as tmp:
+            cmd = self._prepare(tmp, rows)
+            out = os.path.join(tmp, "out")
+            self.assertEqual(qbar.main(cmd + ["--vector", "pdf", "--outdir", out]), 0)
+            with open(os.path.join(out, "bar_K2.pdf"), "rb") as handle:
+                data = handle.read()
+            xref_at = int(re.search(br"startxref\s+(\d+)", data).group(1))
+            self.assertTrue(data[xref_at:].startswith(b"xref\n"))
+            section = data[xref_at:data.find(b"trailer", xref_at)]
+            offsets = [int(item) for item in re.findall(br"(\d{10}) 00000 n ", section)]
+            self.assertGreaterEqual(len(offsets), 7)
+            for index, offset in enumerate(offsets, start=1):
+                self.assertTrue(data[offset:].startswith(b"%d 0 obj\n" % index))
+
+    def test_cap_refuses_before_any_output_file(self):
+        from unittest.mock import patch
+        import qbar.plot_vector as plot_vector
+        rows = [[0.25, 0.75], [0.0, 1.0]]
+        nonzero = sum(1 for row in rows for value in row if float(value) > 0.0)
+        self.assertEqual(nonzero, 3)
+        with tempfile.TemporaryDirectory() as tmp:
+            cmd = self._prepare(tmp, rows)
+            out = os.path.join(tmp, "out")
+            before = sorted(os.listdir(tmp))
+            with patch.object(plot_vector, "VECTOR_RECT_CAP", nonzero - 1):
+                with self.assertRaises(SystemExit) as ctx:
+                    qbar.main(cmd + ["--vector", "both", "--outdir", out])
+            message = str(ctx.exception.code)
+            self.assertIn("bar_K2.pdf", message)
+            self.assertIn("bar_K2.svg", message)
+            self.assertIn(str(nonzero), message)
+            self.assertIn(str(nonzero - 1), message)
+            self.assertIn("No file was written", message)
+            self.assertFalse(os.path.exists(out))
+            self.assertEqual(sorted(os.listdir(tmp)), before)
+            self.assertFalse(any(name.endswith((".svg", ".pdf", ".png")) for name in os.listdir(tmp)))
+            argv = cmd + ["--vector", "svg", "--outdir", os.path.join(tmp, "private")]
+            args = qbar.build_parser().parse_args(argv)
+            args._vector_rect_cap = nonzero
+            self.assertEqual(qbar.api.run(args, argv).paths[0].endswith("bar_K2.png"), True)
+            self.assertTrue(os.path.isfile(os.path.join(tmp, "private", "bar_K2.svg")))
+
+    def test_default_writes_no_svg_and_vector_off_matches(self):
+        import re
+        rows = [[0.25, 0.75], [0.0, 1.0]]
+        date = re.compile(br"/(?:CreationDate|ModDate)[ \t]+\([^)\r\n]*\)")
+        with tempfile.TemporaryDirectory() as tmp:
+            cmd = self._prepare(tmp, rows)
+            plain = os.path.join(tmp, "plain")
+            off = os.path.join(tmp, "off")
+            self.assertEqual(qbar.main(cmd + ["--outdir", plain]), 0)
+            self.assertEqual(qbar.main(cmd + ["--vector", "off", "--outdir", off]), 0)
+            plain_names = sorted(os.listdir(plain))
+            off_names = sorted(os.listdir(off))
+            self.assertEqual(plain_names, off_names)
+            self.assertFalse(any(name.endswith(".svg") for name in plain_names))
+            for name in plain_names:
+                with open(os.path.join(plain, name), "rb") as handle:
+                    left = handle.read()
+                with open(os.path.join(off, name), "rb") as handle:
+                    right = handle.read()
+                if name == "args.txt":
+                    left_lines = left.decode("utf-8").splitlines()
+                    right_lines = right.decode("utf-8").splitlines()
+                    self.assertNotIn("--vector", left_lines[0])
+                    self.assertIn("--vector off", right_lines[0])
+                    self.assertEqual(left_lines[1:], right_lines[1:])
+                elif name.endswith(".pdf"):
+                    self.assertEqual(date.sub(b"", left), date.sub(b"", right))
+                else:
+                    self.assertEqual(left, right, name)
+
+    def test_non_ascii_label_errors_for_vector_pdf(self):
+        rows = [[0.25, 0.75], [0.0, 1.0]]
+        label = "cafe\u00e9"
+        with tempfile.TemporaryDirectory() as tmp:
+            cmd = self._prepare(tmp, rows)
+            pdf_out = os.path.join(tmp, "pdf")
+            both_out = os.path.join(tmp, "both")
+            svg_out = os.path.join(tmp, "svg")
+            before = sorted(os.listdir(tmp))
+            with self.assertRaises(SystemExit) as ctx:
+                qbar.main(cmd + ["--vector", "pdf", "--title", label, "--outdir", pdf_out])
+            self.assertIn(label, str(ctx.exception.code))
+            self.assertIn("No file was written", str(ctx.exception.code))
+            self.assertFalse(os.path.exists(pdf_out))
+            with self.assertRaises(SystemExit) as both_ctx:
+                qbar.main(cmd + ["--vector", "both", "--title", label, "--outdir", both_out])
+            self.assertIn(label, str(both_ctx.exception.code))
+            self.assertFalse(os.path.exists(both_out))
+            self.assertEqual(sorted(os.listdir(tmp)), before)
+            self.assertEqual(qbar.main(cmd + ["--vector", "svg", "--title", label, "--outdir", svg_out]), 0)
+            with open(os.path.join(svg_out, "bar_K2.svg"), encoding="utf-8") as handle:
+                svg = handle.read()
+            self.assertIn(label, svg)
+
+    def test_missing_font_errors(self):
+        from unittest.mock import patch
+        rows = [[1.0, 0.0]]
+        with tempfile.TemporaryDirectory() as tmp:
+            cmd = self._prepare(tmp, rows)
+            out = os.path.join(tmp, "out")
+            with patch("qbar.plot_static.FONT_CANDIDATES", ["/no/such/font.ttf"]):
+                with self.assertRaises(SystemExit) as ctx:
+                    qbar.main(cmd + ["--vector", "svg", "--outdir", out])
+            self.assertIn("TrueType", str(ctx.exception.code))
+            self.assertFalse(os.path.exists(out))
+
+    def test_dendrogram_is_drawn_in_svg(self):
+        rows = [
+            [0.9, 0.1],
+            [0.8, 0.2],
+            [0.2, 0.8],
+            [0.1, 0.9],
+        ]
+        nonzero = sum(1 for row in rows for value in row if float(value) > 0.0)
+        with tempfile.TemporaryDirectory() as tmp:
+            cmd = self._prepare(tmp, rows)
+            out = os.path.join(tmp, "out")
+            self.assertEqual(qbar.main(cmd + [
+                "--order-mode", "global-hclust",
+                "--hclust-dist", "euclidean",
+                "--dendrogram", "top",
+                "--vector", "svg",
+                "--outdir", out,
+            ]), 0)
+            with open(os.path.join(out, "bar_K2.svg"), encoding="utf-8") as handle:
+                svg = handle.read()
+            import re
+            self.assertEqual(len(re.findall(r"<rect\b", svg)), nonzero)
+            self.assertIn("max distance", svg)
+            self.assertIn("<line ", svg)
+
+    def test_plot_vector_import_does_not_load_pil(self):
+        src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src")
+        if os.environ.get("QBAR_TEST_INSTALLED") == "1":
+            code = (
+                "import qbar.plot_vector\n"
+                "import sys\n"
+                "raise SystemExit(0 if 'PIL' not in sys.modules else 1)\n"
+            )
+        else:
+            code = (
+                "import sys\n"
+                "sys.path.insert(0, %r)\n"
+                "import qbar.plot_vector\n"
+                "raise SystemExit(0 if 'PIL' not in sys.modules else 1)\n"
+            ) % src
+        env = os.environ.copy()
+        env.pop("PYTHONPATH", None)
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env["PYTHONHASHSEED"] = "0"
+        with tempfile.TemporaryDirectory() as cwd:
+            proc = subprocess.run(
+                [sys.executable, "-c", code],
+                cwd=cwd,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
 
 
 if __name__ == "__main__":

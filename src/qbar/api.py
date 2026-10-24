@@ -531,7 +531,10 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     ``paired`` follow the same continuation. ``args.color_lock`` defaults
     to ``off``. ``on`` keeps the colour column c got at the lowest K,
     unless ``--color`` sets that column. ``args.greyscale_preview`` defaults
-    to off and writes ``panel_grey.png``.
+    to off and writes ``panel_grey.png``. ``args.vector`` defaults to
+    ``off``. ``pdf`` writes the bar PDFs as vectors, ``svg`` also writes
+    SVG and keeps those PDFs raster, and ``both`` writes both. PNG stays
+    raster. A vector file above 200000 bar rectangles writes no output file.
     """
     if args.provenance:
         started = datetime.datetime.now().astimezone().isoformat()
@@ -547,6 +550,10 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     palette_name = getattr(args, "palette", "science")
     color_lock = getattr(args, "color_lock", "off")
     greyscale = bool(getattr(args, "greyscale_preview", False))
+    vector_mode = getattr(args, "vector", "off")
+    vector_cap = getattr(args, "_vector_rect_cap", None)
+    if vector_mode not in ("off", "pdf", "svg", "both"):
+        raise SystemExit(_msg("vector_choice", language, got=vector_mode))
     if palette_name not in PALETTE_NAMES:
         raise SystemExit(_msg("palette_choice", language, name=palette_name))
     if color_lock not in ("off", "on"):
@@ -751,7 +758,35 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
             "k": k,
             "image": ancestry_image(aligned[k][order], hexes[k], height=max(bar_h, 40)),
             "legend": legend_lines(aligned[k], groups, owners[k], hexes[k]),
+            # Draw order. render() ignores this. Vector bars read it.
+            "q": aligned[k][order],
         })
+    if len(rows) == 1:
+        figures = [{
+            "png": os.path.join(args.outdir, "bar_K%d.png" % rows[0]["k"]),
+            "rows": rows,
+            "bar_h": bar_h,
+        }]
+    else:
+        figures = []
+        for row in rows:
+            figures.append({
+                "png": os.path.join(args.outdir, "bar_K%d.png" % row["k"]),
+                "rows": [row],
+                "bar_h": max(bar_h, 180),
+            })
+        figures.append({
+            "png": os.path.join(args.outdir, "panel.png"),
+            "rows": rows,
+            "bar_h": bar_h,
+        })
+    if vector_mode != "off":
+        # Count every vector file before the output directory is created.
+        from .plot_vector import guard_vector_run
+        guard_vector_run(
+            figures, spans, args.width, args.title, dendro_spec, vector_mode,
+            language=language, rect_cap=vector_cap,
+        )
     os.makedirs(args.outdir, exist_ok=True)
     linkage_paths = []
     for _name, _z in arranged["matrices"]:
@@ -767,15 +802,24 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     grey_path = None
     if len(rows) == 1:
         out = os.path.join(args.outdir, "bar_K%d.png" % rows[0]["k"])
-        render(out, rows, spans, args.width, bar_h, args.title, language=language, dendrogram=dendro_spec)
+        render(
+            out, rows, spans, args.width, bar_h, args.title,
+            language=language, dendrogram=dendro_spec, vector=vector_mode, rect_cap=vector_cap,
+        )
         print(out)
         grey_src = out
     else:
         for row in rows:
             one = os.path.join(args.outdir, "bar_K%d.png" % row["k"])
-            render(one, [row], spans, args.width, max(bar_h, 180), args.title, language=language, dendrogram=dendro_spec)
+            render(
+                one, [row], spans, args.width, max(bar_h, 180), args.title,
+                language=language, dendrogram=dendro_spec, vector=vector_mode, rect_cap=vector_cap,
+            )
         panel = os.path.join(args.outdir, "panel.png")
-        render(panel, rows, spans, args.width, bar_h, args.title, language=language, dendrogram=dendro_spec)
+        render(
+            panel, rows, spans, args.width, bar_h, args.title,
+            language=language, dendrogram=dendro_spec, vector=vector_mode, rect_cap=vector_cap,
+        )
         print(panel)
         grey_src = panel
     if greyscale:
@@ -926,14 +970,20 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         _bar = os.path.join(args.outdir, "bar_K%d.png" % rows[0]["k"])
         paths.append(_bar)
         paths.append(os.path.splitext(_bar)[0] + ".pdf")
+        if vector_mode in ("svg", "both"):
+            paths.append(os.path.splitext(_bar)[0] + ".svg")
     else:
         for _row in rows:
             _bar = os.path.join(args.outdir, "bar_K%d.png" % _row["k"])
             paths.append(_bar)
             paths.append(os.path.splitext(_bar)[0] + ".pdf")
+            if vector_mode in ("svg", "both"):
+                paths.append(os.path.splitext(_bar)[0] + ".svg")
         _panel = os.path.join(args.outdir, "panel.png")
         paths.append(_panel)
         paths.append(os.path.splitext(_panel)[0] + ".pdf")
+        if vector_mode in ("svg", "both"):
+            paths.append(os.path.splitext(_panel)[0] + ".svg")
     if grey_path is not None:
         paths.append(grey_path)
     paths.append(os.path.join(args.outdir, "order.tsv"))
