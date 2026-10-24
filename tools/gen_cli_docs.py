@@ -102,7 +102,7 @@ A `store_true` key set to true in the file stays true. The command line cannot t
 
 A float that is not finite is an error and the message names the key. That includes `.nan`, `.inf`, `-.inf`, and the string `NaN` on a float key. The same check applies to a command-line float when `--config` is used, so `config_resolved.json` is not written.
 
-When `--config` is passed and the run finishes, the output directory contains `config_resolved.json`. Keys are sorted, indent is 2, and the file ends with a newline. Each dest is the value the run used. `sources` maps each dest to `cli`, `config`, or `default`. `config_file` is the base name of the YAML file. `config_sha256` is the SHA256 of its bytes. The directory is not stored. File-valued options are base names only.
+When `--config` is passed and the run finishes, the output directory contains `config_resolved.json`. Keys are sorted, indent is 2, and the file ends with a newline. Each dest is the value the run used. `sources` maps each dest to `cli`, `config`, or `default`. `config_file` is the base name of the YAML file. `config_sha256` is the SHA256 of its bytes. The directory is not stored. File-valued options are base names only. `sites` and `basemap_image` are file-valued options. `basemap_bbox` is the four numbers, not a path.
 
 `--state` is applied after that resolution. It replaces sample order and colours. `state_override` records `order` and `colours` when both `--config` and `--state` are used. If the file sets `align_method`, the command line does not pass `--align-method`, and the state names a different method, the run uses the state method. `state_override.align_method` records the config value and the state value. A command-line `--align-method` must still match the state.
 

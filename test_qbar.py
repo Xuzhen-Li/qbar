@@ -1221,6 +1221,8 @@ class DocstringTests(unittest.TestCase):
         ``docs/factpacks/F9.md``.
         ``--config`` is documented in ``docs/cli.md`` and
         ``docs/factpacks/S7.md``.
+        ``--sites``, ``--basemap-image``, and ``--basemap-bbox`` are
+        documented in ``docs/cli.md`` and ``docs/factpacks/S6.md``.
         """
         import re
         # --select-k and --plateau-fraction are documented in docs/cli.md
@@ -1250,6 +1252,8 @@ class DocstringTests(unittest.TestCase):
         # --editor and --state are documented in docs/cli.md and
         # docs/factpacks/F9.md.
         # --config is documented in docs/cli.md and docs/factpacks/S7.md.
+        # --sites, --basemap-image, and --basemap-bbox are documented in
+        # docs/cli.md and docs/factpacks/S6.md.
         later = {
             "--provenance", "--q-format", "--ind", "--logs", "--logs-map",
             "--select-k", "--plateau-fraction",
@@ -1269,6 +1273,7 @@ class DocstringTests(unittest.TestCase):
             "--editor",
             "--state",
             "--config",
+            "--sites", "--basemap-image", "--basemap-bbox",
         }
         flags = []
         for action in qbar.build_parser()._actions:
@@ -9670,6 +9675,607 @@ class ConfigTests(unittest.TestCase):
 def json_dumps(data):
     import json
     return json.dumps(data)
+
+
+class MapPiesTests(unittest.TestCase):
+    def _ids(self, folder, names):
+        path = os.path.join(folder, "ids.txt")
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write("".join("%s\n" % name for name in names))
+        return path
+
+    def _groups(self, folder, names, labels):
+        path = os.path.join(folder, "groups.tsv")
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write("analysis_IID\tDong_Grp\n")
+            for name, label in zip(names, labels):
+                handle.write("%s\t%s\n" % (name, label))
+        return path
+
+    def _q(self, path, rows):
+        np.savetxt(path, rows, fmt="%.6f")
+        return path
+
+    def _sites(self, path, rows):
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write("site\tlatitude\tlongitude\tgroup\n")
+            for site, lat, lon, group in rows:
+                handle.write("%s\t%s\t%s\t%s\n" % (site, lat, lon, group))
+        return path
+
+    def _png_bytes(self, image):
+        import io
+        buf = io.BytesIO()
+        image.save(buf, format="PNG")
+        return buf.getvalue()
+
+    def test_defaults_and_help(self):
+        parser = qbar.build_parser()
+        self.assertEqual(_cli_flag(parser, "--id-col").default, "analysis_IID")
+        self.assertEqual(_cli_flag(parser, "--group-col").default, "Dong_Grp")
+        self.assertEqual(_cli_flag(parser, "--palette").default, "science")
+        self.assertIsNone(_cli_flag(parser, "--sites").default)
+        self.assertIsNone(_cli_flag(parser, "--basemap-image").default)
+        self.assertIsNone(_cli_flag(parser, "--basemap-bbox").default)
+        for name in ("--sites", "--basemap-image", "--basemap-bbox"):
+            help_s = _cli_flag(parser, name).help or ""
+            self.assertTrue(all(ord(ch) < 128 for ch in help_s), help_s)
+            self.assertNotIn("\u2013", help_s)
+            self.assertNotIn("\u2014", help_s)
+        self.assertIn("world file", _cli_flag(parser, "--sites").help or "")
+        self.assertIn("map_pies.png", _cli_flag(parser, "--sites").help or "")
+        zh = _cli_flag(qbar.build_parser(language="zh"), "--sites").help or ""
+        self.assertTrue(any(ord(ch) > 127 for ch in zh))
+        self.assertIn("map_pies.png", zh)
+        from qbar.config import FILE_DESTS
+        self.assertIn("sites", FILE_DESTS)
+        self.assertIn("basemap_image", FILE_DESTS)
+
+    def test_two_sites_mean_q_and_wedge_angles(self):
+        from qbar.mappies import pies
+        sites = [
+            {"site": "north", "latitude": 45.0, "longitude": 10.0, "group": "A"},
+            {"site": "south", "latitude": 46.0, "longitude": 11.0, "group": "B"},
+        ]
+        q = np.array([[0.75, 0.25], [0.25, 0.75], [0.0, 1.0]], dtype=float)
+        groups = ["A", "A", "B"]
+        colours = ["#112233", "#445566"]
+        _image, geom = pies(sites, q, groups, colours, ["C1 A", "C2 B"])
+        self.assertEqual(geom["width"], 1600)
+        self.assertEqual(geom["note"], "longitude, latitude, as given, no projection")
+        self.assertEqual(geom["colours"], ["#112233", "#445566"])
+        by_site = {pie["site"]: pie for pie in geom["pies"]}
+        north = by_site["north"]
+        south = by_site["south"]
+        self.assertEqual(north["n"], 2)
+        self.assertEqual(south["n"], 1)
+        self.assertTrue(np.allclose(north["mean_q"], [0.5, 0.5]))
+        self.assertTrue(np.allclose(south["mean_q"], [0.0, 1.0]))
+        for pie, expected in ((north, [0.5, 0.5]), (south, [0.0, 1.0])):
+            self.assertEqual(pie["wedges"][0]["start"], -90.0)
+            spans = [wedge["end"] - wedge["start"] for wedge in pie["wedges"]]
+            total = sum(pie["mean_q"])
+            self.assertAlmostEqual(sum(spans), 360.0)
+            for span, value in zip(spans, expected):
+                self.assertAlmostEqual(span, 360.0 * value)
+                self.assertAlmostEqual(span, 360.0 * value / total)
+            self.assertEqual(
+                [wedge["colour"] for wedge in pie["wedges"]],
+                colours,
+            )
+        off = np.array([[0.50, 0.52]], dtype=float)
+        _image, off_geom = pies(
+            [{"site": "only", "latitude": 1.0, "longitude": 2.0, "group": "A"}],
+            off, ["A"], colours, ["C1", "C2"],
+        )
+        spans = [wedge["end"] - wedge["start"] for wedge in off_geom["pies"][0]["wedges"]]
+        self.assertAlmostEqual(sum(spans), 360.0)
+        self.assertAlmostEqual(spans[0], 360.0 * 0.50 / 1.02)
+        self.assertAlmostEqual(spans[1], 360.0 * 0.52 / 1.02)
+        self.assertTrue(np.allclose(off_geom["pies"][0]["mean_q"], [0.50, 0.52]))
+
+    def test_clockwise_wedge_uses_the_first_colour_at_three_oclock(self):
+        from qbar.mappies import pies
+        _image, geom = pies(
+            [{"site": "only", "latitude": 0.0, "longitude": 0.0, "group": "A"}],
+            np.array([[0.5, 0.5]], dtype=float),
+            ["A"],
+            ["#ff0000", "#0000ff"],
+            ["C1", "C2"],
+        )
+        pie = geom["pies"][0]
+        self.assertAlmostEqual(pie["radius"], 40.0)
+        image_px = _image.load()
+        right = (
+            int(round(pie["x"] + pie["radius"] * 0.45)),
+            int(round(pie["y"])),
+        )
+        left = (
+            int(round(pie["x"] - pie["radius"] * 0.45)),
+            int(round(pie["y"])),
+        )
+        right_px = image_px[right]
+        left_px = image_px[left]
+        self.assertLess(abs(right_px[0] - 255) + right_px[1] + right_px[2], 40)
+        self.assertLess(left_px[0] + left_px[1] + abs(left_px[2] - 255), 40)
+
+    def test_radius_sqrt_rule(self):
+        from qbar.mappies import pies
+        sites = [
+            {"site": "small", "latitude": 0.0, "longitude": 0.0, "group": "A"},
+            {"site": "large", "latitude": 5.0, "longitude": 5.0, "group": "B"},
+        ]
+        q = np.vstack([
+            np.array([[1.0, 0.0]]),
+            np.tile(np.array([[0.0, 1.0]]), (4, 1)),
+        ])
+        groups = ["A"] + ["B"] * 4
+        _image, geom = pies(sites, q, groups, ["#111111", "#222222"])
+        radii = {pie["site"]: pie["radius"] for pie in geom["pies"]}
+        self.assertAlmostEqual(radii["large"], 40.0)
+        self.assertAlmostEqual(radii["small"], 20.0)
+        q_big = np.vstack([
+            np.array([[1.0, 0.0]]),
+            np.tile(np.array([[0.0, 1.0]]), (100, 1)),
+        ])
+        groups_big = ["A"] + ["B"] * 100
+        _image, geom_big = pies(sites, q_big, groups_big, ["#111111", "#222222"])
+        radii_big = {pie["site"]: pie["radius"] for pie in geom_big["pies"]}
+        self.assertAlmostEqual(radii_big["large"], 40.0)
+        self.assertAlmostEqual(40.0 * (1.0 / 100.0) ** 0.5, 4.0)
+        self.assertAlmostEqual(radii_big["small"], 6.0)
+
+    def test_same_coordinate_offset_and_warning(self):
+        import io
+        from contextlib import redirect_stderr
+        from qbar.mappies import pies
+        sites = [
+            {"site": "north", "latitude": 12.0, "longitude": 3.0, "group": "A"},
+            {"site": "south", "latitude": 12.0, "longitude": 3.0, "group": "B"},
+            {"site": "east", "latitude": 20.0, "longitude": 4.0, "group": "C"},
+        ]
+        q = np.eye(3)
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            _image, geom = pies(sites, q, ["A", "B", "C"], ["#111111", "#222222", "#333333"])
+        warning = buf.getvalue()
+        self.assertIn("north", warning)
+        self.assertIn("south", warning)
+        self.assertNotIn("east", warning)
+        by_site = {pie["site"]: pie for pie in geom["pies"]}
+        self.assertAlmostEqual(by_site["south"]["x"] - by_site["north"]["x"], 4.0)
+        self.assertAlmostEqual(by_site["south"]["y"], by_site["north"]["y"])
+        self.assertAlmostEqual(by_site["north"]["shift_px"], 0.0)
+        self.assertAlmostEqual(by_site["south"]["shift_px"], 4.0)
+        self.assertAlmostEqual(by_site["east"]["shift_px"], 0.0)
+
+    def test_empty_group_skip_and_all_skipped(self):
+        import io
+        from contextlib import redirect_stderr
+        from qbar.messages import text
+        with tempfile.TemporaryDirectory() as tmp:
+            ids = self._ids(tmp, ["a", "b", "c"])
+            groups = self._groups(tmp, ["a", "b", "c"], ["A", "A", "B"])
+            qpath = self._q(os.path.join(tmp, "t.2.Q"), [[0.75, 0.25], [0.25, 0.75], [0.0, 1.0]])
+            sites = self._sites(os.path.join(tmp, "sites.tsv"), [
+                ("north", "45", "10", "A"),
+                ("ghost", "40", "12", "Z"),
+            ])
+            out = os.path.join(tmp, "out")
+            buf = io.StringIO()
+            with redirect_stderr(buf):
+                qbar.main([
+                    "--q", qpath, "--ids", ids, "--groups", groups,
+                    "--sites", sites, "--outdir", out,
+                ])
+            warning = buf.getvalue()
+            self.assertIn("ghost", warning)
+            self.assertIn("Z", warning)
+            with open(os.path.join(out, "map_pies.tsv"), encoding="utf-8") as handle:
+                body = handle.read().splitlines()
+            self.assertEqual(len(body), 2)
+            self.assertNotIn("ghost", body[1])
+            self.assertIn("north", body[1])
+            skipped = self._sites(os.path.join(tmp, "none.tsv"), [
+                ("ghost", "40", "12", "Z"),
+            ])
+            bad = os.path.join(tmp, "bad")
+            err = io.StringIO()
+            with self.assertRaises(SystemExit) as caught:
+                with redirect_stderr(err):
+                    qbar.main([
+                        "--q", qpath, "--ids", ids, "--groups", groups,
+                        "--sites", skipped, "--outdir", bad,
+                    ])
+            self.assertEqual(caught.exception.code, text("sites_all_skipped", "en"))
+            self.assertIn("ghost", err.getvalue())
+            self.assertFalse(os.path.isdir(bad))
+            err_zh = io.StringIO()
+            with self.assertRaises(SystemExit) as caught_zh:
+                with redirect_stderr(err_zh):
+                    qbar.main([
+                        "--q", qpath, "--ids", ids, "--groups", groups,
+                        "--sites", skipped, "--language", "zh",
+                        "--outdir", os.path.join(tmp, "badzh"),
+                    ])
+            self.assertEqual(caught_zh.exception.code, text("sites_all_skipped", "zh"))
+            self.assertIn("ghost", err_zh.getvalue())
+            self.assertIn("没有样本", err_zh.getvalue())
+
+    def test_duplicate_group_and_site_and_bad_latitude(self):
+        from qbar.messages import text
+        with tempfile.TemporaryDirectory() as tmp:
+            ids = self._ids(tmp, ["a"])
+            qpath = self._q(os.path.join(tmp, "t.2.Q"), [[0.4, 0.6]])
+            dup = self._sites(os.path.join(tmp, "dup.tsv"), [
+                ("north", "10", "20", "A"),
+                ("south", "11", "21", "A"),
+            ])
+            out = os.path.join(tmp, "out")
+            with self.assertRaises(SystemExit) as caught:
+                qbar.main(["--q", qpath, "--ids", ids, "--sites", dup, "--outdir", out])
+            message = str(caught.exception.code)
+            self.assertIn("north", message)
+            self.assertIn("south", message)
+            self.assertIn("A", message)
+            self.assertFalse(os.path.isdir(out))
+            same = self._sites(os.path.join(tmp, "same.tsv"), [
+                ("north", "10", "20", "A"),
+                ("north", "11", "21", "B"),
+            ])
+            with self.assertRaises(SystemExit) as caught_name:
+                qbar.main(["--q", qpath, "--ids", ids, "--sites", same, "--outdir", os.path.join(tmp, "out2")])
+            self.assertIn("north", str(caught_name.exception.code))
+            self.assertIn(text("sites_duplicate_name", "en", site="north"), str(caught_name.exception.code))
+            bad = self._sites(os.path.join(tmp, "bad.tsv"), [
+                ("north", "95", "20", "A"),
+            ])
+            with self.assertRaises(SystemExit) as caught_lat:
+                qbar.main(["--q", qpath, "--ids", ids, "--sites", bad, "--outdir", os.path.join(tmp, "out3")])
+            lat_message = str(caught_lat.exception.code)
+            self.assertIn("north", lat_message)
+            self.assertIn("95", lat_message)
+            odd = self._sites(os.path.join(tmp, "nan.tsv"), [
+                ("south", "nan", "10", "A"),
+            ])
+            with self.assertRaises(SystemExit) as caught_nan:
+                qbar.main(["--q", qpath, "--ids", ids, "--sites", odd, "--outdir", os.path.join(tmp, "out4")])
+            self.assertIn("south", str(caught_nan.exception.code))
+            self.assertIn("nan", str(caught_nan.exception.code))
+            far = self._sites(os.path.join(tmp, "lon.tsv"), [
+                ("east", "10", "181", "A"),
+            ])
+            with self.assertRaises(SystemExit) as caught_lon:
+                qbar.main(["--q", qpath, "--ids", ids, "--sites", far, "--outdir", os.path.join(tmp, "out5")])
+            self.assertIn("east", str(caught_lon.exception.code))
+            self.assertIn("181", str(caught_lon.exception.code))
+            self.assertFalse(os.path.isdir(os.path.join(tmp, "out5")))
+
+    def test_basemap_pair_missing_and_outside(self):
+        import io
+        from contextlib import redirect_stderr
+        from qbar.messages import text
+        with tempfile.TemporaryDirectory() as tmp:
+            ids = self._ids(tmp, ["a", "b"])
+            groups = self._groups(tmp, ["a", "b"], ["A", "B"])
+            qpath = self._q(os.path.join(tmp, "t.2.Q"), [[0.8, 0.2], [0.2, 0.8]])
+            sites = self._sites(os.path.join(tmp, "sites.tsv"), [
+                ("north", "0", "0", "A"),
+                ("away", "40", "50", "B"),
+            ])
+            image = os.path.join(tmp, "base.png")
+            Image.new("RGB", (12, 8), (20, 40, 60)).save(image)
+            missing = os.path.join(tmp, "missing.png")
+            bogus = ["--q", qpath, "--ids", ids, "--outdir", os.path.join(tmp, "nope")]
+            with self.assertRaises(SystemExit) as image_only:
+                qbar.main(bogus + ["--basemap-image", image])
+            self.assertEqual(image_only.exception.code, text("basemap_pair", "en"))
+            with self.assertRaises(SystemExit) as box_only:
+                qbar.main(bogus + ["--basemap-bbox", "0,0,1,1"])
+            self.assertEqual(box_only.exception.code, text("basemap_pair", "en"))
+            with self.assertRaises(SystemExit) as needs:
+                qbar.main(bogus + ["--basemap-image", image, "--basemap-bbox", "0,0,1,1"])
+            self.assertEqual(needs.exception.code, text("basemap_needs_sites", "en"))
+            self.assertFalse(os.path.isdir(os.path.join(tmp, "nope")))
+            with self.assertRaises(SystemExit) as gone:
+                qbar.main([
+                    "--q", qpath, "--ids", ids, "--groups", groups, "--sites", sites,
+                    "--basemap-image", missing, "--basemap-bbox", "-10,-10,10,10",
+                    "--outdir", os.path.join(tmp, "miss"),
+                ])
+            self.assertIn(missing, str(gone.exception.code))
+            self.assertFalse(os.path.isdir(os.path.join(tmp, "miss")))
+            junk = os.path.join(tmp, "junk.png")
+            with open(junk, "w", encoding="utf-8") as handle:
+                handle.write("not a png")
+            with self.assertRaises(SystemExit) as unread:
+                qbar.main([
+                    "--q", qpath, "--ids", ids, "--groups", groups, "--sites", sites,
+                    "--basemap-image", junk, "--basemap-bbox", "-10,-10,10,10",
+                    "--outdir", os.path.join(tmp, "junk"),
+                ])
+            self.assertIn("could not be read", str(unread.exception.code))
+            self.assertFalse(os.path.isdir(os.path.join(tmp, "junk")))
+            out = os.path.join(tmp, "out")
+            buf = io.StringIO()
+            with redirect_stderr(buf):
+                qbar.main([
+                    "--q", qpath, "--ids", ids, "--groups", groups, "--sites", sites,
+                    "--basemap-image", image, "--basemap-bbox", "-10,-10,10,10",
+                    "--outdir", out,
+                ])
+            warning = buf.getvalue()
+            self.assertIn("away", warning)
+            self.assertNotIn("north", warning)
+            self.assertTrue(os.path.isfile(os.path.join(out, "map_pies.png")))
+            with Image.open(os.path.join(out, "map_pies.png")) as drawn:
+                self.assertEqual(drawn.size[0], 1600)
+
+    def test_tsv_sort_k_and_default_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ids = self._ids(tmp, ["a", "b", "c"])
+            groups = self._groups(tmp, ["a", "b", "c"], ["A", "A", "B"])
+            q2 = self._q(os.path.join(tmp, "t.2.Q"), [[0.75, 0.25], [0.25, 0.75], [0.0, 1.0]])
+            q3 = self._q(os.path.join(tmp, "t.3.Q"), [
+                [0.2, 0.3, 0.5],
+                [0.2, 0.3, 0.5],
+                [0.5, 0.5, 0.0],
+            ])
+            sites = self._sites(os.path.join(tmp, "sites.tsv"), [
+                ("north", "45", "10", "A"),
+                ("south", "46", "11", "B"),
+            ])
+            plain = os.path.join(tmp, "plain")
+            qbar.main(["--q", q2, "--ids", ids, "--groups", groups, "--outdir", plain])
+            self.assertFalse(os.path.isfile(os.path.join(plain, "map_pies.png")))
+            self.assertFalse(os.path.isfile(os.path.join(plain, "map_pies.tsv")))
+            out = os.path.join(tmp, "out")
+            result = qbar.api.run(qbar.build_parser().parse_args([
+                "--q", q2, "--ids", ids, "--groups", groups, "--sites", sites, "--outdir", out,
+            ]), [
+                "--q", q2, "--ids", ids, "--groups", groups, "--sites", sites, "--outdir", out,
+            ])
+            names = [os.path.basename(path) for path in result.paths]
+            self.assertIn("map_pies.png", names)
+            self.assertIn("map_pies.tsv", names)
+            with open(os.path.join(out, "map_pies.tsv"), encoding="utf-8") as handle:
+                text = handle.read()
+            self.assertTrue(text.endswith("\n"))
+            lines = text.splitlines()
+            self.assertEqual(lines[0], "site\tlatitude\tlongitude\tgroup\tn\tK\tC1\tC2")
+            self.assertEqual(lines[1], "north\t45.000000\t10.000000\tA\t2\t2\t0.500000\t0.500000")
+            self.assertEqual(lines[2], "south\t46.000000\t11.000000\tB\t1\t2\t0.000000\t1.000000")
+            bom = os.path.join(tmp, "bom.tsv")
+            with open(bom, "w", encoding="utf-8-sig", newline="\n") as handle:
+                handle.write("site\tlatitude\tlongitude\tgroup\n")
+                handle.write("north\t45\t10\tA\n")
+                handle.write("south\t46\t11\tB\n")
+            bom_out = os.path.join(tmp, "bom-out")
+            qbar.main([
+                "--q", q2, "--ids", ids, "--groups", groups, "--sites", bom, "--outdir", bom_out,
+            ])
+            with open(os.path.join(bom_out, "map_pies.tsv"), encoding="utf-8") as handle:
+                self.assertEqual(handle.readline().startswith("site\t"), True)
+            k2 = os.path.join(tmp, "k2")
+            qbar.main([
+                "--q", q2, q3, "--ids", ids, "--groups", groups,
+                "--sites", sites, "--sort-k", "2", "--outdir", k2,
+            ])
+            with open(os.path.join(k2, "map_pies.tsv"), encoding="utf-8") as handle:
+                k2_lines = handle.read().splitlines()
+            self.assertIn("\t2\t", k2_lines[1])
+            self.assertTrue(k2_lines[1].endswith("0.500000\t0.500000"))
+            largest = os.path.join(tmp, "k3")
+            qbar.main([
+                "--q", q2, q3, "--ids", ids, "--groups", groups,
+                "--sites", sites, "--outdir", largest,
+            ])
+            with open(os.path.join(largest, "map_pies.tsv"), encoding="utf-8") as handle:
+                header = handle.readline().rstrip("\n")
+            self.assertEqual(header, "site\tlatitude\tlongitude\tgroup\tn\tK\tC1\tC2\tC3")
+            vector = os.path.join(tmp, "vector")
+            qbar.main([
+                "--q", q2, "--ids", ids, "--groups", groups,
+                "--sites", sites, "--vector", "both", "--outdir", vector,
+            ])
+            self.assertTrue(os.path.isfile(os.path.join(vector, "map_pies.png")))
+            self.assertFalse(os.path.isfile(os.path.join(vector, "map_pies.pdf")))
+            self.assertFalse(os.path.isfile(os.path.join(vector, "map_pies.svg")))
+            self.assertTrue(os.path.isfile(os.path.join(vector, "bar_K2.svg")))
+
+    def test_colours_match_bar_after_permutation(self):
+        from qbar.api import column_owners, legend_lines
+        from qbar.mappies import pies
+        from qbar.plot_static import TAB10_PALETTE
+        with tempfile.TemporaryDirectory() as tmp:
+            ids = self._ids(tmp, ["a", "b", "c"])
+            groups = self._groups(tmp, ["a", "b", "c"], ["A", "A", "B"])
+            q2 = self._q(os.path.join(tmp, "t.2.Q"), [[0.80, 0.20], [0.70, 0.30], [0.20, 0.80]])
+            q3_rows = [[0.10, 0.70, 0.20], [0.15, 0.65, 0.20], [0.70, 0.10, 0.20]]
+            q3 = self._q(os.path.join(tmp, "t.3.Q"), q3_rows)
+            sites = self._sites(os.path.join(tmp, "sites.tsv"), [
+                ("north", "45", "10", "A"),
+                ("south", "46", "11", "B"),
+            ])
+            argv = [
+                "--q", q2, q3, "--ids", ids, "--groups", groups, "--sites", sites,
+                "--palette", "tab10", "--outdir", os.path.join(tmp, "out"),
+            ]
+            result = qbar.api.run(qbar.build_parser().parse_args(argv), argv)
+            self.assertNotEqual(list(result.permutations[3]), [0, 1, 2])
+            self.assertEqual(list(result.colours[3]), list(TAB10_PALETTE[:3]))
+            with open(os.path.join(tmp, "out", "perm_K3.tsv"), encoding="utf-8") as handle:
+                hexes = [line.split("\t")[2] for line in handle.read().splitlines()[1:]]
+            self.assertEqual(hexes, list(result.colours[3]))
+            raw_mean = np.asarray(q3_rows, dtype=float)[:2].mean(axis=0)
+            aligned_mean = result.aligned[3][:2].mean(axis=0)
+            self.assertFalse(np.allclose(raw_mean, aligned_mean))
+            owners = column_owners(result.aligned[3], ["a", "b", "c"], ["A", "A", "B"], {})
+            legend = legend_lines(result.aligned[3], ["A", "A", "B"], owners, result.colours[3])
+            image, geom = pies(
+                [
+                    {"site": "north", "latitude": 45.0, "longitude": 10.0, "group": "A"},
+                    {"site": "south", "latitude": 46.0, "longitude": 11.0, "group": "B"},
+                ],
+                result.aligned[3],
+                ["A", "A", "B"],
+                result.colours[3],
+                legend,
+                k=3,
+            )
+            self.assertEqual(geom["colours"], list(result.colours[3]))
+            self.assertTrue(np.allclose(geom["pies"][0]["mean_q"], aligned_mean))
+            with open(os.path.join(tmp, "out", "map_pies.png"), "rb") as handle:
+                self.assertEqual(handle.read(), self._png_bytes(image))
+            painted = [
+                "--q", q2, q3, "--ids", ids, "--groups", groups, "--sites", sites,
+                "--palette", "tab10", "--color", "C1=#112233",
+                "--outdir", os.path.join(tmp, "painted"),
+            ]
+            painted_result = qbar.api.run(qbar.build_parser().parse_args(painted), painted)
+            self.assertEqual(painted_result.colours[3][0], "#112233")
+            self.assertNotEqual(painted_result.colours[3][0], TAB10_PALETTE[0])
+            with open(os.path.join(tmp, "painted", "map_pies.tsv"), encoding="utf-8") as handle:
+                row = handle.read().splitlines()[1].split("\t")
+            self.assertEqual(row[6], "%.6f" % aligned_mean[0])
+
+    def test_state_colours_match_the_bar(self):
+        import json
+        from qbar.api import column_owners, legend_lines
+        from qbar.mappies import pies
+        with tempfile.TemporaryDirectory() as tmp:
+            ids = self._ids(tmp, ["a", "b"])
+            groups = self._groups(tmp, ["a", "b"], ["A", "B"])
+            q2 = self._q(os.path.join(tmp, "t.2.Q"), [[0.8, 0.2], [0.25, 0.75]])
+            sites = self._sites(os.path.join(tmp, "sites.tsv"), [
+                ("north", "10", "20", "A"),
+                ("south", "12", "22", "B"),
+            ])
+            editor = os.path.join(tmp, "editor")
+            qbar.main(["--q", q2, "--ids", ids, "--groups", groups, "--editor", "--outdir", editor])
+            with open(os.path.join(editor, "state.json"), encoding="utf-8") as handle:
+                state = json.load(handle)
+            state["clusters"]["2"][0]["colour"] = "#112233"
+            state["clusters"]["2"][1]["colour"] = "#445566"
+            state["clusters"]["2"][0]["name"] = "Alpha"
+            state["clusters"]["2"][1]["name"] = "Beta"
+            path = os.path.join(tmp, "state.json")
+            with open(path, "w", encoding="utf-8", newline="\n") as handle:
+                json.dump(state, handle)
+                handle.write("\n")
+            argv = [
+                "--q", q2, "--ids", ids, "--groups", groups, "--sites", sites,
+                "--state", path, "--outdir", os.path.join(tmp, "replay"),
+            ]
+            result = qbar.api.run(qbar.build_parser().parse_args(argv), argv)
+            self.assertEqual(list(result.colours[2]), ["#112233", "#445566"])
+            owners = column_owners(result.aligned[2], ["a", "b"], ["A", "B"], {})
+            legend = legend_lines(
+                result.aligned[2], ["A", "B"], owners, result.colours[2], ["Alpha", "Beta"],
+            )
+            image, geom = pies(
+                [
+                    {"site": "north", "latitude": 10.0, "longitude": 20.0, "group": "A"},
+                    {"site": "south", "latitude": 12.0, "longitude": 22.0, "group": "B"},
+                ],
+                result.aligned[2],
+                ["A", "B"],
+                result.colours[2],
+                legend,
+                k=2,
+            )
+            self.assertTrue(geom["legend"][0].startswith("Alpha"))
+            self.assertEqual([wedge["colour"] for wedge in geom["pies"][0]["wedges"]], ["#112233", "#445566"])
+            with open(os.path.join(tmp, "replay", "map_pies.png"), "rb") as handle:
+                self.assertEqual(handle.read(), self._png_bytes(image))
+
+    def test_core_mask_does_not_drop_samples_from_the_mean(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ids = self._ids(tmp, ["a", "b"])
+            groups = self._groups(tmp, ["a", "b"], ["A", "A"])
+            q2 = self._q(os.path.join(tmp, "t.2.Q"), [[0.90, 0.10], [0.60, 0.40]])
+            q3 = self._q(os.path.join(tmp, "t.3.Q"), [[0.85, 0.10, 0.05], [0.55, 0.25, 0.20]])
+            sites = self._sites(os.path.join(tmp, "sites.tsv"), [("north", "10", "20", "A")])
+            out = os.path.join(tmp, "out")
+            qbar.main([
+                "--q", q2, q3, "--ids", ids, "--groups", groups, "--sites", sites,
+                "--align-mode", "core", "--align-groups", "A", "--qmax", "0.75",
+                "--sort-k", "2", "--outdir", out,
+            ])
+            with open(os.path.join(out, "map_pies.tsv"), encoding="utf-8") as handle:
+                row = handle.read().splitlines()[1].split("\t")
+            self.assertEqual(row[4], "2")
+            self.assertEqual(row[6], "0.750000")
+            self.assertEqual(row[7], "0.250000")
+
+    def test_deterministic_bytes(self):
+        from qbar.mappies import pies
+        sites = [
+            {"site": "north", "latitude": 45.0, "longitude": 10.0, "group": "A"},
+            {"site": "south", "latitude": 46.0, "longitude": 11.0, "group": "B"},
+        ]
+        q = np.array([[0.75, 0.25], [0.25, 0.75], [0.0, 1.0]], dtype=float)
+        groups = ["A", "A", "B"]
+        colours = ["#112233", "#445566"]
+        first, _geom = pies(sites, q, groups, colours, ["C1 A", "C2 B"])
+        second, _geom2 = pies(sites, q, groups, colours, ["C1 A", "C2 B"])
+        self.assertEqual(self._png_bytes(first), self._png_bytes(second))
+        with tempfile.TemporaryDirectory() as tmp:
+            ids = self._ids(tmp, ["a", "b", "c"])
+            groups_path = self._groups(tmp, ["a", "b", "c"], ["A", "A", "B"])
+            qpath = self._q(os.path.join(tmp, "t.2.Q"), q)
+            sites_path = self._sites(os.path.join(tmp, "sites.tsv"), [
+                ("north", "45", "10", "A"),
+                ("south", "46", "11", "B"),
+            ])
+            left = os.path.join(tmp, "left")
+            right = os.path.join(tmp, "right")
+            argv_left = ["--q", qpath, "--ids", ids, "--groups", groups_path, "--sites", sites_path, "--outdir", left]
+            argv_right = ["--q", qpath, "--ids", ids, "--groups", groups_path, "--sites", sites_path, "--outdir", right]
+            qbar.main(argv_left)
+            qbar.main(argv_right)
+            with open(os.path.join(left, "map_pies.png"), "rb") as handle:
+                left_bytes = handle.read()
+            with open(os.path.join(right, "map_pies.png"), "rb") as handle:
+                right_bytes = handle.read()
+            self.assertEqual(left_bytes, right_bytes)
+            with open(os.path.join(left, "map_pies.tsv"), "rb") as handle:
+                left_tsv = handle.read()
+            with open(os.path.join(right, "map_pies.tsv"), "rb") as handle:
+                right_tsv = handle.read()
+            self.assertEqual(left_tsv, right_tsv)
+
+    def test_mappies_import_does_not_load_pil(self):
+        src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src")
+        with open(os.path.join(src, "qbar", "mappies.py"), encoding="utf-8") as handle:
+            for line in handle:
+                self.assertFalse(line.startswith("import PIL"))
+                self.assertFalse(line.startswith("from PIL"))
+        if os.environ.get("QBAR_TEST_INSTALLED") == "1":
+            code = (
+                "import qbar.mappies\n"
+                "import sys\n"
+                "raise SystemExit(0 if 'PIL' not in sys.modules else 1)\n"
+            )
+        else:
+            code = (
+                "import sys\n"
+                "sys.path.insert(0, %r)\n"
+                "import qbar.mappies\n"
+                "raise SystemExit(0 if 'PIL' not in sys.modules else 1)\n"
+            ) % src
+        env = os.environ.copy()
+        env.pop("PYTHONPATH", None)
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env["PYTHONHASHSEED"] = "0"
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=tempfile.mkdtemp(),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
 
 
 if __name__ == "__main__":

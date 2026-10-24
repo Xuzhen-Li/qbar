@@ -55,6 +55,8 @@ FILE_DESTS = frozenset({
     "ids",
     "ind",
     "groups",
+    "sites",
+    "basemap_image",
     "order_file",
     "color_file",
     "logs",
