@@ -1217,6 +1217,8 @@ class DocstringTests(unittest.TestCase):
         ``docs/factpacks/S5.md``.
         ``--html`` is documented in ``docs/cli.md`` and
         ``docs/factpacks/F3.md``.
+        ``--editor`` and ``--state`` are documented in ``docs/cli.md`` and
+        ``docs/factpacks/F9.md``.
         """
         import re
         # --select-k and --plateau-fraction are documented in docs/cli.md
@@ -1243,6 +1245,8 @@ class DocstringTests(unittest.TestCase):
         # in docs/cli.md and docs/factpacks/S4.md.
         # --vector is documented in docs/cli.md and docs/factpacks/S5.md.
         # --html is documented in docs/cli.md and docs/factpacks/F3.md.
+        # --editor and --state are documented in docs/cli.md and
+        # docs/factpacks/F9.md.
         later = {
             "--provenance", "--q-format", "--ind", "--logs", "--logs-map",
             "--select-k", "--plateau-fraction",
@@ -1259,6 +1263,8 @@ class DocstringTests(unittest.TestCase):
             "--palette", "--color-lock", "--greyscale-preview",
             "--vector",
             "--html",
+            "--editor",
+            "--state",
         }
         flags = []
         for action in qbar.build_parser()._actions:
@@ -8173,6 +8179,701 @@ class HtmlPanelTests(unittest.TestCase):
                 text=True,
             )
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+
+
+def _node_bin():
+    import shutil
+    found = shutil.which("node")
+    if found:
+        return found
+    fallback = "/opt/homebrew/bin/node"
+    if os.path.isfile(fallback) and os.access(fallback, os.X_OK):
+        return fallback
+    return None
+
+
+def _swap_columns_in_state(state, k, i, j):
+    """Swap display columns i and j at one K.
+
+    The permutation entry and the cluster entry both move, and
+    alignment_overridden becomes true. This is the editor swap, written
+    here from the spec rather than copied out of the page script.
+    """
+    key = str(k)
+    perm = list(state["swaps"][key])
+    clusters = [dict(item) for item in state["clusters"][key]]
+    perm[i], perm[j] = perm[j], perm[i]
+    clusters[i], clusters[j] = clusters[j], clusters[i]
+    state["swaps"][key] = perm
+    state["clusters"][key] = clusters
+    state["alignment_overridden"] = True
+    return state
+
+
+class StateEditorTests(unittest.TestCase):
+    def _ids(self, directory, names):
+        path = os.path.join(directory, "ids.txt")
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            for name in names:
+                handle.write("%s\n" % name)
+        return path
+
+    def _groups(self, directory, names, labels):
+        path = os.path.join(directory, "groups.tsv")
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write("analysis_IID\tDong_Grp\n")
+            for name, label in zip(names, labels):
+                handle.write("%s\t%s\n" % (name, label))
+        return path
+
+    def _write_q(self, path, rows):
+        np.savetxt(path, rows, fmt="%.6f")
+        return path
+
+    def _editor_state(self, directory, q_paths, ids, groups):
+        out = os.path.join(directory, "editor-out")
+        cmd = ["--q"] + list(q_paths) + ["--ids", ids, "--outdir", out, "--editor"]
+        if groups:
+            cmd.extend(["--groups", groups])
+        qbar.main(cmd)
+        with open(os.path.join(out, "state.json"), encoding="utf-8") as handle:
+            state = json_load(handle)
+        return out, state
+
+    def test_flags_default_off(self):
+        parser = qbar.build_parser()
+        editor = _cli_flag(parser, "--editor")
+        state = _cli_flag(parser, "--state")
+        self.assertFalse(editor.default)
+        self.assertIsNone(state.default)
+        self.assertEqual(_cli_flag(parser, "--id-col").default, "analysis_IID")
+        self.assertEqual(_cli_flag(parser, "--group-col").default, "Dong_Grp")
+        self.assertEqual(_cli_flag(parser, "--palette").default, "science")
+        for flag in (editor, state):
+            help_s = flag.help or ""
+            self.assertTrue(all(ord(ch) < 128 for ch in help_s), help_s)
+            self.assertNotIn("\u2013", help_s)
+            self.assertNotIn("\u2014", help_s)
+        self.assertIn("editor.html", editor.help or "")
+        self.assertIn("state.json", state.help or "")
+        args = parser.parse_args(["--q", "x.Q", "--outdir", "o"])
+        self.assertFalse(args.editor)
+        self.assertIsNone(args.state)
+        self.assertTrue(parser.parse_args(["--q", "x.Q", "--editor", "--outdir", "o"]).editor)
+        zh = _cli_flag(qbar.build_parser(language="zh"), "--editor").help or ""
+        self.assertTrue(any(ord(ch) > 127 for ch in zh))
+        self.assertNotEqual(editor.help, zh)
+
+    def test_state_sets_order_and_two_colours(self):
+        import json
+        from qbar.io import parse_colors
+        from qbar.state import colours_tsv, order_txt
+        names = ["a", "b", "c", "d"]
+        with tempfile.TemporaryDirectory() as tmp:
+            ids = self._ids(tmp, names)
+            groups = self._groups(tmp, names, ["A", "A", "B", "B"])
+            q2 = self._write_q(os.path.join(tmp, "t.2.Q"), [
+                [0.1, 0.9],
+                [0.2, 0.8],
+                [0.7, 0.3],
+                [0.6, 0.4],
+            ])
+            _out, state = self._editor_state(tmp, [q2], ids, groups)
+            state["sample_order"] = ["b", "a", "d", "c"]
+            state["sample_groups"] = ["A", "A", "B", "B"]
+            state["group_order"] = ["A", "B"]
+            state["clusters"]["2"][0]["colour"] = "#112233"
+            state["clusters"]["2"][1]["colour"] = "#445566"
+            text = colours_tsv(state)
+            items = []
+            for line in text.splitlines():
+                parts = line.split()
+                self.assertGreaterEqual(len(parts), 2)
+                items.append(parts[0] + "=" + parts[1])
+            _group, col = parse_colors(items, None)
+            self.assertEqual(col[1], "#112233")
+            self.assertEqual(col[2], "#445566")
+            self.assertEqual(order_txt(state), "b\na\nd\nc\n")
+            state["clusters"]["2"][0]["name"] = "East"
+            path = os.path.join(tmp, "state.json")
+            with open(path, "w", encoding="utf-8", newline="\n") as handle:
+                json.dump(state, handle)
+                handle.write("\n")
+            replay = os.path.join(tmp, "replay")
+            qbar.main([
+                "--q", q2, "--ids", ids, "--groups", groups,
+                "--state", path, "--html", "--outdir", replay,
+            ])
+            with open(os.path.join(replay, "order.tsv"), encoding="utf-8") as handle:
+                got = [line.split("\t")[1] for line in handle.read().splitlines()[1:]]
+            self.assertEqual(got, ["b", "a", "d", "c"])
+            with open(os.path.join(replay, "perm_K2.tsv"), encoding="utf-8") as handle:
+                hexes = [line.split("\t")[2] for line in handle.read().splitlines()[1:]]
+            self.assertEqual(hexes, ["#112233", "#445566"])
+            with open(os.path.join(replay, "panel.html"), encoding="utf-8") as handle:
+                payload = _html_payload(handle.read())
+            self.assertTrue(payload["legend"][0][0].startswith("East "))
+            self.assertEqual(payload["column_names"][0][0], "East")
+            named = colours_tsv(state)
+            named_items = []
+            for line in named.splitlines():
+                parts = line.split()
+                named_items.append(parts[0] + "=" + parts[1])
+            named_group, named_col = parse_colors(named_items, None)
+            self.assertEqual(named_group["East"], "#112233")
+            self.assertEqual(named_col[2], "#445566")
+            from qbar.io import order_from_file
+            listed = os.path.join(tmp, "order.txt")
+            with open(listed, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(order_txt(state))
+            self.assertEqual(order_from_file(listed, names), [1, 0, 3, 2])
+
+    def test_flipped_hash_names_the_path(self):
+        import json
+        names = ["a", "b"]
+        with tempfile.TemporaryDirectory() as tmp:
+            ids = self._ids(tmp, names)
+            q2 = self._write_q(os.path.join(tmp, "t.2.Q"), [[0.2, 0.8], [0.7, 0.3]])
+            _out, state = self._editor_state(tmp, [q2], ids, None)
+            digest = state["inputs"][0]["sha256"]
+            state["inputs"][0]["sha256"] = digest[:-1] + ("0" if digest[-1] != "0" else "1")
+            path = os.path.join(tmp, "bad.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(state, handle)
+            with self.assertRaises(SystemExit) as caught:
+                qbar.main(["--q", q2, "--ids", ids, "--state", path, "--outdir", os.path.join(tmp, "out")])
+            self.assertIn(q2, str(caught.exception))
+
+    def test_unknown_iid_names_the_id(self):
+        import json
+        names = ["a", "b"]
+        with tempfile.TemporaryDirectory() as tmp:
+            ids = self._ids(tmp, names)
+            q2 = self._write_q(os.path.join(tmp, "t.2.Q"), [[0.2, 0.8], [0.7, 0.3]])
+            _out, state = self._editor_state(tmp, [q2], ids, None)
+            state["sample_order"] = list(state["sample_order"]) + ["not-in-the-file"]
+            path = os.path.join(tmp, "bad.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(state, handle)
+            with self.assertRaises(SystemExit) as caught:
+                qbar.main(["--q", q2, "--ids", ids, "--state", path, "--outdir", os.path.join(tmp, "out")])
+            self.assertIn("not-in-the-file", str(caught.exception))
+
+    def test_missing_iid_names_the_id(self):
+        import json
+        names = ["a", "b"]
+        with tempfile.TemporaryDirectory() as tmp:
+            ids = self._ids(tmp, names)
+            q2 = self._write_q(os.path.join(tmp, "t.2.Q"), [[0.2, 0.8], [0.7, 0.3]])
+            _out, state = self._editor_state(tmp, [q2], ids, None)
+            state["sample_order"] = [state["sample_order"][0]]
+            state["sample_groups"] = [state["sample_groups"][0]]
+            missing = names[1] if state["sample_order"][0] == names[0] else names[0]
+            path = os.path.join(tmp, "bad.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(state, handle)
+            with self.assertRaises(SystemExit) as caught:
+                qbar.main(["--q", q2, "--ids", ids, "--state", path, "--outdir", os.path.join(tmp, "out")])
+            self.assertIn(missing, str(caught.exception))
+
+    def test_bad_schema_version(self):
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            ids = self._ids(tmp, ["a"])
+            q2 = self._write_q(os.path.join(tmp, "t.2.Q"), [[0.4, 0.6]])
+            path = os.path.join(tmp, "bad.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump({"schema": "qbar-state", "schema_version": 2}, handle)
+            with self.assertRaises(SystemExit) as caught:
+                qbar.main(["--q", q2, "--ids", ids, "--state", path, "--outdir", os.path.join(tmp, "out")])
+            self.assertIn("schema_version must be 1, got 2", str(caught.exception))
+
+    def test_k_and_align_method_name_both_values(self):
+        import json
+        names = ["a", "b"]
+        with tempfile.TemporaryDirectory() as tmp:
+            ids = self._ids(tmp, names)
+            q2 = self._write_q(os.path.join(tmp, "t.2.Q"), [[0.2, 0.8], [0.7, 0.3]])
+            _out, state = self._editor_state(tmp, [q2], ids, None)
+            bad_k = json.loads(json.dumps(state))
+            bad_k["k"] = [9]
+            path = os.path.join(tmp, "k.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(bad_k, handle)
+            with self.assertRaises(SystemExit) as caught:
+                qbar.main(["--q", q2, "--ids", ids, "--state", path, "--outdir", os.path.join(tmp, "k-out")])
+            text = str(caught.exception)
+            self.assertIn("9", text)
+            self.assertIn("2", text)
+            bad_method = json.loads(json.dumps(state))
+            bad_method["align_method"] = "hungarian"
+            path = os.path.join(tmp, "method.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(bad_method, handle)
+            with self.assertRaises(SystemExit) as caught:
+                qbar.main(["--q", q2, "--ids", ids, "--state", path, "--outdir", os.path.join(tmp, "m-out")])
+            text = str(caught.exception)
+            self.assertIn("hungarian", text)
+            self.assertIn("greedy", text)
+
+    def test_swap_exchanges_perm_columns(self):
+        import json
+        names = ["a", "b", "c", "d"]
+        with tempfile.TemporaryDirectory() as tmp:
+            ids = self._ids(tmp, names)
+            groups = self._groups(tmp, names, ["A", "A", "B", "B"])
+            q2 = self._write_q(os.path.join(tmp, "t.2.Q"), [
+                [0.9, 0.1],
+                [0.8, 0.2],
+                [0.2, 0.8],
+                [0.1, 0.9],
+            ])
+            q3 = self._write_q(os.path.join(tmp, "t.3.Q"), [
+                [0.8, 0.1, 0.1],
+                [0.7, 0.2, 0.1],
+                [0.1, 0.2, 0.7],
+                [0.1, 0.1, 0.8],
+            ])
+            plain, state = self._editor_state(tmp, [q2, q3], ids, groups)
+            _swap_columns_in_state(state, 2, 0, 1)
+            path = os.path.join(tmp, "swapped.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(state, handle)
+            replay = os.path.join(tmp, "replay")
+            qbar.main([
+                "--q", q2, q3, "--ids", ids, "--groups", groups,
+                "--state", path, "--outdir", replay,
+            ])
+            with open(os.path.join(plain, "perm_K2.tsv"), encoding="utf-8") as handle:
+                before = handle.read().splitlines()
+            with open(os.path.join(replay, "perm_K2.tsv"), encoding="utf-8") as handle:
+                after = handle.read().splitlines()
+            self.assertEqual(before[0], after[0])
+            body = before[1:]
+            expected = []
+            swapped = [body[1], body[0]]
+            for index, row in enumerate(swapped, start=1):
+                parts = row.split("\t")
+                parts[0] = "C%d" % index
+                expected.append("\t".join(parts))
+            self.assertEqual(after[1:], expected)
+            self.assertNotEqual(body, expected)
+            with open(os.path.join(plain, "perm_K3.tsv"), encoding="utf-8") as handle:
+                k3_before = handle.read()
+            with open(os.path.join(replay, "perm_K3.tsv"), encoding="utf-8") as handle:
+                k3_after = handle.read()
+            self.assertEqual(k3_before, k3_after)
+            with open(os.path.join(plain, "order.tsv"), encoding="utf-8") as handle:
+                order_before = handle.read()
+            with open(os.path.join(replay, "order.tsv"), encoding="utf-8") as handle:
+                order_after = handle.read()
+            self.assertEqual(order_before, order_after)
+
+    def test_bad_colour_uses_the_colour_message(self):
+        import json
+        names = ["a", "b"]
+        with tempfile.TemporaryDirectory() as tmp:
+            ids = self._ids(tmp, names)
+            q2 = self._write_q(os.path.join(tmp, "t.2.Q"), [[0.2, 0.8], [0.7, 0.3]])
+            _out, state = self._editor_state(tmp, [q2], ids, None)
+            state["clusters"]["2"][0]["colour"] = "#12gg33"
+            path = os.path.join(tmp, "bad.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(state, handle)
+            with self.assertRaises(SystemExit) as caught:
+                qbar.main([
+                    "--q", q2, "--ids", ids, "--state", path,
+                    "--outdir", os.path.join(tmp, "out"),
+                ])
+            message = str(caught.exception)
+            self.assertIn("#rrggbb", message)
+            self.assertIn("#12gg33", message)
+
+    def test_color_flag_rejects_non_hex(self):
+        names = ["a", "b"]
+        with tempfile.TemporaryDirectory() as tmp:
+            ids = self._ids(tmp, names)
+            q2 = self._write_q(os.path.join(tmp, "t.2.Q"), [[0.2, 0.8], [0.7, 0.3]])
+            with self.assertRaises(SystemExit) as caught:
+                qbar.main([
+                    "--q", q2, "--ids", ids, "--color", "C1=#12gg33",
+                    "--outdir", os.path.join(tmp, "out"),
+                ])
+            message = str(caught.exception)
+            self.assertIn("#rrggbb", message)
+            self.assertIn("#12gg33", message)
+
+    def test_k3_swap_scores_match_displayed_columns(self):
+        import json
+        from qbar.align import col_pearson
+        names = ["a", "b", "c", "d"]
+        with tempfile.TemporaryDirectory() as tmp:
+            ids = self._ids(tmp, names)
+            q2 = self._write_q(os.path.join(tmp, "t.2.Q"), [
+                [1, 0],
+                [1, 0],
+                [0, 1],
+                [0, 1],
+            ])
+            q3 = self._write_q(os.path.join(tmp, "t.3.Q"), [
+                [1, 0, 0],
+                [1, 0, 0],
+                [0, 1, 0],
+                [0, 1, 0],
+            ])
+            plain = os.path.join(tmp, "plain")
+            qbar.main([
+                "--q", q2, q3, "--ids", ids, "--align-report", "--outdir", plain,
+            ])
+            _editor, state = self._editor_state(tmp, [q2, q3], ids, None)
+            _swap_columns_in_state(state, 3, 0, 1)
+            path = os.path.join(tmp, "swapped.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(state, handle)
+            replay = os.path.join(tmp, "replay")
+            qbar.main([
+                "--q", q2, q3, "--ids", ids, "--state", path,
+                "--align-report", "--outdir", replay,
+            ])
+            mats = {}
+            for k, src in ((2, q2), (3, q3)):
+                raw = np.loadtxt(src)
+                with open(os.path.join(replay, "perm_K%d.tsv" % k), encoding="utf-8") as handle:
+                    rows = handle.read().splitlines()[1:]
+                order = [int(line.split("\t")[1]) - 1 for line in rows]
+                mats[k] = raw[:, order]
+
+            def report_rows(directory):
+                found = []
+                with open(os.path.join(directory, "align_report.tsv"), encoding="utf-8") as handle:
+                    lines = handle.read().splitlines()
+                header = lines[0].split("\t")
+                for line in lines[1:]:
+                    item = dict(zip(header, line.split("\t")))
+                    if item["K_to"] == "3" and item["matched_from"] != "new":
+                        found.append(item)
+                return found
+
+            plain_rows = report_rows(plain)
+            swapped_rows = report_rows(replay)
+            self.assertGreaterEqual(len(swapped_rows), 1)
+            self.assertEqual(len(plain_rows), len(swapped_rows))
+            for row in swapped_rows:
+                column = int(row["column"][1:]) - 1
+                expected = col_pearson(mats[2][:, column], mats[3][:, column])
+                shown = "%.3f" % expected
+                self.assertEqual(row["similarity"], shown)
+                self.assertEqual(row["pearson"], shown)
+                self.assertEqual(
+                    (float(row["similarity"]) > 0) - (float(row["similarity"]) < 0),
+                    (float(row["pearson"]) > 0) - (float(row["pearson"]) < 0),
+                )
+            self.assertNotEqual(
+                [row["similarity"] for row in plain_rows],
+                [row["similarity"] for row in swapped_rows],
+            )
+
+    def test_k3_swap_moves_unmatched_column_to_c1(self):
+        import json
+        names = ["a", "b", "c", "d"]
+        with tempfile.TemporaryDirectory() as tmp:
+            ids = self._ids(tmp, names)
+            q2 = self._write_q(os.path.join(tmp, "t.2.Q"), [
+                [1, 0],
+                [1, 0],
+                [0, 1],
+                [0, 1],
+            ])
+            q3 = self._write_q(os.path.join(tmp, "t.3.Q"), [
+                [1, 0, 0],
+                [1, 0, 0],
+                [0, 1, 0],
+                [0, 1, 0],
+            ])
+            _editor, state = self._editor_state(tmp, [q2, q3], ids, None)
+            _swap_columns_in_state(state, 3, 0, 2)
+            path = os.path.join(tmp, "swapped.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(state, handle)
+            replay = os.path.join(tmp, "replay")
+            qbar.main([
+                "--q", q2, q3, "--ids", ids, "--state", path,
+                "--align-report", "--outdir", replay,
+            ])
+            with open(os.path.join(replay, "align_report.tsv"), encoding="utf-8") as handle:
+                lines = handle.read().splitlines()
+            header = lines[0].split("\t")
+            rows = []
+            for line in lines[1:]:
+                item = dict(zip(header, line.split("\t")))
+                if item["K_to"] == "3":
+                    rows.append(item)
+            by_column = {item["column"]: item for item in rows}
+            self.assertEqual(by_column["C1"]["matched_from"], "new")
+            self.assertEqual(by_column["C1"]["similarity"], "NA")
+            self.assertEqual(by_column["C1"]["pearson"], "NA")
+            self.assertEqual(by_column["C2"]["matched_from"], "C2")
+            self.assertEqual(by_column["C2"]["similarity"], "1.000")
+            self.assertEqual(by_column["C2"]["pearson"], "1.000")
+            self.assertEqual(by_column["C3"]["matched_from"], "C1")
+            self.assertEqual(by_column["C3"]["similarity"], "1.000")
+            self.assertEqual(by_column["C3"]["pearson"], "1.000")
+            with open(os.path.join(replay, "align.tsv"), encoding="utf-8") as handle:
+                align_lines = handle.read().splitlines()
+            k3 = [line for line in align_lines if line.startswith("3\t")]
+            self.assertEqual(k3, ["3\t4\tNA 1.000 1.000"])
+
+    def test_python_apply_swaps_one_k(self):
+        from qbar.state import apply_state
+        matrix = np.array([[0.2, 0.8], [0.9, 0.1]], dtype=float)
+        state = {
+            "schema": "qbar-state",
+            "schema_version": 1,
+            "k": [2],
+            "align_method": "greedy",
+            "sample_order": ["a", "b"],
+            "group_order": ["A"],
+            "sample_groups": ["A", "A"],
+            "swaps": {"2": [0, 1]},
+            "clusters": {"2": [
+                {"name": "C1", "colour": "#111111"},
+                {"name": "C2", "colour": "#222222"},
+            ]},
+            "alignment_overridden": False,
+        }
+        edited = _swap_columns_in_state(state, 2, 0, 1)
+        self.assertEqual(edited["swaps"]["2"], [1, 0])
+        self.assertEqual(edited["clusters"]["2"][0]["name"], "C2")
+        self.assertTrue(edited["alignment_overridden"])
+        out = apply_state({
+            "iids": ["a", "b"],
+            "groups": ["A", "A"],
+            "aligned": {2: matrix.copy()},
+            "perm": {2: [0, 1]},
+            "hexes": {2: ["#aaaaaa", "#bbbbbb"]},
+            "order": [0, 1],
+            "align_method": "greedy",
+            "language": "en",
+        }, edited)
+        self.assertTrue(np.allclose(out["aligned"][2][:, 0], matrix[:, 1]))
+        self.assertTrue(np.allclose(out["aligned"][2][:, 1], matrix[:, 0]))
+        self.assertEqual(out["perm"][2], [1, 0])
+        self.assertEqual(out["hexes"][2], ["#222222", "#111111"])
+        self.assertEqual(out["names"][2], ["C2", "C1"])
+        self.assertEqual(out["order"], [0, 1])
+
+    def test_state_with_color_or_order_file_errors(self):
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            ids = self._ids(tmp, ["a"])
+            q2 = self._write_q(os.path.join(tmp, "t.2.Q"), [[0.4, 0.6]])
+            path = os.path.join(tmp, "state.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump({"schema": "qbar-state", "schema_version": 1}, handle)
+            out = os.path.join(tmp, "out")
+            with self.assertRaises(SystemExit) as caught:
+                qbar.main([
+                    "--q", q2, "--ids", ids, "--state", path,
+                    "--color", "C1=#112233", "--outdir", out,
+                ])
+            self.assertIn("--color", str(caught.exception))
+            color_file = os.path.join(tmp, "colours.tsv")
+            with open(color_file, "w", encoding="utf-8") as handle:
+                handle.write("C1\t#112233\n")
+            with self.assertRaises(SystemExit) as caught:
+                qbar.main([
+                    "--q", q2, "--ids", ids, "--state", path,
+                    "--color-file", color_file, "--outdir", out,
+                ])
+            self.assertIn("--color-file", str(caught.exception))
+            order_file = os.path.join(tmp, "order.txt")
+            with open(order_file, "w", encoding="utf-8") as handle:
+                handle.write("a\n")
+            with self.assertRaises(SystemExit) as caught:
+                qbar.main([
+                    "--q", q2, "--ids", ids, "--state", path,
+                    "--order-file", order_file, "--outdir", out,
+                ])
+            self.assertIn("--order-file", str(caught.exception))
+
+    def test_editor_round_trip_matches_except_args_and_editor_files(self):
+        import json
+        names = ["a", "b", "c"]
+        with tempfile.TemporaryDirectory() as tmp:
+            ids = self._ids(tmp, names)
+            groups = self._groups(tmp, names, ["A", "A", "B"])
+            q2 = self._write_q(os.path.join(tmp, "t.2.Q"), [
+                [0.2, 0.8],
+                [0.3, 0.7],
+                [0.9, 0.1],
+            ])
+            q3 = self._write_q(os.path.join(tmp, "t.3.Q"), [
+                [0.2, 0.1, 0.7],
+                [0.2, 0.2, 0.6],
+                [0.8, 0.1, 0.1],
+            ])
+            first = os.path.join(tmp, "first")
+            qbar.main([
+                "--q", q2, q3, "--ids", ids, "--groups", groups,
+                "--editor", "--outdir", first,
+            ])
+            html_path = os.path.join(first, "editor.html")
+            with open(html_path, encoding="utf-8") as handle:
+                html = handle.read()
+            _assert_html_offline(self, html)
+            embedded = _html_payload_id(html, "qbar-state")
+            with open(os.path.join(first, "state.json"), encoding="utf-8") as handle:
+                written = json.load(handle)
+            self.assertEqual(embedded, written)
+            replay_path = os.path.join(tmp, "replay.json")
+            with open(replay_path, "w", encoding="utf-8", newline="\n") as handle:
+                json.dump(embedded, handle)
+                handle.write("\n")
+            second = os.path.join(tmp, "second")
+            qbar.main([
+                "--q", q2, q3, "--ids", ids, "--groups", groups,
+                "--state", replay_path, "--outdir", second,
+            ])
+            self.assertFalse(os.path.exists(os.path.join(second, "editor.html")))
+            self.assertFalse(os.path.exists(os.path.join(second, "state.json")))
+            skip = {"args.txt", "editor.html", "state.json"}
+            left = set(os.listdir(first)) - skip
+            right = set(os.listdir(second)) - skip
+            self.assertEqual(left, right)
+            for name in sorted(left):
+                with open(os.path.join(first, name), "rb") as handle:
+                    before = handle.read()
+                with open(os.path.join(second, name), "rb") as handle:
+                    after = handle.read()
+                if name.lower().endswith(".pdf"):
+                    self.assertEqual(
+                        _pdf_without_dates(os.path.join(first, name)),
+                        _pdf_without_dates(os.path.join(second, name)),
+                        name,
+                    )
+                else:
+                    self.assertEqual(before, after, name)
+
+    def test_state_records_base_names_only(self):
+        import json
+        names = ["a", "b"]
+        with tempfile.TemporaryDirectory() as tmp:
+            batch = os.path.join(tmp, "batch")
+            os.makedirs(batch)
+            ids = self._ids(batch, names)
+            groups = self._groups(batch, names, ["A", "B"])
+            q2 = self._write_q(os.path.join(batch, "t.2.Q"), [[0.2, 0.8], [0.6, 0.4]])
+            out, state = self._editor_state(tmp, [q2], ids, groups)
+            for item in state["inputs"]:
+                self.assertNotIn(os.sep, item["name"])
+                if os.altsep:
+                    self.assertNotIn(os.altsep, item["name"])
+            with open(os.path.join(out, "state.json"), encoding="utf-8") as handle:
+                raw = handle.read()
+            with open(os.path.join(out, "editor.html"), encoding="utf-8") as handle:
+                html = handle.read()
+            embedded = _html_payload_id(html, "qbar-state")
+            for item in embedded["inputs"]:
+                self.assertNotIn(os.sep, item["name"])
+            self.assertNotIn(os.path.abspath(batch), raw)
+            self.assertNotIn(os.path.abspath(batch), html)
+            self.assertEqual(
+                sorted(item["name"] for item in state["inputs"]),
+                ["groups.tsv", "ids.txt", "t.2.Q"],
+            )
+            self.assertTrue(json.dumps(state))
+
+    def test_default_writes_no_editor_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ids = self._ids(tmp, ["a", "b"])
+            q2 = self._write_q(os.path.join(tmp, "t.2.Q"), [[0.2, 0.8], [0.7, 0.3]])
+            out = os.path.join(tmp, "out")
+            qbar.main(["--q", q2, "--ids", ids, "--outdir", out])
+            self.assertFalse(os.path.exists(os.path.join(out, "editor.html")))
+            self.assertFalse(os.path.exists(os.path.join(out, "state.json")))
+
+    def test_node_apply_edit_or_skip(self):
+        import json
+        import subprocess
+        node = _node_bin()
+        if not node:
+            self.skipTest("node is not installed")
+        names = ["a", "b"]
+        with tempfile.TemporaryDirectory() as tmp:
+            ids = self._ids(tmp, names)
+            q2 = self._write_q(os.path.join(tmp, "t.2.Q"), [[0.25, 0.75], [0.8, 0.2]])
+            out, _state = self._editor_state(tmp, [q2], ids, None)
+            with open(os.path.join(out, "editor.html"), encoding="utf-8") as handle:
+                script = _html_script(handle.read(), "qbar-draw")
+            self.assertNotIn("//", script)
+            self.assertNotIn("http", script.lower())
+            harness = "\n".join([
+                'var fs = require("fs");',
+                'var assert = require("assert");',
+                'var src = fs.readFileSync(process.argv[2], "utf8");',
+                'var api = new Function(src + "\\nreturn {applyEdit: applyEdit, orderTxt: orderTxt, coloursTsv: coloursTsv};")();',
+                "var state = {",
+                '  schema: "qbar-state",',
+                "  schema_version: 1,",
+                '  group_order: ["A", "B"],',
+                '  sample_order: ["a1", "a2", "b1", "b2"],',
+                '  sample_groups: ["A", "A", "B", "B"],',
+                "  k: [2],",
+                '  clusters: {"2": [',
+                '    {name: "C1", colour: "#111111"},',
+                '    {name: "C2", colour: "#222222"}',
+                "  ]},",
+                '  swaps: {"2": [0, 1]},',
+                "  alignment_overridden: false",
+                "};",
+                'var moved = api.applyEdit(state, {op: "move", iid: "a2", index: 0});',
+                'assert.deepStrictEqual(moved.sample_order, ["a2", "a1", "b1", "b2"]);',
+                'assert.deepStrictEqual(moved.sample_groups, ["A", "A", "B", "B"]);',
+                'assert.strictEqual(state.sample_order[0], "a1");',
+                'var grouped = api.applyEdit(state, {op: "reorder_groups", groups: ["B", "A"]});',
+                'assert.deepStrictEqual(grouped.group_order, ["B", "A"]);',
+                'assert.deepStrictEqual(grouped.sample_order, ["b1", "b2", "a1", "a2"]);',
+                'assert.deepStrictEqual(grouped.sample_groups, ["B", "B", "A", "A"]);',
+                'var swapped = api.applyEdit(state, {op: "swap", k: 2, i: 0, j: 1});',
+                'assert.deepStrictEqual(swapped.swaps["2"], [1, 0]);',
+                'assert.strictEqual(swapped.clusters["2"][0].name, "C2");',
+                'assert.strictEqual(swapped.clusters["2"][0].colour, "#222222");',
+                'assert.strictEqual(swapped.clusters["2"][1].colour, "#111111");',
+                "assert.strictEqual(swapped.alignment_overridden, true);",
+                'assert.deepStrictEqual(state.swaps["2"], [0, 1]);',
+                'var bare = api.applyEdit(state, {op: "swap", i: 0, j: 1});',
+                'assert.deepStrictEqual(bare.swaps["2"], [1, 0]);',
+                'var renamed = api.applyEdit(state, {op: "rename", k: 2, column: 0, name: "East"});',
+                'assert.strictEqual(renamed.clusters["2"][0].name, "East");',
+                'assert.strictEqual(renamed.clusters["2"][1].name, "C2");',
+                'var coloured = api.applyEdit(state, {op: "colour", k: 2, column: 1, colour: "#abcdef"});',
+                'assert.strictEqual(coloured.clusters["2"][1].colour, "#abcdef");',
+                'assert.strictEqual(state.clusters["2"][1].colour, "#222222");',
+                'assert.strictEqual(api.orderTxt(moved), "a2\\na1\\nb1\\nb2\\n");',
+                'assert.strictEqual(api.coloursTsv(coloured), "C1\\t#111111\\nC2\\t#abcdef\\n");',
+                "",
+            ])
+            script_path = os.path.join(tmp, "draw.js")
+            harness_path = os.path.join(tmp, "edit.js")
+            with open(script_path, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(script)
+            with open(harness_path, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(harness)
+            checked = subprocess.run([node, "--check", script_path], capture_output=True, text=True)
+            self.assertEqual(checked.returncode, 0, checked.stderr)
+            ran = subprocess.run([node, harness_path, script_path], capture_output=True, text=True)
+            self.assertEqual(ran.returncode, 0, ran.stderr + ran.stdout)
+            self.assertIn("v", subprocess.run([node, "--version"], capture_output=True, text=True).stdout)
+
+
+def _html_payload_id(html, ident):
+    import json
+    return json.loads(_html_script(html, ident).strip())
+
+
+def json_load(handle):
+    import json
+    return json.load(handle)
 
 
 if __name__ == "__main__":

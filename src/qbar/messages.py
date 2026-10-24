@@ -191,6 +191,106 @@ _CATALOG = {
         "en": "Also write panel.html, one offline file. A script draws the bars on a canvas and hover text shows the sample. Default off.",
         "zh": "另写 panel.html，一个离线文件。脚本在画布上画条，悬停显示样本。默认关闭。",
     },
+    "help_editor": {
+        "en": "Also write editor.html and state.json, one offline editor. Default off.",
+        "zh": "另写 editor.html 和 state.json，一个离线编辑页。默认关闭。",
+    },
+    "help_state": {
+        "en": "Replay order, colours, names, and column swaps from a state.json file.",
+        "zh": "用 state.json 重放顺序、颜色、列名和列对调。",
+    },
+    "state_conflict_order": {
+        "en": "--state cannot be combined with --order-file.",
+        "zh": "--state 不能和 --order-file 一起用。",
+    },
+    "state_conflict_color": {
+        "en": "--state cannot be combined with --color or --color-file.",
+        "zh": "--state 不能和 --color 或 --color-file 一起用。",
+    },
+    "state_schema": {
+        "en": "State schema must be qbar-state, got %(schema)s.",
+        "zh": "状态 schema 必须是 qbar-state，收到 %(schema)s。",
+    },
+    "state_version": {
+        "en": "State schema_version must be 1, got %(version)s.",
+        "zh": "状态 schema_version 必须是 1，收到 %(version)s。",
+    },
+    "state_json": {
+        "en": "State file %(path)s is not a JSON object.",
+        "zh": "状态文件 %(path)s 不是 JSON 对象。",
+    },
+    "state_open": {
+        "en": "State file %(path)s cannot be read.",
+        "zh": "读不到状态文件 %(path)s。",
+    },
+    "state_hash": {
+        "en": "State SHA256 does not match %(path)s.",
+        "zh": "状态 SHA256 与 %(path)s 不符。",
+    },
+    "state_count": {
+        "en": "State has %(state_n)s %(role)s files and the command has %(cli_n)s (%(path)s).",
+        "zh": "状态有 %(state_n)s 个 %(role)s 文件，命令有 %(cli_n)s 个（%(path)s）。",
+    },
+    "state_unknown_iid": {
+        "en": "State sample order names unknown id %(iid)s.",
+        "zh": "状态里的样本顺序有未知 id %(iid)s。",
+    },
+    "state_missing_iid": {
+        "en": "State sample order is missing id %(iid)s.",
+        "zh": "状态里的样本顺序缺少 id %(iid)s。",
+    },
+    "state_duplicate_iid": {
+        "en": "State sample order repeats id %(iid)s.",
+        "zh": "状态里的样本顺序重复了 id %(iid)s。",
+    },
+    "state_k": {
+        "en": "State K is %(state_k)s and the command line K is %(cli_k)s.",
+        "zh": "状态 K 是 %(state_k)s，命令行 K 是 %(cli_k)s。",
+    },
+    "state_method": {
+        "en": "State align method is %(state_method)s and the command line align method is %(cli_method)s.",
+        "zh": "状态的对齐方法是 %(state_method)s，命令行的对齐方法是 %(cli_method)s。",
+    },
+    "state_group_unknown": {
+        "en": "State group order names unknown group %(name)s.",
+        "zh": "状态里的组顺序有未知组 %(name)s。",
+    },
+    "state_group_missing": {
+        "en": "State group order is missing group %(name)s.",
+        "zh": "状态里的组顺序缺少组 %(name)s。",
+    },
+    "state_group_order": {
+        "en": "State group order is %(state_groups)s and the sample order groups are %(sample_groups)s.",
+        "zh": "状态组顺序是 %(state_groups)s，样本顺序里的组是 %(sample_groups)s。",
+    },
+    "state_sample_group": {
+        "en": "State group for id %(iid)s is %(state_group)s and the groups file has %(file_group)s.",
+        "zh": "状态里 id %(iid)s 的组是 %(state_group)s，分组文件里是 %(file_group)s。",
+    },
+    "state_sample_groups": {
+        "en": "State sample_groups has %(got)s entries for %(n)s samples.",
+        "zh": "状态 sample_groups 有 %(got)s 项，样本有 %(n)s 个。",
+    },
+    "state_swap": {
+        "en": "State swaps for K=%(k)s are not a permutation of %(n)s columns.",
+        "zh": "状态里 K=%(k)s 的列置换不是 %(n)s 列的排列。",
+    },
+    "state_clusters": {
+        "en": "State K=%(k)s has %(got)s cluster entries, expected %(n)s.",
+        "zh": "状态里 K=%(k)s 有 %(got)s 个簇，应为 %(n)s。",
+    },
+    "state_flag": {
+        "en": "State alignment_overridden is false but K=%(k)s swaps columns.",
+        "zh": "状态 alignment_overridden 为 false，但 K=%(k)s 对调了列。",
+    },
+    "state_missing": {
+        "en": "State is missing %(field)s.",
+        "zh": "状态缺少 %(field)s。",
+    },
+    "state_duplicate_colour": {
+        "en": "State K=%(k)s repeats a colour.",
+        "zh": "状态里 K=%(k)s 的颜色有重复。",
+    },
     "html_empty": {
         "en": "HTML panel needs at least one K.",
         "zh": "HTML 面板至少需要一个 K。",
