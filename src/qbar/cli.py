@@ -63,6 +63,12 @@ are written for the aligned Q at --sort-k, or at the largest K when
 The alignment mask does not drop those samples. --basemap-image and
 --basemap-bbox must be given together. A world file is not read. Nothing
 is downloaded. --vector does not write a map PDF or SVG.
+--export none (the default) writes no export directory. clumpp writes
+K<k>.indfile, K<k>.popq, names.txt, and ids.tsv under export/clumpp.
+Indfile column 2 is the same running index as column 1. ids.tsv maps
+that index to the iid. pong writes K<k>.Q, filemap.txt, and ind2pop.txt
+under export/pong. A comma-separated list can name both. Rows follow
+the bar. Values are not rescaled.
 https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.hierarchy.linkage.html
 """
 from __future__ import annotations
@@ -103,6 +109,7 @@ from .api import (
     parse_within,
     run,
 )
+from .exports import export_clumpp, export_pong
 from .io import (
     check_shapes,
     collect_q,
@@ -338,6 +345,7 @@ def build_parser(language="en"):
     p.add_argument("--auto-seed", type=int, default=0, help=say("help_auto_seed"))
     p.add_argument("--pca", default=None, help=say("help_pca"))
     p.add_argument("--pca-n", type=int, default=None, help=say("help_pca_n"))
+    p.add_argument("--export", default="none", help=say("help_export"))
     return p
 
 

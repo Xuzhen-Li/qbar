@@ -1323,6 +1323,66 @@ _CATALOG = {
         "en": "--basemap-bbox must be four finite numbers LON_MIN,LAT_MIN,LON_MAX,LAT_MAX with a positive span, got %(value)s",
         "zh": "--basemap-bbox 必须是四个有限数 LON_MIN,LAT_MIN,LON_MAX,LAT_MAX，且范围为正，收到 %(value)s",
     },
+    "help_export": {
+        "en": "Comma-separated subset of clumpp and pong. none writes nothing (default). clumpp writes export/clumpp/K<k>.indfile, K<k>.popq, names.txt, and ids.tsv. Indfile column 2 is the same running index as column 1. ids.tsv maps that index to the iid. A tab or a newline in an iid is refused. A space in an iid is kept. pong writes export/pong/K<k>.Q, filemap.txt, and ind2pop.txt. Rows follow the bar order and are not rescaled. With --replicates, each K is the aligned matrix (the major-mode mean when that K has more than one file). An empty group name is refused. A group name is not rewritten.",
+        "zh": "用逗号列出 clumpp 和 pong 的子集。none 不写（默认）。clumpp 在 export/clumpp 写 K<k>.indfile、K<k>.popq、names.txt 和 ids.tsv。indfile 第 2 列与第 1 列同为从 1 到 N 的序号。ids.tsv 把序号对应到 iid。iid 里的制表符或换行会拒绝，空格保留。pong 在 export/pong 写 K<k>.Q、filemap.txt 和 ind2pop.txt。行序与条形图相同，不重新归一。使用 --replicates 时，每个 K 是对齐后的矩阵（该 K 有多份文件时是主模式均值）。空组名会拒绝。组名不会被改写。",
+    },
+    "export_choice": {
+        "en": "--export must be none or a comma-separated subset of clumpp and pong, got %(value)s.",
+        "zh": "--export 只能是 none，或用逗号列出 clumpp 和 pong，收到 %(value)s。",
+    },
+    "export_iid_text": {
+        "en": "Export refused plotted row %(row)s because the iid is not text.",
+        "zh": "导出拒绝条形图第 %(row)s 行，因为 iid 不是文本。",
+    },
+    "export_iid_tab": {
+        "en": "Export refused iid %(iid)s because ids.tsv is tab-separated.",
+        "zh": "导出拒绝 iid %(iid)s，因为 ids.tsv 用制表符分列。",
+    },
+    "export_iid_newline": {
+        "en": "Export refused the iid at plotted row %(row)s because it contains a newline.",
+        "zh": "导出拒绝条形图第 %(row)s 行的 iid，因为它含有换行。",
+    },
+    "export_group_empty": {
+        "en": "Export refused an empty group name at plotted row %(row)s. The name was not changed.",
+        "zh": "导出拒绝条形图第 %(row)s 行的空组名。名字没有被改写。",
+    },
+    "export_group_newline": {
+        "en": "Export refused group %(group)s because it contains a newline. The name was not changed.",
+        "zh": "导出拒绝组 %(group)s，因为它含有换行。名字没有被改写。",
+    },
+    "export_pong_k1": {
+        "en": "Warning: pong does not accept a Q matrix with K = 1. %(name)s is still listed in the filemap.",
+        "zh": "注意：pong 不接受 K = 1 的 Q。filemap 里仍然列出 %(name)s。",
+    },
+    "export_pong_gap": {
+        "en": "Warning: pong filemap is missing K %(missing)s. pong aborts when a K between Kmin and Kmax is missing. The files were still written.",
+        "zh": "注意：pong 的 filemap 缺少 K %(missing)s。Kmin 到 Kmax 之间缺了 K 时，pong 会中止。文件仍然写了。",
+    },
+    "export_aligned": {
+        "en": "Export aligned must map each K to a matrix, got %(kind)s.",
+        "zh": "导出的 aligned 必须把每个 K 映射到一个矩阵，收到 %(kind)s。",
+    },
+    "export_k": {
+        "en": "Export K %(k)s has %(cols)s columns.",
+        "zh": "导出的 K %(k)s 有 %(cols)s 列。",
+    },
+    "export_rows": {
+        "en": "Export K %(k)s has %(got)s rows and K %(other)s has %(rows)s.",
+        "zh": "导出的 K %(k)s 有 %(got)s 行，K %(other)s 有 %(rows)s 行。",
+    },
+    "export_ids": {
+        "en": "Export needs one id per row, got %(ids)s ids and %(rows)s rows.",
+        "zh": "导出需要每行一个 id，收到 %(ids)s 个 id 和 %(rows)s 行。",
+    },
+    "export_groups": {
+        "en": "Export needs one group per row, got %(groups)s groups and %(rows)s rows.",
+        "zh": "导出需要每行一个组，收到 %(groups)s 个组和 %(rows)s 行。",
+    },
+    "export_order": {
+        "en": "Export order must list each row once, got %(got)s entries for %(rows)s rows.",
+        "zh": "导出行序必须每个行号出现一次，收到 %(got)s 项，行数是 %(rows)s。",
+    },
 }
 
 

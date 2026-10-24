@@ -501,13 +501,19 @@ How many leading score columns to use from --pca. Required with --pca. From 1 up
 
 - Default: not set
 
+### `--export`
+
+Comma-separated subset of clumpp and pong. none writes nothing (default). clumpp writes export/clumpp/K<k>.indfile, K<k>.popq, names.txt, and ids.tsv. Indfile column 2 is the same running index as column 1. ids.tsv maps that index to the iid. A tab or a newline in an iid is refused. A space in an iid is kept. pong writes export/pong/K<k>.Q, filemap.txt, and ind2pop.txt. Rows follow the bar order and are not rescaled. With --replicates, each K is the aligned matrix (the major-mode mean when that K has more than one file). An empty group name is refused. A group name is not rewritten.
+
+- Default: none
+
 ## Config file
 
 `--config PATH` reads a YAML mapping. It is omitted by default. PyYAML is imported only when this flag is present. If PyYAML is missing, qbar exits and the message names `pip install "qbar[config]"`.
 
 Precedence is the command line, then the config file, then the defaults from `build_parser`. A flag that is present on the command line wins, including when the value equals the default. A flag that is absent does not replace a value from the file.
 
-Keys are argparse dest names, such as `align_method` and `order_mode`. `align-method` and `--align-method` are accepted and mapped to `align_method`. The key `config` is rejected. The key `state` is allowed and means the same thing as `--state`. `--q` and `--outdir` may be omitted on the command line when the file sets them. A sample id file (`ids`, `fam`, or `ind`) can be set in the file as well. The run still requires one id source.
+Keys are argparse dest names, such as `align_method` and `order_mode`. `align-method` and `--align-method` are accepted and mapped to `align_method`. The key `config` is rejected. The key `state` is allowed and means the same thing as `--state`. The key `export` is a string, the same value as `--export`: `none`, `clumpp`, `pong`, or a comma-separated subset such as `clumpp,pong`. It is not a list. `--q` and `--outdir` may be omitted on the command line when the file sets them. A sample id file (`ids`, `fam`, or `ind`) can be set in the file as well. The run still requires one id source.
 
 `on`, `off`, `yes`, and `no` must be quoted when the option expects a string. PyYAML 1.1 reads those words as booleans. A repeated YAML key keeps the last value.
 

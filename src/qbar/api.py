@@ -19,6 +19,7 @@ from dataclasses import asdict, dataclass, is_dataclass
 import numpy as np
 
 from .align import align_qs
+from .exports import check_export_labels, parse_export, write_exports
 from .bootstrap import bootstrap_support, write_match_support
 from .permtest import permutation_columns
 from .io import (
@@ -575,9 +576,21 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     that box. A world file is not read. Nothing is downloaded.
     ``--vector`` does not write a map PDF or SVG.
 
+    ``args.export`` defaults to ``none`` and then writes no ``export``
+    directory. ``clumpp`` writes one indfile and one population Q file per
+    K, plus ``names.txt`` and ``ids.tsv``, under ``export/clumpp``.
+    Indfile column 2 repeats column 1. ``ids.tsv`` holds the iid.
+    ``pong`` writes one Q file per K, ``filemap.txt``, and ``ind2pop.txt``
+    under ``export/pong``.
+    A comma-separated subset may name both. Rows are the plotted samples,
+    in bar order. Values are not rescaled. With ``args.replicates``, each
+    K is the aligned matrix, which is the major-mode mean when that K had
+    more than one file.
+
     ``main`` applies ``--config`` before calling ``run``. ``run`` does not
     read YAML. ``config_resolved.json`` is written by ``main`` after a
-    successful run when ``--config`` was passed.
+    successful run when ``--config`` was passed. The config key ``export``
+    is the same string as ``--export``.
     """
     if args.provenance:
         started = datetime.datetime.now().astimezone().isoformat()
@@ -590,6 +603,7 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     )
 
     language = args.language
+    export_kinds = parse_export(getattr(args, "export", "none"), language=language)
     editor_on = bool(getattr(args, "editor", False))
     state_arg = getattr(args, "state", None) or None
     # Config-sourced color, color_file, and order_file are cleared in main
@@ -932,6 +946,8 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
             bbox=basemap_bbox,
             language=language,
         )
+    if export_kinds:
+        check_export_labels(export_kinds, iids, groups, order, language=language)
     os.makedirs(args.outdir, exist_ok=True)
     linkage_paths = []
     for _name, _z in arranged["matrices"]:
@@ -1207,6 +1223,13 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
             )
             write_select_k_plot(os.path.join(args.outdir, "select_k.png"), select_table)
     replicate_paths = write_replicate_outputs(args.outdir, replicate_reports)
+    export_paths = []
+    if export_kinds:
+        export_paths = write_exports(
+            args.outdir, export_kinds, aligned, iids, groups, order, language=language,
+        )
+        for _path in export_paths:
+            print(_path)
     with open(os.path.join(args.outdir, "args.txt"), "w") as f:
         f.write(" ".join(sys.argv if argv is None else ["qbar"] + list(argv)) + "\n")
         for k in ks:
@@ -1289,6 +1312,7 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
             paths.append(os.path.join(args.outdir, "select_k.png"))
             paths.append(os.path.join(args.outdir, "select_k.pdf"))
     paths.extend(replicate_paths)
+    paths.extend(export_paths)
     paths.append(os.path.join(args.outdir, "args.txt"))
     if run_json is not None:
         paths.append(run_json)
