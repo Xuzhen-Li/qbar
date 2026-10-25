@@ -163,6 +163,34 @@ _CATALOG = {
         "en": "--color-lock must be off or on, got %(mode)s",
         "zh": "--color-lock 只能是 off 或 on，收到 %(mode)s",
     },
+    "help_vector": {
+        "en": "off, pdf, svg, or both. Default off. off keeps the PNG and the raster PDF. pdf writes bar_K*.pdf and panel.pdf as vectors. svg also writes bar_K*.svg and panel.svg, and the PDF stays raster. both writes vector PDFs and SVGs. PNG stays raster. A vector file with more than 200000 bar rectangles is refused and no output file is written.",
+        "zh": "off、pdf、svg 或 both。默认 off。off 保持 PNG 和栅格 PDF。pdf 把 bar_K*.pdf 和 panel.pdf 写成矢量。svg 另写 bar_K*.svg 和 panel.svg，PDF 仍是栅格。both 写矢量 PDF 和 SVG。PNG 始终是栅格。单个矢量文件的条形矩形超过 200000 就拒绝，并且不写任何输出文件。",
+    },
+    "vector_choice": {
+        "en": "--vector must be off, pdf, svg, or both, got %(got)s",
+        "zh": "--vector 只能是 off、pdf、svg 或 both，收到 %(got)s",
+    },
+    "vector_rect_cap": {
+        "en": "Vector file %(kind)s would draw %(count)s rectangles, above the cap of %(cap)s. No file was written.",
+        "zh": "矢量文件 %(kind)s 要画 %(count)s 个矩形，超过上限 %(cap)s。没有写出文件。",
+    },
+    "vector_font_missing": {
+        "en": "Vector output needs a TrueType file, and none of the font candidates exists.",
+        "zh": "矢量输出需要一个 TrueType 文件，候选字体都不存在。",
+    },
+    "vector_pdf_ascii": {
+        "en": "Vector PDF supports ASCII text only, and cannot draw the label %(label)s. No file was written.",
+        "zh": "矢量 PDF 只支持 ASCII 文本，不能绘制标签 %(label)s。没有写出文件。",
+    },
+    "vector_ext": {
+        "en": "Vector output path must end in .pdf or .svg, got %(path)s",
+        "zh": "矢量路径必须以 .pdf 或 .svg 结尾，收到 %(path)s",
+    },
+    "vector_rows": {
+        "en": "Vector output needs the Q matrix on each bar row.",
+        "zh": "矢量输出需要每一行条上的 Q 矩阵。",
+    },
     "help_width": {
         "en": "Bar plot width, in pixels",
         "zh": "条形图宽度，像素",

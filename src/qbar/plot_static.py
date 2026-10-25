@@ -393,12 +393,25 @@ def _paint_dendrogram(draw, spec, n, bar_w, left, top, panel_h, *, language="en"
     draw.text((8, top), dendrogram_distance_label(max_d), font=label_font, fill=DENDRO_INK)
 
 
-def render(path, rows, spans, bar_w, bar_h, title, *, language="en", dendrogram=None):
+def render(path, rows, spans, bar_w, bar_h, title, *, language="en", dendrogram=None, vector="off", rect_cap=None):
     """rows: list of {k, image(ndarray HxN), legend[(hex, text)]} in K order.
 
     ``dendrogram`` None draws the bars as before. A spec ``{"layers": [...]}``
     draws qbar's own tree above the bars and adds that panel to the height.
+    ``vector`` off keeps the raster PDF. pdf and both write that PDF as
+    vectors. svg and both also write an SVG beside the PNG. A vector row
+    needs ``q`` in draw order. The default off does not read ``q``.
     """
+    if vector not in ("off", "pdf", "svg", "both"):
+        raise SystemExit(_msg("vector_choice", language, got=vector))
+    if vector != "off":
+        # Refuse before the PNG so a cap or font error leaves no figure.
+        from .plot_vector import guard_vector_run
+        guard_vector_run(
+            [{"png": path, "rows": rows, "bar_h": bar_h}],
+            spans, bar_w, title, dendrogram, vector,
+            language=language, rect_cap=rect_cap,
+        )
     font = load_font(15)
     font_s = load_font(13)
     font_k = load_font(16)
@@ -475,7 +488,21 @@ def render(path, rows, spans, bar_w, bar_h, title, *, language="en", dendrogram=
         os.makedirs(folder, exist_ok=True)
     canvas.save(path, dpi=(150, 150))
     if path.lower().endswith(".png"):
-        canvas.save(os.path.splitext(path)[0] + ".pdf", "PDF", resolution=150.0)
+        stem = os.path.splitext(path)[0]
+        if vector in ("pdf", "both"):
+            from .plot_vector import render_vector
+            render_vector(
+                stem + ".pdf", rows, spans, bar_w, bar_h, title,
+                language=language, dendrogram=dendrogram, rect_cap=rect_cap,
+            )
+        else:
+            canvas.save(stem + ".pdf", "PDF", resolution=150.0)
+        if vector in ("svg", "both"):
+            from .plot_vector import render_vector
+            render_vector(
+                stem + ".svg", rows, spans, bar_w, bar_h, title,
+                language=language, dendrogram=dendrogram, rect_cap=rect_cap,
+            )
 
 
 def cv_k_marks(rows):
