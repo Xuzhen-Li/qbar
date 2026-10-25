@@ -37,6 +37,7 @@ from .logs import (
     parse_admixture_log,
     write_cv_loglik_tsv,
 )
+from .lowconf import append_low_confidence_rows, read_low_confidence_table
 from .messages import text as _msg
 from .modes import assemble_replicates, require_replicate_flags, write_replicate_outputs
 from .selectk import select_k_table, write_select_k_tsv, write_select_k_txt
@@ -450,6 +451,14 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     this run aligned at least one K to K+1 step. Both off writes no
     ``parent_share_ci.tsv``. ``match_support.tsv`` is unchanged by
     these flags except through the bootstrap or permutation they require.
+
+    When ``args.low_confidence_table`` is set and this run writes
+    ``align_report.txt``, rows for ``args.align_method`` are copied onto
+    the end of that file. The table does not change the low-confidence
+    cut. If the method has no rows, a warning is written and the file
+    is left as the report alone. If the table is set and no alignment
+    report is written, a warning says the table is unused. The default
+    is omitted, which does not read a table and does not add a warning.
     """
     if args.provenance:
         started = datetime.datetime.now().astimezone().isoformat()
@@ -461,6 +470,10 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     )
 
     language = args.language
+    table_path = getattr(args, "low_confidence_table", None)
+    table_rows = None
+    if table_path is not None:
+        table_rows = read_low_confidence_table(table_path, language=language)
     n_boot, boot_seed = _bootstrap_request(args, language)
     n_perm, perm_seed, perm_null = _perm_request(args, language)
     parent_ci, parent_test, parent_alpha = _parent_request(args, language, n_boot, n_perm)
@@ -569,6 +582,18 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     write_tables(args.outdir, iids, groups, order, spans, perm, owners, hexes, meta, aligned)
     if args.align_report and meta:
         write_align_report(args.outdir, aligned, meta, groups, args.align_method, perm, args.align_report_low)
+        if table_rows is not None:
+            append_low_confidence_rows(
+                os.path.join(args.outdir, "align_report.txt"),
+                table_rows,
+                args.align_method,
+                language=language,
+            )
+    elif table_rows is not None:
+        if args.align_report:
+            print(_msg("lowconf_no_report", language), file=sys.stderr)
+        else:
+            print(_msg("lowconf_unused", language), file=sys.stderr)
     if getattr(args, "align_compare", False) and meta:
         write_align_compare(
             args.outdir, q_by_k, aligned, meta, perm, args.align_method,
