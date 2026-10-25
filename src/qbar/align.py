@@ -6,6 +6,8 @@ import sys
 
 import numpy as np
 
+from .messages import text as _msg
+
 ALIGN_METHODS = ("greedy", "hungarian", "pong", "jaccard")
 
 
@@ -26,20 +28,20 @@ def col_pearson(a, b):
     return float(np.dot(a, b) / (na * nb))
 
 
-def anchor_perm(q, groups, anchor):
+def anchor_perm(q, groups, anchor, *, language="en"):
     k = q.shape[1]
     if not anchor:
         return list(range(k))
     idx = [i for i, g in enumerate(groups) if g == anchor]
     if not idx:
-        raise SystemExit("锚定组 %s 在样本里没有人" % anchor)
+        raise SystemExit(_msg("anchor_missing", language, anchor=anchor))
     qmax = q.max(axis=1)
     j = idx[int(np.argmax(qmax[idx]))]
     c = int(np.argmax(q[j]))
     return [c] + [t for t in range(k) if t != c]
 
 
-def core_mask(q_prev, q_new, groups, align_groups, qmax_cut):
+def core_mask(q_prev, q_new, groups, align_groups, qmax_cut, *, language="en"):
     """People used to match columns.
 
     Inside each listed group, keep people with qmax > cut at both K.
@@ -60,7 +62,7 @@ def core_mask(q_prev, q_new, groups, align_groups, qmax_cut):
             j = int(ii[int(np.argmax(qmax_p[ii]))])
             m[j] = True
     if not m.any():
-        raise SystemExit("对齐用的人是空的。检查 --align-groups 和 --qmax")
+        raise SystemExit(_msg("align_empty_check", language))
     return m
 
 
@@ -75,7 +77,7 @@ def pearson_matrix(q_prev, q_new, mask):
     return r
 
 
-def match_next_hungarian(q_prev, q_new, mask):
+def match_next_hungarian(q_prev, q_new, mask, *, language="en"):
     """Assignment of old columns to distinct new columns maximising the summed Pearson r.
 
     Solved with scipy.optimize.linear_sum_assignment(maximize=True).
@@ -84,11 +86,11 @@ def match_next_hungarian(q_prev, q_new, mask):
     try:
         from scipy.optimize import linear_sum_assignment
     except ImportError as exc:
-        raise SystemExit("--align-method hungarian 需要 scipy（scipy.optimize）") from exc
+        raise SystemExit(_msg("align_needs_scipy", language, method="hungarian")) from exc
     k_old = q_prev.shape[1]
     k_new = q_new.shape[1]
     if k_new != k_old + 1:
-        raise SystemExit("对齐要求 K 连续，相邻两个 Q 的列数必须差 1")
+        raise SystemExit(_msg("k_columns_differ", language))
     r = pearson_matrix(q_prev, q_new, mask)
     rows, cols = linear_sum_assignment(r, maximize=True)
     by_row = dict(zip(rows.tolist(), cols.tolist()))
@@ -113,7 +115,7 @@ def pong_sim(a, b):
     return float(1.0 - np.sqrt(np.dot(d, d) / (2.0 * n)))
 
 
-def match_next_pong(q_prev, q_new, mask):
+def match_next_pong(q_prev, q_new, mask, *, language="en"):
     """Split-aware matching between adjacent K, after pong (Behr et al. 2016).
 
     For each pair (a, b) of new columns, sum them into one column, match the k old
@@ -125,11 +127,11 @@ def match_next_pong(q_prev, q_new, mask):
     try:
         from scipy.optimize import linear_sum_assignment
     except ImportError as exc:
-        raise SystemExit("--align-method pong 需要 scipy（scipy.optimize）") from exc
+        raise SystemExit(_msg("align_needs_scipy", language, method="pong")) from exc
     k_old = q_prev.shape[1]
     k_new = q_new.shape[1]
     if k_new != k_old + 1:
-        raise SystemExit("对齐要求 K 连续，相邻两个 Q 的列数必须差 1")
+        raise SystemExit(_msg("k_columns_differ", language))
     old = q_prev[mask]
     new = q_new[mask]
     best = None
@@ -183,16 +185,16 @@ def jaccard_matrix(q_prev, q_new, mask, kind="dominant", cut=0.5):
     return j
 
 
-def match_next_jaccard(q_prev, q_new, mask, kind="dominant", cut=0.5):
+def match_next_jaccard(q_prev, q_new, mask, kind="dominant", cut=0.5, *, language="en"):
     """One-to-one matching maximising summed Jaccard (scipy linear_sum_assignment); leftover goes last."""
     try:
         from scipy.optimize import linear_sum_assignment
     except ImportError as exc:
-        raise SystemExit("--align-method jaccard 需要 scipy（scipy.optimize）") from exc
+        raise SystemExit(_msg("align_needs_scipy", language, method="jaccard")) from exc
     k_old = q_prev.shape[1]
     k_new = q_new.shape[1]
     if k_new != k_old + 1:
-        raise SystemExit("对齐要求 K 连续，相邻两个 Q 的列数必须差 1")
+        raise SystemExit(_msg("k_columns_differ", language))
     j = jaccard_matrix(q_prev, q_new, mask, kind, cut)
     rows, cols = linear_sum_assignment(j, maximize=True)
     by_row = dict(zip(rows.tolist(), cols.tolist()))
@@ -203,7 +205,7 @@ def match_next_jaccard(q_prev, q_new, mask, kind="dominant", cut=0.5):
     return perm, sims
 
 
-def match_next(q_prev, q_new, mask, method="greedy", jaccard_set="dominant", jaccard_cut=0.5):
+def match_next(q_prev, q_new, mask, method="greedy", jaccard_set="dominant", jaccard_cut=0.5, *, language="en"):
     """q_prev is already aligned. Return raw-column order for q_new.
 
     "hungarian", "pong", and "jaccard" call those matchers and return the
@@ -211,15 +213,15 @@ def match_next(q_prev, q_new, mask, method="greedy", jaccard_set="dominant", jac
     the default "greedy", is greedy Pearson.
     """
     if method == "hungarian":
-        return match_next_hungarian(q_prev, q_new, mask)
+        return match_next_hungarian(q_prev, q_new, mask, language=language)
     if method == "pong":
-        return match_next_pong(q_prev, q_new, mask)
+        return match_next_pong(q_prev, q_new, mask, language=language)
     if method == "jaccard":
-        return match_next_jaccard(q_prev, q_new, mask, jaccard_set, jaccard_cut)
+        return match_next_jaccard(q_prev, q_new, mask, jaccard_set, jaccard_cut, language=language)
     k_new = q_new.shape[1]
     k_old = q_prev.shape[1]
     if k_new != k_old + 1:
-        raise SystemExit("对齐要求 K 连续，相邻两个 Q 的列数必须差 1")
+        raise SystemExit(_msg("k_columns_differ", language))
     used = set()
     perm = []
     rs = []
@@ -236,47 +238,49 @@ def match_next(q_prev, q_new, mask, method="greedy", jaccard_set="dominant", jac
         rs.append(float(best_r))
     rest = [j for j in range(k_new) if j not in used]
     if len(rest) != 1:
-        raise SystemExit("对齐后应该只剩 1 个新列")
+        raise SystemExit(_msg("align_one_new_column", language))
     perm.append(int(rest[0]))
     rs.append(None)
     return perm, rs
 
 
 def align_qs(q_by_k, groups, anchor, mode, align_groups, qmax_cut, do_align, method="greedy",
-             jaccard_set="dominant", jaccard_cut=0.5):
+             jaccard_set="dominant", jaccard_cut=0.5, *, language="en"):
     ks = sorted(q_by_k)
     if do_align and len(ks) > 1:
         for a, b in zip(ks, ks[1:]):
             if b != a + 1:
-                raise SystemExit("要跨 K 对齐，K 必须连续。缺 K=%d" % (a + 1))
+                raise SystemExit(_msg("k_gap", language, k=a + 1))
     perm = {}
     aligned = {}
     meta = {}
     if not do_align or len(ks) == 1:
         for k in ks:
-            perm[k] = anchor_perm(q_by_k[k], groups, anchor)
+            perm[k] = anchor_perm(q_by_k[k], groups, anchor, language=language)
             aligned[k] = q_by_k[k][:, perm[k]]
         return aligned, perm, meta
-    perm[ks[0]] = anchor_perm(q_by_k[ks[0]], groups, anchor)
+    perm[ks[0]] = anchor_perm(q_by_k[ks[0]], groups, anchor, language=language)
     aligned[ks[0]] = q_by_k[ks[0]][:, perm[ks[0]]]
     for k in ks[:-1]:
         if mode == "core":
             if not align_groups:
-                raise SystemExit("align-mode core 需要 --align-groups")
-            mask = core_mask(aligned[k], q_by_k[k + 1], groups, align_groups, qmax_cut)
+                raise SystemExit(_msg("core_needs_groups", language))
+            mask = core_mask(aligned[k], q_by_k[k + 1], groups, align_groups, qmax_cut, language=language)
         else:
             if align_groups:
                 mask = np.array([g in set(align_groups) for g in groups])
             else:
                 mask = np.ones(len(groups), dtype=bool)
             if not mask.any():
-                raise SystemExit("对齐用的人是空的")
+                raise SystemExit(_msg("align_empty", language))
         if method == "pong":
-            p, rs, split = match_next_pong(aligned[k], q_by_k[k + 1], mask)
+            p, rs, split = match_next_pong(aligned[k], q_by_k[k + 1], mask, language=language)
         elif method == "jaccard":
-            p, rs = match_next_jaccard(aligned[k], q_by_k[k + 1], mask, jaccard_set, jaccard_cut)
+            p, rs = match_next_jaccard(
+                aligned[k], q_by_k[k + 1], mask, jaccard_set, jaccard_cut, language=language,
+            )
         else:
-            p, rs = match_next(aligned[k], q_by_k[k + 1], mask, method)
+            p, rs = match_next(aligned[k], q_by_k[k + 1], mask, method, language=language)
         perm[k + 1] = p
         aligned[k + 1] = q_by_k[k + 1][:, p]
         meta[k + 1] = {"n_mask": int(mask.sum()), "pearson": rs, "mask": mask}
@@ -288,5 +292,8 @@ def align_qs(q_by_k, groups, anchor, mode, align_groups, qmax_cut, do_align, met
             continue
         low = [r for r in rs[:-1] if r is not None and r < 0.5]
         if low:
-            print("注意：K=%d→%d 有 %d 列的 Pearson < 0.5，这两次的列可能不是同一个解" % (k, k + 1, len(low)), file=sys.stderr)
+            print(
+                _msg("pearson_low", language, k_from=k, k_to=k + 1, n=len(low)),
+                file=sys.stderr,
+            )
     return aligned, perm, meta

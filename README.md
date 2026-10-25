@@ -345,40 +345,42 @@ Columns in `align_report.tsv`:
 
 ## Troubleshooting
 
-- `需要 --fam（PLINK .fam）或 --ids（一行一个 IID，顺序与 Q 的行一致）`
+Help, errors, and warnings are English. `--language zh` selects the previous Chinese text.
+
+- `Need --fam (PLINK .fam) or --ids (one IID per line, in the same order as the Q rows)`
   Missing IDs. Provide `--fam` or `--ids`.
 
-- `--fam 和 --ids 只留一个`
+- `--fam and --ids: keep only one`
   Do not supply both ID sources at once.
 
-- `没有匹配到 Q：demo/nothere/*.Q`
+- `No Q files matched: demo/nothere/*.Q`
   Wildcard did not match any `.Q` files. Check path and quoting.
 
-- `out/ref.4.Q 文件名是 K=4，列数是 3`
+- `out/ref.4.Q filename says K=4, but the column count is 3`
   The columns in the matrix do not match the K integer in the filename.
 
-- `K=3 的 Q 有 100 行，样本名单有 2448 行`
+- `K=3 Q has 100 rows, but the sample list has 2448 rows`
   The number of rows in the Q matrix and the ID list do not match.
 
-- `颜色要写成 #rrggbb，收到 blue`
+- `A color must be written as #rrggbb, got blue`
   Colors must be hex format.
 
-- `锚定组 NOPE 在样本里没有人`
+- `Anchor group NOPE has no one in the samples`
   The group provided to `--anchor-group` does not exist in the data.
 
-- `要跨 K 对齐，K 必须连续。缺 K=3`
+- `Cross-K alignment requires consecutive K. Missing K=3`
   Missing intermediate K values required for sequential cross-K alignment.
 
-- `--sort-col 要在 1 到 3 之间`
+- `--sort-col must be between 1 and 3`
   The requested column exceeds available ancestry components for that K.
 
-- `hclust 需要 scipy（scipy.cluster.hierarchy）`
+- `hclust requires scipy (scipy.cluster.hierarchy)`
   Install scipy to use `--within hclust`.
 
-- `--align-method hungarian 需要 scipy（scipy.optimize）`
+- `--align-method hungarian requires scipy (scipy.optimize)`
   This error (which names `hungarian`, `pong`, or `jaccard` depending on which method you chose) means you need to install `scipy` with `pip install scipy` (already in `requirements.txt`) or use the default `greedy` method.
 
-- `--hclust-linkage ward 需要 --hclust-dist euclidean，收到 correlation`
+- `--hclust-linkage ward requires --hclust-dist euclidean, got correlation`
   `ward` only works with `euclidean`, so add `--hclust-dist euclidean` or pick `average` or `complete` instead.
 
 ## Citation

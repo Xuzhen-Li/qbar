@@ -7,6 +7,7 @@ from collections import OrderedDict
 import numpy as np
 
 from .io import order_from_file
+from .messages import text as _msg
 
 WITHIN = ("iid", "q", "hclust", "input")
 
@@ -20,17 +21,17 @@ HCLUST_LINK = ("average", "ward", "complete")
 HCLUST_PRE = ("none", "dominant")
 
 
-def check_hclust_opts(dist, link):
+def check_hclust_opts(dist, link, *, language="en"):
     if dist not in HCLUST_DIST:
-        raise SystemExit("--hclust-dist 只能是 %s" % "/".join(HCLUST_DIST))
+        raise SystemExit(_msg("hclust_dist", language, choices="/".join(HCLUST_DIST)))
     if link not in HCLUST_LINK:
-        raise SystemExit("--hclust-linkage 只能是 %s" % "/".join(HCLUST_LINK))
+        raise SystemExit(_msg("hclust_linkage", language, choices="/".join(HCLUST_LINK)))
     if link == "ward" and dist != "euclidean":
-        raise SystemExit("--hclust-linkage ward 需要 --hclust-dist euclidean，收到 %s" % dist)
+        raise SystemExit(_msg("ward_needs_euclidean", language, dist=dist))
 
 
-def hclust_order(q, dist="correlation", link="average", olo=False):
-    check_hclust_opts(dist, link)
+def hclust_order(q, dist="correlation", link="average", olo=False, *, language="en"):
+    check_hclust_opts(dist, link, language=language)
     q = np.asarray(q, dtype=float)
     if q.ndim != 2 or q.shape[0] < 2:
         return list(range(q.shape[0]))
@@ -38,7 +39,7 @@ def hclust_order(q, dist="correlation", link="average", olo=False):
         from scipy.cluster.hierarchy import leaves_list, linkage, optimal_leaf_ordering
         from scipy.spatial.distance import pdist
     except ImportError as exc:
-        raise SystemExit("hclust 需要 scipy（scipy.cluster.hierarchy）") from exc
+        raise SystemExit(_msg("hclust_needs_scipy", language)) from exc
     work = q.copy()
     if dist == "correlation":
         std = work.std(axis=1)
@@ -55,30 +56,30 @@ def hclust_order(q, dist="correlation", link="average", olo=False):
         except ValueError as exc:
             if "finite" not in str(exc):
                 raise
-            raise SystemExit("hclust 距离出现了非有限值（--hclust-dist %s）" % dist) from exc
+            raise SystemExit(_msg("hclust_nonfinite", language, dist=dist)) from exc
     return [int(x) for x in leaves_list(z)]
 
 
-def hclust_block_order(q, dist="correlation", link="average", olo=False, pre="none"):
+def hclust_block_order(q, dist="correlation", link="average", olo=False, pre="none", *, language="en"):
     """pre=dominant: split rows by their highest column (lowest index on ties), blocks in
     column order C1, C2, ...; hclust inside each block."""
     q = np.asarray(q, dtype=float)
     if pre == "none":
-        return hclust_order(q, dist, link, olo)
+        return hclust_order(q, dist, link, olo, language=language)
     if pre != "dominant":
-        raise SystemExit("--hclust-pre 只能是 %s" % "/".join(HCLUST_PRE))
+        raise SystemExit(_msg("hclust_pre", language, choices="/".join(HCLUST_PRE)))
     top = q.argmax(axis=1)
     out = []
     for c in range(q.shape[1]):
         ii = [int(i) for i in np.where(top == c)[0]]
         if len(ii) >= 2:
-            out.extend(ii[j] for j in hclust_order(q[ii], dist, link, olo))
+            out.extend(ii[j] for j in hclust_order(q[ii], dist, link, olo, language=language))
         else:
             out.extend(ii)
     return out
 
 
-def sort_block(idxs, mode, iids, q, sort_col, hc=None):
+def sort_block(idxs, mode, iids, q, sort_col, hc=None, *, language="en"):
     idxs = list(idxs)
     if mode == "input":
         return idxs
@@ -86,7 +87,7 @@ def sort_block(idxs, mode, iids, q, sort_col, hc=None):
         return sorted(idxs, key=lambda i: str(iids[i]))
     if mode == "q":
         if q is None:
-            raise SystemExit("按组分排序需要对应 K 的 Q")
+            raise SystemExit(_msg("sort_needs_q", language))
         mean = q[idxs].mean(axis=0)
         col = int(np.argmax(mean)) if q.shape[1] else 0
         if sort_col is not None:
@@ -95,15 +96,15 @@ def sort_block(idxs, mode, iids, q, sort_col, hc=None):
     if mode == "hclust":
         if q is None or len(idxs) < 2:
             return idxs
-        sub = hclust_block_order(q[idxs], **(hc or {}))
+        sub = hclust_block_order(q[idxs], language=language, **(hc or {}))
         return [idxs[j] for j in sub]
-    raise SystemExit("未知的组内排序：%s" % mode)
+    raise SystemExit(_msg("unknown_within", language, mode=mode))
 
 
 def build_order(iids, groups, blocks, within, within_group, rest_name, q_sort, q_hclust, sort_col, order_file,
-                hc=None):
+                hc=None, *, language="en"):
     if order_file:
-        order = order_from_file(order_file, iids)
+        order = order_from_file(order_file, iids, language=language)
         return order, spans_of(order, groups)
     buckets = OrderedDict()
     for i, g in enumerate(groups):
@@ -126,9 +127,9 @@ def build_order(iids, groups, blocks, within, within_group, rest_name, q_sort, q
         # --sort-col forces one column for every q-sorted block.
         # Without it, each block sorts on its own majority column.
         col = sort_col - 1 if (mode == "q" and sort_col) else None
-        order.extend(sort_block(idxs, mode, iids, q, col, hc))
+        order.extend(sort_block(idxs, mode, iids, q, col, hc, language=language))
     if len(order) != len(iids) or len(set(order)) != len(iids):
-        raise SystemExit("排序结果不是全体样本的一个排列")
+        raise SystemExit(_msg("order_not_permutation", language))
     return order, spans_of(order, groups)
 
 

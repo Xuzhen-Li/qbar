@@ -27,8 +27,10 @@ from .io import (
     load_q_set,
     parse_colors,
 )
+from .messages import text as _msg
 from .order import WITHIN, build_order, check_hclust_opts
 from .report import column_label, write_align_report, write_tables
+
 
 def column_owners(q, iids, groups, rank):
     k = q.shape[1]
@@ -52,15 +54,15 @@ def legend_lines(q, groups, owners, hexes):
     return rows
 
 
-def parse_within(items):
+def parse_within(items, *, language="en"):
     out = {}
     for item in items or []:
         if "=" not in item:
-            raise SystemExit("--within-group 写成 组名=iid|q|hclust|input，收到 %s" % item)
+            raise SystemExit(_msg("within_group_syntax", language, item=item))
         name, mode = item.split("=", 1)
         mode = mode.strip()
         if mode not in WITHIN:
-            raise SystemExit("组内排序只能是 %s，收到 %s" % (", ".join(WITHIN), mode))
+            raise SystemExit(_msg("within_mode", language, modes=", ".join(WITHIN), mode=mode))
         out[name.strip()] = mode
     return out
 
@@ -267,7 +269,8 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
 
     ``args.q_format`` selects the matrix layout: ``admixture``, ``meanq``,
     or ``qopt``. ``args.ind`` is an optional EIGENSTRAT .ind path. At most
-    one of fam, ids, and ind is set.
+    one of fam, ids, and ind is set. ``args.language`` is ``en`` or ``zh``.
+    Help, errors, and warnings use ``en`` unless it is ``zh``.
     """
     if args.provenance:
         started = datetime.datetime.now().astimezone().isoformat()
@@ -276,46 +279,48 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     # Imported on call so this module can be imported without the drawing code.
     from .plot_static import ancestry_image, assign_colors, render
 
-    check_hclust_opts(args.hclust_dist, args.hclust_linkage)
-    files = collect_q(args.q, format=args.q_format)
-    q_by_k, src = load_q_set(files, format=args.q_format)
-    iids = load_ids(args.fam, args.ids, ind=args.ind)
-    check_shapes(q_by_k, len(iids))
-    groups = load_groups(args.groups, iids, args.id_col, args.group_col, args.rest_name)
-    within_group = parse_within(args.within_group)
+    language = args.language
+    check_hclust_opts(args.hclust_dist, args.hclust_linkage, language=language)
+    files = collect_q(args.q, format=args.q_format, language=language)
+    q_by_k, src = load_q_set(files, format=args.q_format, language=language)
+    iids = load_ids(args.fam, args.ids, ind=args.ind, language=language)
+    check_shapes(q_by_k, len(iids), language=language)
+    groups = load_groups(args.groups, iids, args.id_col, args.group_col, args.rest_name, language=language)
+    within_group = parse_within(args.within_group, language=language)
     unknown = sorted(set(within_group) - set(groups))
     if unknown:
-        print("注意：--within-group 里这些组在样本中没有：%s" % ", ".join(unknown), file=sys.stderr)
+        print(_msg("within_group_missing", language, names=", ".join(unknown)), file=sys.stderr)
     blocks = [x.strip() for x in args.blocks.split(",") if x.strip()] if args.blocks else []
     align_groups = [x.strip() for x in args.align_groups.split(",") if x.strip()]
     do_align = (len(q_by_k) > 1) if args.align is None else args.align
     aligned, perm, meta = align_qs(
         q_by_k, groups, args.anchor_group.strip(), args.align_mode,
         align_groups, args.qmax, do_align, args.align_method,
-        args.jaccard_set, args.jaccard_cut,
+        args.jaccard_set, args.jaccard_cut, language=language,
     )
     ks = sorted(aligned)
     sort_k = args.sort_k or ks[-1]
     hclust_k = args.hclust_k or sort_k
     for name, k in (("--sort-k", sort_k), ("--hclust-k", hclust_k)):
         if k not in aligned:
-            raise SystemExit("%s=%d 没有对应的 Q" % (name, k))
+            raise SystemExit(_msg("missing_q_for_k", language, name=name, k=k))
     if args.sort_col is not None and (args.sort_col < 1 or args.sort_col > sort_k):
-        raise SystemExit("--sort-col 要在 1 到 %d 之间" % sort_k)
+        raise SystemExit(_msg("sort_col_range", language, k=sort_k))
     if args.order_file and blocks:
-        print("给了 --order-file，--blocks 不用", file=sys.stderr)
+        print(_msg("order_file_ignores_blocks", language), file=sys.stderr)
     order, spans = build_order(
         iids, groups, blocks, args.within, within_group, args.rest_name,
         aligned[sort_k], aligned[hclust_k], args.sort_col, args.order_file,
         {"dist": args.hclust_dist, "link": args.hclust_linkage, "olo": args.hclust_olo, "pre": args.hclust_pre},
+        language=language,
     )
     rank = {name: i for i, name in enumerate(blocks)}
-    group_color, col_color = parse_colors(args.color, args.color_file)
+    group_color, col_color = parse_colors(args.color, args.color_file, language=language)
     owners = {}
     hexes = {}
     for k in ks:
         owners[k] = column_owners(aligned[k], iids, groups, rank)
-        hexes[k] = assign_colors(k, owners[k], group_color, col_color)
+        hexes[k] = assign_colors(k, owners[k], group_color, col_color, language=language)
     bar_h = args.bar_height or (220 if len(ks) == 1 else 120)
     # Draw at native sample width, then scale to --width. Height here is the
     # pre-scale resolution; render() resizes the bar to bar_h.
@@ -329,14 +334,14 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     os.makedirs(args.outdir, exist_ok=True)
     if len(rows) == 1:
         out = os.path.join(args.outdir, "bar_K%d.png" % rows[0]["k"])
-        render(out, rows, spans, args.width, bar_h, args.title)
+        render(out, rows, spans, args.width, bar_h, args.title, language=language)
         print(out)
     else:
         for row in rows:
             one = os.path.join(args.outdir, "bar_K%d.png" % row["k"])
-            render(one, [row], spans, args.width, max(bar_h, 180), args.title)
+            render(one, [row], spans, args.width, max(bar_h, 180), args.title, language=language)
         panel = os.path.join(args.outdir, "panel.png")
-        render(panel, rows, spans, args.width, bar_h, args.title)
+        render(panel, rows, spans, args.width, bar_h, args.title, language=language)
         print(panel)
     write_tables(args.outdir, iids, groups, order, spans, perm, owners, hexes, meta, aligned)
     if args.align_report and meta:
