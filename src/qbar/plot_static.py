@@ -18,6 +18,54 @@ PALETTE = [
 ]
 
 
+# Eight colours sampled by k-means from Fig. 1D of Dong et al. 2023,
+# Science 379:892, DOI 10.1126/science.add8655. Not a journal palette.
+# Lowercase matches PALETTE and norm_hex. The grey Ad swatch is not included.
+SCIENCE_PALETTE = [
+    "#4470b7", "#dc1f26", "#981b1e", "#f7922c",
+    "#835ca6", "#0b5475", "#fbee61", "#f6a3b1",
+]
+
+
+# matplotlib TABLEAU_COLORS, tag v3.9.2, source order.
+# https://raw.githubusercontent.com/matplotlib/matplotlib/v3.9.2/lib/matplotlib/_color_data.py
+TAB10_PALETTE = [
+    "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+    "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+]
+
+
+# ColorBrewer via matplotlib _cm.py at tag v3.9.2. Hex is round(255 * channel).
+# https://raw.githubusercontent.com/matplotlib/matplotlib/v3.9.2/lib/matplotlib/_cm.py
+# Copyright (c) 2002 Cynthia Brewer, Mark Harrower, and The Pennsylvania State University.
+SET1_PALETTE = [
+    "#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00",
+    "#ffff33", "#a65628", "#f781bf", "#999999",
+]
+
+DARK2_PALETTE = [
+    "#1b9e77", "#d95f02", "#7570b3", "#e7298a",
+    "#66a61e", "#e6ab02", "#a6761d", "#666666",
+]
+
+PAIRED_PALETTE = [
+    "#a6cee3", "#1f78b4", "#b2df8a", "#33a02c", "#fb9a99", "#e31a1c",
+    "#fdbf6f", "#ff7f00", "#cab2d6", "#6a3d9a", "#ffff99", "#b15928",
+]
+
+
+PALETTE_NAMES = ("science", "classic", "tab10", "set1", "dark2", "paired")
+
+PALETTES = {
+    "science": SCIENCE_PALETTE,
+    "classic": PALETTE,
+    "tab10": TAB10_PALETTE,
+    "set1": SET1_PALETTE,
+    "dark2": DARK2_PALETTE,
+    "paired": PAIRED_PALETTE,
+}
+
+
 # Same left margin render() has always used for the bars.
 BAR_LEFT = 56
 
@@ -45,7 +93,11 @@ def hex_rgb(h):
 
 
 def hsv_hex(i):
-    """Extra colours once PALETTE is used up. Golden-angle hue, s=0.65, v=0.90."""
+    """Extra colours once the finite list is used up. Golden-angle hue, s=0.65, v=0.90.
+
+    ``i`` is the index the caller passes. For classic, that is the same
+    index ``next_free`` has always walked, so the tail starts at 20.
+    """
     hue = (i * 137.508) % 360.0
     s, v = 0.65, 0.90
     c = v * s
@@ -60,26 +112,69 @@ def hsv_hex(i):
     return "#%02x%02x%02x" % tuple(vals)
 
 
-def next_free(used, start):
+def palette_sequence(name):
+    """Finite colours before ``hsv_hex``.
+
+    ``classic`` is ``PALETTE``. Any other name starts with that palette,
+    then classic colours whose hex is not already present. The comparison
+    is the exact hex, case-insensitive. ``hsv_hex`` follows that list.
+    """
+    if name not in PALETTES:
+        raise KeyError(name)
+    if name == "classic":
+        return list(PALETTE)
+    seen = {h.lower() for h in PALETTES[name]}
+    extra = [h for h in PALETTE if h.lower() not in seen]
+    return list(PALETTES[name]) + extra
+
+
+def _color_at(name, index):
+    seq = palette_sequence(name)
+    if index < len(seq):
+        return seq[index]
+    return hsv_hex(index)
+
+
+def next_free(used, start, palette="classic"):
+    """First unused colour at or after ``start``.
+
+    The default ``classic`` is the previous 20 colours, then ``hsv_hex``.
+    ``start`` is the column index, the same place the search has always begun.
+    """
     i = start
     while True:
-        if i < len(PALETTE):
-            h = PALETTE[i]
-        else:
-            h = hsv_hex(i)
+        h = _color_at(palette, i)
         if h.lower() not in used:
             return h.lower()
         i += 1
 
 
-def assign_colors(k, owners, group_color, col_color, *, language="en"):
+def assign_colors(k, owners, group_color, col_color, *, language="en", lock_from=None, palette="science"):
+    """Colours for one K.
+
+    Pass 1 is ``--color`` for a column. Pass 2 is ``lock_from`` when it
+    is set: column c keeps the colour chosen at the lowest K, unless pass 1
+    already set that column. Pass 3 is a group colour. Pass 4 is the palette.
+    ``palette`` defaults to science. ``lock_from`` None leaves each K on its own.
+    """
+    if palette not in PALETTES:
+        raise SystemExit(_msg("palette_choice", language, name=palette))
     hexes = [None] * k
     used = set()
     for c in range(k):
         if (c + 1) in col_color:
             hx = col_color[c + 1]
             if hx in used:
-                hx = next_free(used, c)
+                hx = next_free(used, c, palette)
+            hexes[c] = hx
+            used.add(hx)
+    if lock_from:
+        for c in range(min(k, len(lock_from))):
+            if hexes[c] is not None:
+                continue
+            hx = lock_from[c].lower()
+            if hx in used:
+                hx = next_free(used, c, palette)
             hexes[c] = hx
             used.add(hx)
     for c, ow in enumerate(owners):
@@ -92,12 +187,39 @@ def assign_colors(k, owners, group_color, col_color, *, language="en"):
                 break
     for c in range(k):
         if hexes[c] is None:
-            hx = next_free(used, c)
+            hx = next_free(used, c, palette)
             hexes[c] = hx
             used.add(hx)
     if len(set(hexes)) != k:
         raise SystemExit(_msg("duplicate_color", language, k=k))
     return hexes
+
+
+def greyscale_rgb(rgb):
+    """qbar's own greyscale preview.
+
+    Each pixel becomes round(0.2126*R + 0.7152*G + 0.0722*B) on all three
+    channels. ``rgb`` is an array whose last axis has length 3.
+    """
+    arr = np.asarray(rgb, dtype=np.float64)
+    y = 0.2126 * arr[..., 0] + 0.7152 * arr[..., 1] + 0.0722 * arr[..., 2]
+    # np.round uses half to even, the same rule as Python round.
+    grey = np.round(y).astype(np.uint8)
+    return np.stack([grey, grey, grey], axis=-1)
+
+
+def write_greyscale_png(path, source):
+    """Write ``panel_grey.png`` from a PNG path or an RGB array."""
+    if isinstance(source, (str, os.PathLike)):
+        with Image.open(source) as img:
+            rgb = np.asarray(img.convert("RGB"))
+    else:
+        rgb = np.asarray(source)
+    grey = greyscale_rgb(rgb)
+    folder = os.path.dirname(os.path.abspath(path))
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    Image.fromarray(grey).save(path, dpi=(150, 150))
 
 
 def ancestry_image(q, hexes, height):

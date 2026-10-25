@@ -1211,6 +1211,8 @@ class DocstringTests(unittest.TestCase):
         ``--auto-groups``, ``--auto-k``, ``--admix-cut``, ``--auto-g``,
         ``--auto-seed``, ``--pca``, and ``--pca-n`` are documented in
         ``docs/cli.md`` and ``docs/factpacks/F8.md``.
+        ``--palette``, ``--color-lock``, and ``--greyscale-preview`` are
+        documented in ``docs/cli.md`` and ``docs/factpacks/S4.md``.
         """
         import re
         # --select-k and --plateau-fraction are documented in docs/cli.md
@@ -1233,6 +1235,8 @@ class DocstringTests(unittest.TestCase):
         # --auto-groups, --auto-k, --admix-cut, --auto-g, --auto-seed,
         # --pca, and --pca-n are documented in docs/cli.md and
         # docs/factpacks/F8.md.
+        # --palette, --color-lock, and --greyscale-preview are documented
+        # in docs/cli.md and docs/factpacks/S4.md.
         later = {
             "--provenance", "--q-format", "--ind", "--logs", "--logs-map",
             "--select-k", "--plateau-fraction",
@@ -1246,6 +1250,7 @@ class DocstringTests(unittest.TestCase):
             "--order-mode", "--group-order", "--dendrogram", "--hclust-max-bytes",
             "--auto-groups", "--auto-k", "--admix-cut", "--auto-g",
             "--auto-seed", "--pca", "--pca-n",
+            "--palette", "--color-lock", "--greyscale-preview",
         }
         flags = []
         for action in qbar.build_parser()._actions:
@@ -7112,6 +7117,232 @@ class AutoGroupsTests(unittest.TestCase):
                 ])
             self.assertIn("got 5", n_err.exception.code)
             self.assertFalse(os.path.exists(beyond))
+
+
+# Copied from matplotlib 3.9.2. Not computed by the code under test.
+# tab10: lib/matplotlib/_color_data.py TABLEAU_COLORS, source order.
+# set1, dark2, paired: lib/matplotlib/_cm.py ColorBrewer tuples,
+# hex from round(255 * channel) on those literals.
+_TAB10_HEX = [
+    "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+    "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+]
+_SET1_HEX = [
+    "#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00",
+    "#ffff33", "#a65628", "#f781bf", "#999999",
+]
+_DARK2_HEX = [
+    "#1b9e77", "#d95f02", "#7570b3", "#e7298a",
+    "#66a61e", "#e6ab02", "#a6761d", "#666666",
+]
+_PAIRED_HEX = [
+    "#a6cee3", "#1f78b4", "#b2df8a", "#33a02c", "#fb9a99", "#e31a1c",
+    "#fdbf6f", "#ff7f00", "#cab2d6", "#6a3d9a", "#ffff99", "#b15928",
+]
+_SCIENCE_HEX = [
+    "#4470b7", "#dc1f26", "#981b1e", "#f7922c",
+    "#835ca6", "#0b5475", "#fbee61", "#f6a3b1",
+]
+_CLASSIC_HEX = [
+    "#0072b2", "#d55e00", "#009e73", "#cc79a7", "#e69f00",
+    "#56b4e9", "#f0e442", "#332288", "#88ccee", "#44aa99",
+    "#117733", "#999933", "#ddcc77", "#cc6677", "#882255",
+    "#aa4499", "#661100", "#6699cc", "#888888", "#8d6e63",
+]
+
+
+class PaletteTests(unittest.TestCase):
+    def _ids(self, tmp, n):
+        path = os.path.join(tmp, "ids.txt")
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            for i in range(n):
+                handle.write("s%d\n" % i)
+        return path
+
+    def _write_q(self, tmp, rows):
+        rows = [list(row) for row in rows]
+        k = len(rows[0])
+        path = os.path.join(tmp, "sim.%d.Q" % k)
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            for row in rows:
+                handle.write(" ".join("%.6f" % float(v) for v in row) + "\n")
+        return path
+
+    def _perm_hexes(self, out, k):
+        path = os.path.join(out, "perm_K%d.tsv" % k)
+        with open(path, encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+        self.assertEqual(lines[0], "C\traw\thex\towners")
+        return [line.split("\t")[2] for line in lines[1:]]
+
+    def test_classic_palette_and_perm_hex(self):
+        self.assertEqual(list(qbar.PALETTE), _CLASSIC_HEX)
+        self.assertEqual(_CLASSIC_HEX[:7], [
+            "#0072b2", "#d55e00", "#009e73", "#cc79a7",
+            "#e69f00", "#56b4e9", "#f0e442",
+        ])
+        owners = [[] for _ in range(7)]
+        self.assertEqual(
+            qbar.assign_colors(7, owners, {}, {}, palette="classic"),
+            _CLASSIC_HEX[:7],
+        )
+        # Column 0 is taken by a colour outside the old list, so column c
+        # still starts its search at index c. That is the previous next_free.
+        shifted = qbar.assign_colors(
+            3, [[], [], []], {}, {1: "#ff00ff"}, palette="classic",
+        )
+        self.assertEqual(shifted, ["#ff00ff", "#d55e00", "#009e73"])
+        with tempfile.TemporaryDirectory() as tmp:
+            qpath = self._write_q(tmp, [[1, 0, 0, 0, 0, 0, 0]])
+            ids = self._ids(tmp, 1)
+            out = os.path.join(tmp, "out")
+            self.assertEqual(qbar.main([
+                "--q", qpath, "--ids", ids, "--palette", "classic",
+                "--no-align", "--outdir", out,
+            ]), 0)
+            self.assertEqual(self._perm_hexes(out, 7), _CLASSIC_HEX[:7])
+
+    def test_default_science_then_unused_classic(self):
+        parser = qbar.build_parser()
+        self.assertEqual(_cli_flag(parser, "--palette").default, "science")
+        self.assertEqual(list(_cli_flag(parser, "--palette").choices), list(qbar.PALETTE_NAMES))
+        self.assertEqual(_cli_flag(parser, "--color-lock").default, "off")
+        self.assertFalse(_cli_flag(parser, "--greyscale-preview").default)
+        self.assertEqual(_cli_flag(parser, "--id-col").default, "analysis_IID")
+        self.assertEqual(_cli_flag(parser, "--group-col").default, "Dong_Grp")
+        help_s = _cli_flag(parser, "--palette").help or ""
+        self.assertTrue(all(ord(ch) < 128 for ch in help_s))
+        self.assertIn("classic is the previous 20 colours", help_s)
+        zh = _cli_flag(qbar.build_parser(language="zh"), "--palette").help or ""
+        self.assertIn("原来的 20 色", zh)
+        self.assertEqual(list(qbar.SCIENCE_PALETTE), _SCIENCE_HEX)
+        self.assertNotIn("#989697", [h.lower() for h in qbar.SCIENCE_PALETTE])
+        owners8 = [[] for _ in range(8)]
+        self.assertEqual(qbar.assign_colors(8, owners8, {}, {}), _SCIENCE_HEX)
+        owners10 = [[] for _ in range(10)]
+        got10 = qbar.assign_colors(10, owners10, {}, {}, palette="science")
+        self.assertEqual(got10[:8], _SCIENCE_HEX)
+        self.assertEqual(got10[8:], ["#0072b2", "#d55e00"])
+        seq = qbar.palette_sequence("science")
+        self.assertEqual(seq[8:10], ["#0072b2", "#d55e00"])
+        self.assertEqual(qbar.next_free(set(), len(seq), "science"), qbar.hsv_hex(len(seq)))
+        with tempfile.TemporaryDirectory() as tmp:
+            q8 = self._write_q(tmp, [[1, 0, 0, 0, 0, 0, 0, 0]])
+            q10 = self._write_q(tmp, [[1, 0, 0, 0, 0, 0, 0, 0, 0, 0]])
+            ids = self._ids(tmp, 1)
+            out = os.path.join(tmp, "out")
+            self.assertEqual(qbar.main([
+                "--q", q8, q10, "--ids", ids, "--no-align", "--outdir", out,
+            ]), 0)
+            self.assertEqual(self._perm_hexes(out, 8), _SCIENCE_HEX)
+            self.assertEqual(self._perm_hexes(out, 10), _SCIENCE_HEX + ["#0072b2", "#d55e00"])
+            self.assertFalse(os.path.exists(os.path.join(out, "panel_grey.png")))
+
+    def test_matplotlib_palette_literals(self):
+        self.assertEqual(list(qbar.TAB10_PALETTE), _TAB10_HEX)
+        self.assertEqual(list(qbar.SET1_PALETTE), _SET1_HEX)
+        self.assertEqual(list(qbar.DARK2_PALETTE), _DARK2_HEX)
+        self.assertEqual(list(qbar.PAIRED_PALETTE), _PAIRED_HEX)
+        for name, literal in (
+            ("tab10", _TAB10_HEX),
+            ("set1", _SET1_HEX),
+            ("dark2", _DARK2_HEX),
+            ("paired", _PAIRED_HEX),
+        ):
+            got = qbar.assign_colors(len(literal), [[] for _ in literal], {}, {}, palette=name)
+            self.assertEqual(got, literal)
+            seq = qbar.palette_sequence(name)
+            self.assertEqual(seq[:len(literal)], literal)
+            self.assertEqual(seq[len(literal):len(literal) + 2], ["#0072b2", "#d55e00"])
+
+    def test_color_lock_shares_hex_and_color_wins(self):
+        # Owners differ across K, so an unlocked run gives C1 two hex values.
+        # --no-align keeps the file column order.
+        k2 = [
+            [0.9, 0.1],
+            [0.2, 0.8],
+            [0.7, 0.3],
+        ]
+        k3 = [
+            [0.2, 0.7, 0.1],
+            [0.8, 0.1, 0.1],
+            [0.1, 0.2, 0.7],
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            q2 = self._write_q(tmp, k2)
+            q3 = self._write_q(tmp, k3)
+            ids = self._ids(tmp, 3)
+            groups = os.path.join(tmp, "groups.tsv")
+            with open(groups, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("id\tgroup\ns0\tA\ns1\tB\ns2\tC\n")
+            base = [
+                "--q", q2, q3, "--ids", ids,
+                "--groups", groups, "--id-col", "id", "--group-col", "group",
+                "--no-align",
+                "--color", "A=#aa0000", "--color", "B=#00aa00", "--color", "C=#0000aa",
+            ]
+            unlocked = os.path.join(tmp, "unlocked")
+            locked = os.path.join(tmp, "locked")
+            forced = os.path.join(tmp, "forced")
+            self.assertEqual(qbar.main(base + ["--color-lock", "off", "--outdir", unlocked]), 0)
+            self.assertEqual(qbar.main(base + ["--color-lock", "on", "--outdir", locked]), 0)
+            self.assertEqual(qbar.main(base + [
+                "--color-lock", "on", "--color", "C1=#123456", "--outdir", forced,
+            ]), 0)
+            u2 = self._perm_hexes(unlocked, 2)
+            u3 = self._perm_hexes(unlocked, 3)
+            self.assertNotEqual(u2[0], u3[0])
+            self.assertNotEqual(u2[1], u3[1])
+            h2 = self._perm_hexes(locked, 2)
+            h3 = self._perm_hexes(locked, 3)
+            self.assertEqual(h2[0], h3[0])
+            self.assertEqual(h2[1], h3[1])
+            self.assertEqual(h2, ["#aa0000", "#00aa00"])
+            self.assertEqual(h3[2], "#0000aa")
+            f2 = self._perm_hexes(forced, 2)
+            f3 = self._perm_hexes(forced, 3)
+            self.assertEqual(f2[0], "#123456")
+            self.assertEqual(f3[0], "#123456")
+            self.assertEqual(f2[1], "#00aa00")
+            self.assertEqual(f3[1], "#00aa00")
+        direct = qbar.assign_colors(
+            3, [[], [], []], {}, {1: "#123456"},
+            lock_from=["#aa0000", "#00aa00"], palette="classic",
+        )
+        self.assertEqual(direct[0], "#123456")
+        self.assertEqual(direct[1], "#00aa00")
+
+    def test_greyscale_preview_pixel_and_default_off(self):
+        got = qbar.greyscale_rgb(np.array([[[255, 0, 0]]], dtype=np.uint8))
+        value = int(round(0.2126 * 255))
+        self.assertEqual(got[0, 0].tolist(), [value, value, value])
+        with tempfile.TemporaryDirectory() as tmp:
+            q2 = self._write_q(tmp, [[0.8, 0.2], [0.1, 0.9]])
+            q3 = self._write_q(tmp, [[0.7, 0.2, 0.1], [0.1, 0.2, 0.7]])
+            ids = self._ids(tmp, 2)
+            plain = os.path.join(tmp, "plain")
+            grey = os.path.join(tmp, "grey")
+            one = os.path.join(tmp, "one")
+            base = ["--q", q2, q3, "--ids", ids, "--no-align"]
+            self.assertEqual(qbar.main(base + ["--outdir", plain]), 0)
+            self.assertFalse(os.path.exists(os.path.join(plain, "panel_grey.png")))
+            self.assertEqual(qbar.main(base + ["--greyscale-preview", "--outdir", grey]), 0)
+            grey_path = os.path.join(grey, "panel_grey.png")
+            self.assertTrue(os.path.isfile(grey_path))
+            with Image.open(os.path.join(grey, "panel.png")) as src, Image.open(grey_path) as img:
+                raw = np.asarray(src.convert("RGB"))
+                painted = np.asarray(img.convert("RGB"))
+            self.assertTrue(np.array_equal(painted, qbar.greyscale_rgb(raw)))
+            self.assertTrue(np.all(painted[..., 0] == painted[..., 1]))
+            self.assertTrue(np.all(painted[..., 1] == painted[..., 2]))
+            q_one = self._write_q(tmp, [[0.4, 0.6]])
+            self.assertEqual(qbar.main([
+                "--q", q_one, "--ids", self._ids(tmp, 1),
+                "--greyscale-preview", "--no-align", "--outdir", one,
+            ]), 0)
+            self.assertTrue(os.path.isfile(os.path.join(one, "panel_grey.png")))
+            self.assertFalse(os.path.exists(os.path.join(one, "panel.png")))
+            self.assertTrue(os.path.isfile(os.path.join(one, "bar_K2.png")))
 
 
 if __name__ == "__main__":

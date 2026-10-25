@@ -17,20 +17,30 @@ del _kept
 from .api import write_run_json
 
 _PLOT_EXPORTS = (
+    "DARK2_PALETTE",
     "FONT_CANDIDATES",
     "Image",
     "ImageDraw",
     "ImageFont",
+    "PAIRED_PALETTE",
     "PALETTE",
+    "PALETTE_NAMES",
+    "PALETTES",
+    "SCIENCE_PALETTE",
+    "SET1_PALETTE",
+    "TAB10_PALETTE",
     "ancestry_image",
     "assign_colors",
     "draw_rotated",
+    "greyscale_rgb",
     "hex_rgb",
     "hsv_hex",
     "load_font",
     "next_free",
+    "palette_sequence",
     "render",
     "text_wh",
+    "write_greyscale_png",
 )
 
 

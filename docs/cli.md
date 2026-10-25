@@ -255,6 +255,26 @@ Two columns: name and #rrggbb
 
 - Default: not set
 
+### `--palette`
+
+Bar colours: science, classic, tab10, set1, dark2, or paired. Default science. classic is the previous 20 colours.
+
+- Choices: science, classic, tab10, set1, dark2, paired
+- Default: science
+
+### `--color-lock`
+
+off or on. Default off. on keeps each aligned column's colour from the lowest K, unless --color sets that column.
+
+- Choices: off, on
+- Default: off
+
+### `--greyscale-preview`
+
+Also write panel_grey.png. Each pixel is round(0.2126*R + 0.7152*G + 0.0722*B) on all three channels. Default off.
+
+- Default: false
+
 ### `--title`
 
 - Default: ""
