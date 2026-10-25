@@ -10,6 +10,7 @@ The package version is 0.2.0.dev0. No git tag exists.
 
 ### Added
 
+- `--align-method clumpp-largek` locks column pairs by column G' after the same zero padding and does not stop when K+1 is above 8.
 - `--align-method clumpp-greedy` returns the same permutation as clumpp-full on one K to K+1 pair. The published Greedy differs only with more than two runs at one K.
 - `--align-method clumpp-full` pads the previous Q with one zero column and searches every permutation to maximize G'. It stops when K+1 is above 8. The default method stays greedy.
 - `--replicates` groups several Q files at one K into modes and aligns the major-mode mean across K. It is off by default. A second file at one K still exits with the duplicate-K error unless `--replicates` is set. `--mode-sim-cut` is required with that flag and is not calibrated. No default cut is shipped.
