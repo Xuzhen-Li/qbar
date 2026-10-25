@@ -1175,7 +1175,13 @@ class DocstringTests(unittest.TestCase):
                 )
 
     def test_readmes_name_every_cli_option(self):
+        """Every flag except ``--provenance`` is named in both READMEs.
+
+        ``--provenance`` is documented in ``docs/cli.md`` and
+        ``docs/factpacks/S10.md``. The README files are unchanged here.
+        """
         import re
+        later = {"--provenance"}
         flags = []
         for action in qbar.build_parser()._actions:
             for name in action.option_strings:
@@ -1186,7 +1192,9 @@ class DocstringTests(unittest.TestCase):
             text = _read_checkout(path)
             missing = [
                 name for name in flags
-                if re.search(r"(?<![\w-])" + re.escape(name) + r"(?![\w-])", text) is None
+                if name not in later and re.search(
+                    r"(?<![\w-])" + re.escape(name) + r"(?![\w-])", text
+                ) is None
             ]
             self.assertEqual(missing, [], path)
 
@@ -1468,6 +1476,184 @@ class ApiRunTests(unittest.TestCase):
         self.assertTrue(callable(qbar.api.run))
         self.assertTrue(callable(qbar.main))
         self.assertIs(qbar.run, qbar.api.run)
+
+
+class ProvenanceTests(unittest.TestCase):
+    def test_provenance_defaults_off(self):
+        """``--provenance`` is a store_true flag and defaults off.
+
+        The help string is the one sentence on ``build_parser``.
+        """
+        parser = qbar.build_parser()
+        action = _cli_flag(parser, "--provenance")
+        self.assertEqual(
+            action.help,
+            "另写 run.json，记下版本、选项、输入哈希和依赖版本",
+        )
+        self.assertIs(action.default, False)
+        args = parser.parse_args(["--q", "x.Q", "--outdir", "o"])
+        self.assertIs(args.provenance, False)
+        self.assertIs(qbar.write_run_json, qbar.api.write_run_json)
+
+    def test_run_json_hashes_abc_and_records_greedy_default(self):
+        """Hash the file bytes in this test, and require the greedy default.
+
+        The file whose contents are the three bytes ``abc`` is the fam
+        file. The expected sha256 is ``hashlib.sha256(b"abc").hexdigest()``
+        computed here, and nbytes is 3. ``align_method`` must be the
+        string ``greedy`` because ``build_parser`` sets that default.
+        This test reads that default from the parser and requires the
+        recorded value to equal it. The command omits ``--align-method``.
+        """
+        import hashlib
+        import json
+        import platform
+
+        import PIL
+        import scipy
+
+        expected_abc = hashlib.sha256(b"abc").hexdigest()
+        parser = qbar.build_parser()
+        parser_default = _cli_flag(parser, "--align-method").default
+        self.assertEqual(parser_default, "greedy")
+        with tempfile.TemporaryDirectory() as tmp:
+            q2 = os.path.join(tmp, "t.2.Q")
+            q3 = os.path.join(tmp, "t.3.Q")
+            fam = os.path.join(tmp, "abc.fam")
+            groups = os.path.join(tmp, "groups.tsv")
+            order = os.path.join(tmp, "order.txt")
+            color = os.path.join(tmp, "colors.txt")
+            with open(q2, "wb") as handle:
+                handle.write(b"0.25 0.75\n")
+            with open(q3, "wb") as handle:
+                handle.write(b"0.20 0.30 0.50\n")
+            with open(fam, "wb") as handle:
+                handle.write(b"abc")
+            with open(groups, "wb") as handle:
+                handle.write(b"analysis_IID\tDong_Grp\nabc\tA\n")
+            with open(order, "wb") as handle:
+                handle.write(b"abc\n")
+            with open(color, "wb") as handle:
+                handle.write(b"A #112233\n")
+            out = os.path.join(tmp, "out")
+            argv = [
+                "--q", q2, q3,
+                "--fam", fam,
+                "--groups", groups,
+                "--order-file", order,
+                "--color-file", color,
+                "--outdir", out,
+                "--provenance",
+            ]
+            self.assertNotIn("--align-method", argv)
+            args = parser.parse_args(argv)
+            result = qbar.api.run(args, argv)
+            run_json = os.path.join(out, "run.json")
+            self.assertIn(run_json, result.paths)
+            self.assertTrue(os.path.isfile(os.path.join(out, "args.txt")))
+            with open(run_json, "rb") as handle:
+                raw = handle.read()
+            self.assertTrue(raw.endswith(b"}\n"))
+            self.assertNotIn(b"\r", raw)
+            text = raw.decode("utf-8")
+            self.assertNotIn("Namespace", text)
+            payload = json.loads(text)
+            self.assertEqual(
+                list(payload),
+                [
+                    "qbar_version",
+                    "git_commit",
+                    "argv",
+                    "resolved_options",
+                    "inputs",
+                    "numpy",
+                    "scipy",
+                    "pillow",
+                    "python",
+                    "started",
+                    "finished",
+                    "platform",
+                ],
+            )
+            self.assertEqual(payload["qbar_version"], qbar.__version__)
+            self.assertEqual(payload["argv"], argv)
+            self.assertEqual(payload["resolved_options"]["align_method"], "greedy")
+            self.assertEqual(payload["resolved_options"]["align_method"], parser_default)
+            self.assertEqual(list(payload["resolved_options"]), sorted(vars(args)))
+            self.assertIs(payload["resolved_options"]["provenance"], True)
+            wanted = [q2, q3, fam, groups, order, color]
+            self.assertEqual([item["path"] for item in payload["inputs"]], wanted)
+            by_path = {item["path"]: item for item in payload["inputs"]}
+            self.assertEqual(by_path[fam]["sha256"], expected_abc)
+            self.assertEqual(by_path[fam]["nbytes"], 3)
+            for path in wanted:
+                with open(path, "rb") as handle:
+                    data = handle.read()
+                self.assertEqual(by_path[path]["sha256"], hashlib.sha256(data).hexdigest())
+                self.assertEqual(by_path[path]["nbytes"], len(data))
+            self.assertRegex(payload["git_commit"], r"^(?:[0-9a-f]{40}|unknown)$")
+            stamp = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?[+-]\d{2}:\d{2}$"
+            self.assertRegex(payload["started"], stamp)
+            self.assertRegex(payload["finished"], stamp)
+            self.assertEqual(payload["numpy"], np.__version__)
+            self.assertEqual(payload["scipy"], scipy.__version__)
+            self.assertEqual(payload["pillow"], PIL.__version__)
+            self.assertEqual(payload["python"], platform.python_version())
+            self.assertEqual(payload["platform"], platform.platform())
+            self.assertNotIn("Pillow", payload)
+
+    def test_default_command_writes_no_run_json(self):
+        """A command without ``--provenance`` writes no run.json.
+
+        ``args.txt`` bytes from two runs of the same command are equal.
+        The Q file is a tiny synthetic matrix in a temporary directory.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            q_path = os.path.join(tmp, "t.2.Q")
+            ids_path = os.path.join(tmp, "ids.txt")
+            with open(q_path, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("0.25 0.75\n0.40 0.60\n")
+            with open(ids_path, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("a\nb\n")
+            out = os.path.join(tmp, "out")
+            argv = ["--q", q_path, "--ids", ids_path, "--outdir", out]
+            self.assertNotIn("--provenance", argv)
+            qbar.main(argv)
+            args_path = os.path.join(out, "args.txt")
+            with open(args_path, "rb") as handle:
+                first = handle.read()
+            self.assertNotIn("run.json", os.listdir(out))
+            qbar.main(argv)
+            with open(args_path, "rb") as handle:
+                second = handle.read()
+            self.assertEqual(first, second)
+            self.assertNotIn("run.json", os.listdir(out))
+            self.assertGreater(len(first), 0)
+
+    def test_write_run_json_stores_namespace_as_object(self):
+        """A Namespace is written as an object, not as its Python repr."""
+        import argparse
+        import json
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "run.json")
+            payload = {
+                "resolved_options": argparse.Namespace(align_method="greedy", width=3),
+            }
+            qbar.write_run_json(path, payload)
+            with open(path, "rb") as handle:
+                raw = handle.read()
+            self.assertTrue(raw.endswith(b"\n"))
+            self.assertNotIn(b"Namespace", raw)
+            loaded = json.loads(raw.decode("utf-8"))
+            self.assertEqual(
+                loaded["resolved_options"],
+                {"align_method": "greedy", "width": 3},
+            )
+            self.assertEqual(
+                list(loaded["resolved_options"]),
+                ["align_method", "width"],
+            )
 
 
 if __name__ == "__main__":

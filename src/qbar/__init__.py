@@ -14,6 +14,8 @@ del _name, _value, _cli
 cli = _kept
 del _kept
 
+from .api import write_run_json
+
 _PLOT_EXPORTS = (
     "FONT_CANDIDATES",
     "Image",
