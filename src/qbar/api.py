@@ -37,6 +37,7 @@ from .logs import (
     parse_admixture_log,
     write_cv_loglik_tsv,
 )
+from .flow import check_consecutive_k, cluster_flow, write_cluster_flow_tsv
 from .lowconf import append_low_confidence_rows, read_low_confidence_table
 from .messages import text as _msg
 from .modes import assemble_replicates, require_replicate_flags, write_replicate_outputs
@@ -459,6 +460,19 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     is left as the report alone. If the table is set and no alignment
     report is written, a warning says the table is unused. The default
     is omitted, which does not read a table and does not add a warning.
+
+    When ``args.cluster_flow`` is ``sankey``, the run writes
+    ``cluster_flow.tsv``, ``cluster_flow.png``, and ``cluster_flow.pdf``.
+    The default ``none`` writes none of them. ``args.flow_weight`` is
+    ``share`` or ``jaccard`` and defaults to ``share``. Setting it to
+    something other than ``share`` while ``cluster_flow`` is ``none`` is
+    an error. ``share`` is ``parent_shares`` of each destination column
+    on the alignment mask. ``jaccard`` is the member-set Jaccard, using
+    ``args.jaccard_set`` and ``args.jaccard_cut``. The figure axis title
+    is ``membership weight``. ``low_confidence`` on an edge is the
+    destination column's flag from the alignment report when that report
+    is written, and NA otherwise. ``--no-align`` with ``sankey`` is an
+    error. A gap in K is reported first. No HTML flow file is written.
     """
     if args.provenance:
         started = datetime.datetime.now().astimezone().isoformat()
@@ -467,9 +481,20 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     # Imported on call so this module can be imported without the drawing code.
     from .plot_static import (
         ancestry_image, assign_colors, render, write_cv_loglik_plot, write_select_k_plot,
+        write_cluster_flow_plot,
     )
 
     language = args.language
+    flow_mode = getattr(args, "cluster_flow", "none")
+    flow_weight = getattr(args, "flow_weight", "share")
+    if flow_mode not in ("none", "sankey"):
+        raise SystemExit(_msg("flow_mode_choice", language, mode=flow_mode))
+    if flow_weight not in ("share", "jaccard"):
+        raise SystemExit(_msg("flow_weight_choice", language, weight=flow_weight))
+    # A non-default weight with the flow left off is an error. The default
+    # share is not an error, including when the user passes it explicitly.
+    if flow_mode != "sankey" and flow_weight != "share":
+        raise SystemExit(_msg("flow_weight_needs_sankey", language, weight=flow_weight))
     table_path = getattr(args, "low_confidence_table", None)
     table_rows = None
     if table_path is not None:
@@ -529,11 +554,18 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     blocks = [x.strip() for x in args.blocks.split(",") if x.strip()] if args.blocks else []
     align_groups = [x.strip() for x in args.align_groups.split(",") if x.strip()]
     do_align = (len(q_by_k) > 1) if args.align is None else args.align
+    # Name a missing K before the alignment requirement. Consecutive K
+    # with --no-align then stops, because the flow needs that alignment.
+    if flow_mode == "sankey" and args.align is False:
+        check_consecutive_k(q_by_k, language=language)
+        raise SystemExit(_msg("flow_needs_align", language))
     aligned, perm, meta = align_qs(
         q_by_k, groups, args.anchor_group.strip(), args.align_mode,
         align_groups, args.qmax, do_align, args.align_method,
         args.jaccard_set, args.jaccard_cut, language=language,
     )
+    if flow_mode == "sankey":
+        check_consecutive_k(aligned, language=language)
     ks = sorted(aligned)
     sort_k = args.sort_k or ks[-1]
     hclust_k = args.hclust_k or sort_k
@@ -580,8 +612,9 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         render(panel, rows, spans, args.width, bar_h, args.title, language=language)
         print(panel)
     write_tables(args.outdir, iids, groups, order, spans, perm, owners, hexes, meta, aligned)
+    report_rows = None
     if args.align_report and meta:
-        write_align_report(args.outdir, aligned, meta, groups, args.align_method, perm, args.align_report_low)
+        report_rows = write_align_report(args.outdir, aligned, meta, groups, args.align_method, perm, args.align_report_low)
         if table_rows is not None:
             append_low_confidence_rows(
                 os.path.join(args.outdir, "align_report.txt"),
@@ -594,6 +627,23 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
             print(_msg("lowconf_no_report", language), file=sys.stderr)
         else:
             print(_msg("lowconf_unused", language), file=sys.stderr)
+    flow_tsv = None
+    if flow_mode == "sankey":
+        edges = cluster_flow(
+            aligned,
+            meta,
+            args.align_method,
+            flow_weight,
+            jaccard_set=getattr(args, "jaccard_set", "dominant"),
+            jaccard_cut=getattr(args, "jaccard_cut", 0.5),
+            report_rows=report_rows,
+            language=language,
+        )
+        flow_tsv = os.path.join(args.outdir, "cluster_flow.tsv")
+        write_cluster_flow_tsv(flow_tsv, edges)
+        flow_png = os.path.join(args.outdir, "cluster_flow.png")
+        write_cluster_flow_plot(flow_png, aligned, edges, hexes)
+        print(flow_png)
     if getattr(args, "align_compare", False) and meta:
         write_align_compare(
             args.outdir, q_by_k, aligned, meta, perm, args.align_method,
@@ -714,6 +764,10 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         paths.append(support_path)
     if parent_path is not None:
         paths.append(parent_path)
+    if flow_tsv is not None:
+        paths.append(flow_tsv)
+        paths.append(os.path.join(args.outdir, "cluster_flow.png"))
+        paths.append(os.path.join(args.outdir, "cluster_flow.pdf"))
     if log_paths is not None:
         paths.append(os.path.join(args.outdir, "cv_loglik.tsv"))
         paths.append(os.path.join(args.outdir, "cv_loglik.png"))
