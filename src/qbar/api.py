@@ -194,7 +194,7 @@ def _file_record(path):
 
 def _input_records(q_paths, args):
     paths = list(q_paths)
-    for path in (args.fam, args.ids, args.groups, args.order_file, args.color_file):
+    for path in (args.fam, args.ids, args.ind, args.groups, args.order_file, args.color_file):
         if path:
             paths.append(path)
     return [_file_record(path) for path in paths]
@@ -264,6 +264,10 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     When ``args.provenance`` is true, ``run.json`` is written after
     ``args.txt``. Its ``argv`` is the list passed in, or ``sys.argv[1:]``
     when ``argv`` is ``None``.
+
+    ``args.q_format`` selects the matrix layout: ``admixture``, ``meanq``,
+    or ``qopt``. ``args.ind`` is an optional EIGENSTRAT .ind path. At most
+    one of fam, ids, and ind is set.
     """
     if args.provenance:
         started = datetime.datetime.now().astimezone().isoformat()
@@ -273,9 +277,9 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     from .plot_static import ancestry_image, assign_colors, render
 
     check_hclust_opts(args.hclust_dist, args.hclust_linkage)
-    files = collect_q(args.q)
-    q_by_k, src = load_q_set(files)
-    iids = load_ids(args.fam, args.ids)
+    files = collect_q(args.q, format=args.q_format)
+    q_by_k, src = load_q_set(files, format=args.q_format)
+    iids = load_ids(args.fam, args.ids, ind=args.ind)
     check_shapes(q_by_k, len(iids))
     groups = load_groups(args.groups, iids, args.id_col, args.group_col, args.rest_name)
     within_group = parse_within(args.within_group)
