@@ -966,6 +966,7 @@ def align_report_rows(aligned, meta, groups, method, perm, low=None):
                            low_confidence="yes" if float(shown) < cut else "no")
             else:
                 mx, mx_share, ru, ru_share = split_parent_of(prev, new[:, c], mask)
+                top_tied = mx is not None and ru_share is not None and mx_share == ru_share
                 if method == "pong":
                     pc = info["split_parent"]
                     share = None if mx is None else float(parent_shares(prev, new[:, c], mask)[pc])
@@ -981,6 +982,7 @@ def align_report_rows(aligned, meta, groups, method, perm, low=None):
                            split_parent=fmt_c(pc if share is not None else None), parent_share=fmt_s(share),
                            runner_up=fmt_c(ru), runner_up_share=fmt_s(ru_share),
                            low_confidence="NA")
+                row["_top_shares_tied"] = top_tied
             n_dom, dom = dominant_groups(new, groups, c)
             row["top_groups_mean"] = ";".join("%s:%.3f" % (g, mu) for mu, g in top_groups(new, groups, c))
             row["n_dominant"] = n_dom
@@ -1008,8 +1010,19 @@ def write_align_report(outdir, aligned, meta, groups, method, perm, low=None):
             f.write("\nK=%d -> K=%d (people used: %d)\n" % (k_to - 1, k_to, meta[k_to]["n_mask"]))
             for r in [r for r in rows if r["K_to"] == k_to]:
                 if r["matched_from"] == "new":
-                    f.write("  %s new, split from %s (parent share %s; runner-up %s %s); top groups: %s\n"
-                            % (r["column"], r["split_parent"], r["parent_share"], r["runner_up"],
+                    matched_low = any(
+                        x["low_confidence"] == "yes"
+                        for x in rows
+                        if x["K_to"] == k_to and x["matched_from"] != "new"
+                    )
+                    if r.get("_top_shares_tied"):
+                        how = "parent not identified"
+                    elif matched_low:
+                        how = "not a split"
+                    else:
+                        how = "split from %s" % r["split_parent"]
+                    f.write("  %s new, %s (parent share %s; runner-up %s %s); top groups: %s\n"
+                            % (r["column"], how, r["parent_share"], r["runner_up"],
                                r["runner_up_share"], r["top_groups_mean"]))
                 else:
                     ref = "" if measure == "Pearson r" else ", Pearson r %s" % r["pearson"]
