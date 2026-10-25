@@ -157,9 +157,17 @@ def collect_q(items):
     files = []
     for item in items:
         if os.path.isdir(item):
-            hits = sorted(glob.glob(os.path.join(item, "*.Q")))
+            upper = sorted(glob.glob(os.path.join(item, "*.Q")))
+            hits = list(upper)
+            seen_real = {os.path.realpath(f) for f in upper}
+            for f in sorted(glob.glob(os.path.join(item, "*.q"))):
+                key = os.path.realpath(f)
+                if key in seen_real:
+                    continue
+                seen_real.add(key)
+                hits.append(f)
             if not hits:
-                raise SystemExit("目录里没有 .Q：%s" % item)
+                raise SystemExit("目录里没有 .Q 或 .q：%s" % item)
         else:
             hits = sorted(glob.glob(item))
             if not hits:
@@ -1063,7 +1071,7 @@ def build_parser():
         "组内 iid=名字，q=该组占比最高的那一列从高到低，hclust=平均连锁、距离 1−Pearson，input=Q 里的原顺序。\n"
         "多个 K 默认做 Pearson 贪心对齐，新列放在最上面。--no-align 保持每个 Q 自己的列顺序；若同时给了 --anchor-group，每个 K 仍把该组最纯的人的主列放到 C1。",
     )
-    p.add_argument("--q", nargs="+", required=True, help="一个或多个 .Q，或带引号的通配符，或一个目录。只读空白分隔的数字 .Q 或 .q")
+    p.add_argument("--q", nargs="+", required=True, help="一个或多个 .Q 或 .q，或带引号的通配符，或一个目录（读取其中的 .Q 和 .q）。只读空白分隔的数字 .Q 或 .q")
     p.add_argument("--fam", help="PLINK .fam，IID 在第 2 列，行序与 Q 相同")
     p.add_argument("--ids", help="一行一个 IID，行序与 Q 相同。与 --fam 二选一")
     p.add_argument("--groups", help="分组表，tsv 或 csv，要有表头")
