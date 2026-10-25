@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- qbar can be imported. The implementation lives under src/qbar. `python qbar.py` still runs the same command.
+
 ### Changed
 
 - A directory given to --q now includes lowercase .q files as well as .Q files. .Q files stay in the same sorted order, and the same file is not added twice.
