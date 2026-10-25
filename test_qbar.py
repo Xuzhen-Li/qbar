@@ -11935,5 +11935,53 @@ def hashlib_sha256(path):
     return digest.hexdigest()
 
 
+class FactPackCoverageTests(unittest.TestCase):
+    def test_every_long_option_is_in_a_fact_pack_and_in_cli_md(self):
+        """Every long option except --help is documented.
+
+        The search is a whole option string. ``--q`` does not count as
+        present inside ``--q-format``, and ``--align`` does not count as
+        present inside ``--align-method``. ``-h`` and ``--help`` are skipped.
+        """
+        import glob
+        import re
+        root = os.path.dirname(os.path.abspath(__file__))
+        flags = []
+        for action in qbar.build_parser()._actions:
+            for opt in action.option_strings:
+                if opt.startswith("--") and opt != "--help":
+                    flags.append(opt)
+        pack_dir = os.path.join(root, "docs", "factpacks")
+        cli_path = os.path.join(root, "docs", "cli.md")
+        self.assertTrue(os.path.isdir(pack_dir), "missing %s" % pack_dir)
+        self.assertTrue(os.path.isfile(cli_path), "missing %s" % cli_path)
+        packs = []
+        for path in sorted(glob.glob(os.path.join(pack_dir, "*.md"))):
+            with open(path, encoding="utf-8") as handle:
+                packs.append(handle.read())
+        pack_text = "\n".join(packs)
+        with open(cli_path, encoding="utf-8") as handle:
+            cli_text = handle.read()
+
+        def has(text, opt):
+            return re.search(
+                r"(?<![\w-])" + re.escape(opt) + r"(?![\w-])",
+                text,
+            ) is not None
+
+        missing_packs = [opt for opt in flags if not has(pack_text, opt)]
+        missing_cli = [opt for opt in flags if not has(cli_text, opt)]
+        self.assertEqual(
+            missing_packs,
+            [],
+            "flags missing from docs/factpacks: %s" % ", ".join(missing_packs),
+        )
+        self.assertEqual(
+            missing_cli,
+            [],
+            "flags missing from docs/cli.md: %s" % ", ".join(missing_cli),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
