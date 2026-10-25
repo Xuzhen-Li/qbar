@@ -282,6 +282,12 @@ off, pdf, svg, or both. Default off. off keeps the PNG and the raster PDF. pdf w
 - Choices: off, pdf, svg, both
 - Default: off
 
+### `--html`
+
+Also write panel.html, one offline file. A script draws the bars on a canvas and hover text shows the sample. Default off.
+
+- Default: false
+
 ### `--title`
 
 - Default: ""
