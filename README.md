@@ -113,6 +113,8 @@ All results are saved in the folder set by `--outdir`. `panel.png` and `panel.pd
 
 Optional `--logs` and `--logs-map` read ADMIXTURE CV error and log-likelihood from stdout, and the default run does not set them.
 
+Optional `--select-k` and `--plateau-fraction` write select-K heuristics from the CV and log-likelihood table, and the default run does not set them.
+
 If you give a single `.Q` file, qbar writes only `bar_K8.png` and `bar_K8.pdf` for that K, with no panel image and no `align.tsv`:
 
 ```bash

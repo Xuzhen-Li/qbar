@@ -447,6 +447,18 @@ _CATALOG = {
         "en": "Warning: %(path)s is truncated",
         "zh": "注意：%(path)s 被截断",
     },
+    "help_select_k": {
+        "en": "Also write select_k.tsv, select_k.txt, and plots from the CV and log-likelihood table. These are heuristics.",
+        "zh": "另写 select_k.tsv、select_k.txt 和图，数据来自 CV 和对数似然表。这些只是启发式。",
+    },
+    "help_plateau_fraction": {
+        "en": "Plateau cut for --select-k. 0.05 is an arbitrary qbar default, not a published constant.",
+        "zh": "--select-k 的平台阈值。0.05 是 qbar 自己定的默认值，不是文献里的常数。",
+    },
+    "select_k_requires": {
+        "en": "--select-k requires --logs",
+        "zh": "--select-k 需要 --logs",
+    },
 }
 
 

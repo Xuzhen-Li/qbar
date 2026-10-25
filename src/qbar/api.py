@@ -34,6 +34,7 @@ from .logs import (
     write_cv_loglik_tsv,
 )
 from .messages import text as _msg
+from .selectk import select_k_table, write_select_k_tsv, write_select_k_txt
 from .order import WITHIN, build_order, check_hclust_opts
 from .report import column_label, write_align_report, write_tables
 
@@ -286,20 +287,32 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     ``cv_loglik.tsv``, ``cv_loglik.png``, and ``cv_loglik.pdf`` are written.
     When it is omitted, those files are not written. ``args.logs_map``
     checks log and Q pairs and does not add a column.
+
+    When ``args.select_k`` is set, the CV and log-likelihood rows are
+    summarised into ``select_k.tsv``, ``select_k.txt``, ``select_k.png``,
+    and ``select_k.pdf``. The flag requires ``args.logs``. When it is
+    omitted, those files are not written. The barplot K list is the Q
+    files and does not change because of this report.
     """
     if args.provenance:
         started = datetime.datetime.now().astimezone().isoformat()
     else:
         started = None
     # Imported on call so this module can be imported without the drawing code.
-    from .plot_static import ancestry_image, assign_colors, render, write_cv_loglik_plot
+    from .plot_static import (
+        ancestry_image, assign_colors, render, write_cv_loglik_plot, write_select_k_plot,
+    )
 
     language = args.language
     check_hclust_opts(args.hclust_dist, args.hclust_linkage, language=language)
     logs = getattr(args, "logs", None)
     logs_map = getattr(args, "logs_map", None)
+    select_k = bool(getattr(args, "select_k", False))
+    plateau_fraction = getattr(args, "plateau_fraction", 0.05)
     log_paths = None
     log_rows = None
+    if select_k and not logs:
+        raise SystemExit(_msg("select_k_requires", language))
     if logs_map and not logs:
         raise SystemExit(_msg("logs_map_requires", language))
     if logs:
@@ -377,6 +390,16 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     if log_paths is not None:
         write_cv_loglik_tsv(os.path.join(args.outdir, "cv_loglik.tsv"), log_rows)
         write_cv_loglik_plot(os.path.join(args.outdir, "cv_loglik.png"), log_rows)
+        if select_k:
+            # The bar K list above is the Q files. This report does not drop a K.
+            select_table = select_k_table(log_rows, plateau_fraction=plateau_fraction)
+            write_select_k_tsv(os.path.join(args.outdir, "select_k.tsv"), select_table)
+            write_select_k_txt(
+                os.path.join(args.outdir, "select_k.txt"),
+                select_table,
+                plateau_fraction=plateau_fraction,
+            )
+            write_select_k_plot(os.path.join(args.outdir, "select_k.png"), select_table)
     with open(os.path.join(args.outdir, "args.txt"), "w") as f:
         f.write(" ".join(sys.argv if argv is None else ["qbar"] + list(argv)) + "\n")
         for k in ks:
@@ -421,6 +444,11 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         paths.append(os.path.join(args.outdir, "cv_loglik.tsv"))
         paths.append(os.path.join(args.outdir, "cv_loglik.png"))
         paths.append(os.path.join(args.outdir, "cv_loglik.pdf"))
+        if select_k:
+            paths.append(os.path.join(args.outdir, "select_k.tsv"))
+            paths.append(os.path.join(args.outdir, "select_k.txt"))
+            paths.append(os.path.join(args.outdir, "select_k.png"))
+            paths.append(os.path.join(args.outdir, "select_k.pdf"))
     paths.append(os.path.join(args.outdir, "args.txt"))
     if run_json is not None:
         paths.append(run_json)

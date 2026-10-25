@@ -191,6 +191,9 @@ def build_parser(language="en"):
                    help=say("help_language"))
     p.add_argument("--logs", nargs="+", help=say("help_logs"))
     p.add_argument("--logs-map", help=say("help_logs_map"))
+    p.add_argument("--select-k", action="store_true", help=say("help_select_k"))
+    p.add_argument("--plateau-fraction", type=float, default=0.05,
+                   help=say("help_plateau_fraction"))
     return p
 
 
