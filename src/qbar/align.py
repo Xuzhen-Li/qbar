@@ -16,11 +16,13 @@ CLUMPP_PERM_LIMIT = 8
 
 ALIGN_METHODS = (
     "greedy", "hungarian", "pong", "jaccard",
-    "clumpp-full", "clumpp-greedy", "clumpp-largek",
+    "clumpp-full", "clumpp-greedy", "clumpp-largek", "clumppling-ilp",
 )
 
 # Methods whose align.tsv score is column G', not Pearson, pong, or Jaccard.
-GPRIME_METHODS = ("clumpp-full", "clumpp-greedy", "clumpp-largek")
+GPRIME_METHODS = (
+    "clumpp-full", "clumpp-greedy", "clumpp-largek", "clumppling-ilp",
+)
 
 # Same-K replicate pairs use Pearson for these methods.
 REPLICATE_PEARSON_METHODS = ("greedy", "hungarian") + GPRIME_METHODS
@@ -362,6 +364,118 @@ def match_next_clumpp_largek(q_prev, q_new, mask, *, language="en"):
     return perm, _old_column_gprime(qhat, p, perm)
 
 
+def clumppling_cost_matrix(q, p):
+    """Paper cost C_ij on already masked matrices.
+
+    q is C by K, p is C by K+1. i indexes columns of P and j indexes
+    columns of Q. C_ij = (1/(2C)) * sum over rows (P_li - Q_lj)^2.
+    """
+    q = np.asarray(q, dtype=float)
+    p = np.asarray(p, dtype=float)
+    n_rows = int(q.shape[0])
+    k_old = int(q.shape[1])
+    k_new = int(p.shape[1])
+    cost = np.empty((k_new, k_old), dtype=float)
+    scale = 1.0 / (2.0 * float(n_rows))
+    for i in range(k_new):
+        for j in range(k_old):
+            diff = p[:, i] - q[:, j]
+            cost[i, j] = scale * float(np.dot(diff, diff))
+    return cost
+
+
+def clumppling_perm_from_w(cost, w):
+    """Turn a binary assignment into the qbar perm.
+
+    cost and w have shape (K+1, K). Each row of w sums to 1. Exactly one
+    column of w sums to 2. That column keeps the child with the smaller
+    cost, and the smaller row index on a tie. The other child is last.
+    Every other column keeps its single child at that position.
+    """
+    cost = np.asarray(cost, dtype=float)
+    rounded = np.rint(np.asarray(w, dtype=float))
+    k_new, k_old = cost.shape
+    perm = [None] * (k_old + 1)
+    n_doubled = 0
+    for j in range(k_old):
+        assigned = [i for i in range(k_new) if rounded[i, j] == 1.0]
+        if len(assigned) == 1:
+            perm[j] = assigned[0]
+            continue
+        if len(assigned) != 2:
+            raise ValueError(
+                "clumppling assignment column %s has %s ones" % (j, len(assigned))
+            )
+        n_doubled += 1
+        keep, extra = sorted(assigned, key=lambda i: (float(cost[i, j]), i))
+        perm[j] = keep
+        perm[k_old] = extra
+    if n_doubled != 1 or any(item is None for item in perm):
+        raise ValueError("clumppling assignment does not double exactly one column")
+    return [int(item) for item in perm]
+
+
+def _milp_clumppling(cost, language):
+    """Minimise sum W_ij C_ij. Return (W, objective)."""
+    try:
+        from scipy.optimize import Bounds, LinearConstraint, milp
+    except ImportError as exc:
+        raise SystemExit(_msg("clumppling_needs_scipy", language)) from exc
+    k_new, k_old = cost.shape
+    nvar = k_new * k_old
+    # Row-major: variable i * K + j is W_ij.
+    objective = np.ascontiguousarray(cost, dtype=float).ravel()
+    row_coef = np.zeros((k_new, nvar), dtype=float)
+    for i in range(k_new):
+        row_coef[i, i * k_old:(i + 1) * k_old] = 1.0
+    col_coef = np.zeros((k_old, nvar), dtype=float)
+    for j in range(k_old):
+        for i in range(k_new):
+            col_coef[j, i * k_old + j] = 1.0
+    constraints = (
+        LinearConstraint(row_coef, np.ones(k_new), np.ones(k_new)),
+        LinearConstraint(col_coef, np.ones(k_old), np.full(k_old, np.inf)),
+    )
+    result = milp(
+        objective,
+        integrality=np.ones(nvar, dtype=int),
+        bounds=Bounds(0.0, 1.0),
+        constraints=constraints,
+    )
+    status = int(result.status)
+    if status != 0:
+        message = "" if result.message is None else str(result.message)
+        raise SystemExit(_msg(
+            "clumppling_not_optimal", language, status=status, message=message,
+        ))
+    w = np.asarray(result.x, dtype=float).reshape(k_new, k_old)
+    return w, float(result.fun)
+
+
+def clumppling_ilp_objective(q_prev, q_new, mask, *, language="en"):
+    """Optimal paper cost of clumppling-ilp on this pair."""
+    _require_one_new_column(q_prev, q_new, language)
+    q, p = _masked_pair(q_prev, q_new, mask)
+    _w, fun = _milp_clumppling(clumppling_cost_matrix(q, p), language)
+    return fun
+
+
+def match_next_clumppling_ilp(q_prev, q_new, mask, *, language="en"):
+    """Assign K+1 columns of P onto K columns of Q by the paper ILP.
+
+    Minimise sum W_ij C_ij with scipy.optimize.milp. Each new column is
+    used once. Each old column is used at least once. The doubled old
+    column keeps the child with the smaller cost. The other child is last.
+    Scores are column G' on the unpadded Q columns.
+    """
+    _require_one_new_column(q_prev, q_new, language)
+    q, p = _masked_pair(q_prev, q_new, mask)
+    cost = clumppling_cost_matrix(q, p)
+    w, _fun = _milp_clumppling(cost, language)
+    perm = clumppling_perm_from_w(cost, w)
+    return perm, _old_column_gprime(q, p, perm)
+
+
 def match_next(q_prev, q_new, mask, method="greedy", jaccard_set="dominant", jaccard_cut=0.5, *, language="en"):
     """q_prev is already aligned. Return raw-column order for q_new.
 
@@ -380,6 +494,8 @@ def match_next(q_prev, q_new, mask, method="greedy", jaccard_set="dominant", jac
         return match_next_clumpp_greedy(q_prev, q_new, mask, language=language)
     if method == "clumpp-largek":
         return match_next_clumpp_largek(q_prev, q_new, mask, language=language)
+    if method == "clumppling-ilp":
+        return match_next_clumppling_ilp(q_prev, q_new, mask, language=language)
     k_new = q_new.shape[1]
     k_old = q_prev.shape[1]
     if k_new != k_old + 1:

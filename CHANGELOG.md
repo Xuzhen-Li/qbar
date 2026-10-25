@@ -10,6 +10,7 @@ The package version is 0.2.0.dev0. No git tag exists.
 
 ### Added
 
+- `--align-method clumppling-ilp` assigns each column of the next Q to one column of the previous Q by a binary program solved with scipy.optimize.milp. A solver status other than 0 stops the run.
 - `--align-method clumpp-largek` locks column pairs by column G' after the same zero padding and does not stop when K+1 is above 8.
 - `--align-method clumpp-greedy` returns the same permutation as clumpp-full on one K to K+1 pair. The published Greedy differs only with more than two runs at one K.
 - `--align-method clumpp-full` pads the previous Q with one zero column and searches every permutation to maximize G'. It stops when K+1 is above 8. The default method stays greedy.
@@ -38,6 +39,7 @@ The package version is 0.2.0.dev0. No git tag exists.
 
 ### Changed
 
+- The scipy dependency in `pyproject.toml` and `requirements.txt` is now `scipy>=1.9.0`, because clumppling-ilp uses `scipy.optimize.milp`.
 - Help and errors are English. `--language zh` selects the previous Chinese text. Column-name defaults are unchanged.
 - Implementation is split into modules `io`, `align`, `order`, `report`, `plot_static`, `api`, and `cli`. Outputs are unchanged.
 - An --ids line with more than one whitespace-separated token still uses the first token as the ID. qbar warns on stderr with how many lines did that, and shows the first example. Output files are unchanged (584b084).
