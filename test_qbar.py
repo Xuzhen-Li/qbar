@@ -11786,5 +11786,154 @@ def _export_bytes(root):
     return found
 
 
+class WebPageTests(unittest.TestCase):
+    _PRIVACY = (
+        "Your files stay in this browser. They are not uploaded. "
+        "The page loads one pinned Pyodide build and the local qbar wheel "
+        "while the status says loading. After the status says ready, the page "
+        "does not make another network request. The run and the downloads stay "
+        "in this browser."
+    )
+
+    def _checkout(self, name):
+        return _read_checkout(name)
+
+    def test_page_has_no_external_url(self):
+        import re
+        html = self._checkout("web/index.html")
+        self.assertIsNone(re.search(r"https?://", html))
+        self.assertNotIn("integrity=", html)
+        self.assertNotIn("pyodide-script", html)
+        self.assertIn(self._PRIVACY, html)
+        self.assertIn("209715200", html)
+        self.assertNotIn("innerHTML", html)
+        self.assertIn("Enter an integer", self._checkout("web/page_argv.mjs"))
+        root = os.path.dirname(os.path.abspath(__file__))
+        web = os.path.join(root, "web")
+        for name in sorted(os.listdir(web)):
+            if not name.endswith((".html", ".js", ".mjs", ".css")):
+                continue
+            text = self._checkout(os.path.join("web", name))
+            self.assertIsNone(re.search(r"https?://", text), name)
+            self.assertNotIn("innerHTML", text)
+
+    def test_runtime_keeps_package_checksums(self):
+        import json
+        worker = self._checkout("web/worker.js")
+        self.assertIn("qbar.api", worker)
+        self.assertIn("build_parser", worker)
+        self.assertIn("deps=False", worker)
+        self.assertIn("checkIntegrity: true", worker)
+        self.assertNotIn("checkIntegrity: false", worker)
+        self.assertIn('new URL("./dist/pyodide/"', worker)
+        init = worker.split("async function onInit", 1)[1].split("async function onRun", 1)[0]
+        self.assertLess(init.find("WHEEL_NAME.test"), init.find("wheelResponse"))
+        self.assertGreater(init.find("WHEEL_NAME.test"), 0)
+        pins = json.loads(self._checkout("web/pyodide-pins.json"))
+        self.assertEqual(pins["version"], "314.0.7")
+        self.assertEqual(pins["date_checked"], "2026-10-24")
+        for name in (
+            "pyodide.mjs",
+            "pyodide.asm.mjs",
+            "pyodide.asm.wasm",
+            "python_stdlib.zip",
+            "pyodide-lock.json",
+        ):
+            self.assertIn(name, pins["files"])
+            self.assertEqual(len(pins["files"][name]["sha256"]), 64)
+
+    def test_docs_repeat_the_privacy_sentence(self):
+        self.assertIn(self._PRIVACY, self._checkout("docs/web.md"))
+        self.assertIn("docs/web.md", self._checkout("README.md"))
+        ignore = self._checkout(".gitignore")
+        self.assertRegex(ignore, r"(?m)^web/dist/$")
+
+    def test_row_count_message_names_both_counts(self):
+        from qbar.messages import text
+        msg = text("row_count", "en", k=2, nrows=5, n=9)
+        self.assertIn("5", msg)
+        self.assertIn("9", msg)
+
+    def test_build_web_manifest_sha256(self):
+        import shutil
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "build_web.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
+            env["PIP_NO_INPUT"] = "1"
+            try:
+                proc = subprocess.run(
+                    [sys.executable, script, "--offline", tmp],
+                    cwd=os.path.dirname(os.path.abspath(__file__)),
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=90,
+                )
+            except subprocess.TimeoutExpired:
+                self.skipTest("pip wheel --offline did not finish")
+            manifest = os.path.join(tmp, "manifest.json")
+            if not os.path.isfile(manifest):
+                self.skipTest("pip wheel is unavailable")
+            import json
+            payload = json.load(open(manifest, encoding="utf-8"))
+            wheel = os.path.join(tmp, payload["wheel"])
+            digest = hashlib_sha256(wheel)
+            self.assertEqual(payload["sha256"], digest)
+            self.assertTrue(payload["wheel"].startswith("qbar_plot-"))
+            self.assertTrue(payload["wheel"].endswith(".whl"))
+            # A fresh directory has no Pyodide files. Offline mode must not
+            # download them. Exit 3 means those files are absent.
+            if proc.returncode not in (0, 3):
+                self.fail(proc.stderr or proc.stdout)
+
+    def test_node_syntax_when_node_exists(self):
+        import shutil
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node is not installed")
+        root = os.path.dirname(os.path.abspath(__file__))
+        for name in ("web/app.js", "web/worker.js", "web/page_argv.mjs"):
+            proc = subprocess.run(
+                [node, "--check", os.path.join(root, name)],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+        script = (
+            "import { qFilesForJob } from './web/page_argv.mjs';\n"
+            "const named = [{role:'q', name:'a.2.Q'}, {role:'q', name:'a.3.Q'}];\n"
+            "for (const bad of ['', ' ', '1.5', 'no', null]) {\n"
+            "  let threw = false;\n"
+            "  try { qFilesForJob({files: named, kMin: bad, kMax: 3}); }\n"
+            "  catch (e) { threw = String(e && e.message || e).indexOf('integer') >= 0; }\n"
+            "  if (!threw) process.exit(1);\n"
+            "}\n"
+            "const ok = qFilesForJob({files: named, kMin: 2, kMax: '3'});\n"
+            "if (ok.length !== 2) process.exit(1);\n"
+            "const plain = qFilesForJob({files:[{role:'q', name:'plain.Q'}], kMin: null, kMax: null});\n"
+            "if (plain.length !== 1) process.exit(1);\n"
+        )
+        proc = subprocess.run(
+            [node, "--input-type=module", "-e", script],
+            cwd=root,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+
+def hashlib_sha256(path):
+    import hashlib
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 if __name__ == "__main__":
     unittest.main()
