@@ -212,6 +212,12 @@ def build_parser(language="en"):
     p.add_argument("--perm-seed", type=int, default=0, help=say("help_perm_seed"))
     p.add_argument("--perm-null", choices=("rows", "column"), default=None,
                    help=say("help_perm_null"))
+    p.add_argument("--parent-ci", action="store_true",
+                   help=say("help_parent_ci"))
+    p.add_argument("--parent-alpha", type=float, default=0.05,
+                   help=say("help_parent_alpha"))
+    p.add_argument("--parent-test", action="store_true",
+                   help=say("help_parent_test"))
     return p
 
 

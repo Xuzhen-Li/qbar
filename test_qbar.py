@@ -1199,6 +1199,8 @@ class DocstringTests(unittest.TestCase):
         ``docs/cli.md`` and ``docs/factpacks/ST1.md``.
         ``--perm``, ``--perm-seed``, and ``--perm-null`` are documented in
         ``docs/cli.md`` and ``docs/factpacks/ST2.md``.
+        ``--parent-ci``, ``--parent-alpha``, and ``--parent-test`` are
+        documented in ``docs/cli.md`` and ``docs/factpacks/ST4.md``.
         """
         import re
         # --select-k and --plateau-fraction are documented in docs/cli.md
@@ -1210,6 +1212,8 @@ class DocstringTests(unittest.TestCase):
         # and docs/factpacks/ST1.md.
         # --perm, --perm-seed, and --perm-null are documented in docs/cli.md
         # and docs/factpacks/ST2.md.
+        # --parent-ci, --parent-alpha, and --parent-test are documented in
+        # docs/cli.md and docs/factpacks/ST4.md.
         later = {
             "--provenance", "--q-format", "--ind", "--logs", "--logs-map",
             "--select-k", "--plateau-fraction",
@@ -1217,6 +1221,7 @@ class DocstringTests(unittest.TestCase):
             "--align-compare",
             "--bootstrap", "--bootstrap-seed",
             "--perm", "--perm-seed", "--perm-null",
+            "--parent-ci", "--parent-alpha", "--parent-test",
         }
         flags = []
         for action in qbar.build_parser()._actions:
@@ -4752,6 +4757,518 @@ def _six_decimals(matrix):
     np.savetxt(buffer, matrix, fmt="%.6f")
     buffer.seek(0)
     return buffer
+
+
+_PARENT_HEADER = (
+    "K_to\tnew_column\tparent_column\tshare\tci_low\tci_high\talpha\t"
+    "n_boot\tsecond_column\tsecond_share\tp_one_parent\tn_perm\t"
+    "fraction_outside_unit_interval"
+)
+
+
+def _hand_block():
+    """Previous columns are indicators. The new column sits on the first block."""
+    q_prev = np.array([
+        [1.0, 0.0],
+        [1.0, 0.0],
+        [0.0, 1.0],
+        [0.0, 1.0],
+    ], dtype=float)
+    new_col = np.array([1.0, 1.0, 0.0, 0.0], dtype=float)
+    q_new = np.column_stack([q_prev, new_col])
+    return q_prev, new_col, q_new
+
+
+def _oracle_residual(q_prev, new_col, mask, n_perm, seed):
+    """One-parent p from an independent residual loop. Does not call one_vs_two.
+
+    One ``default_rng(seed)`` calls ``permutation(r)`` ``n_perm`` times
+    on the masked residual.
+    ``T*`` is the second-largest recomputed share. ``c`` stays fixed.
+    """
+    q_prev = np.asarray(q_prev, dtype=float)
+    new_col = np.asarray(new_col, dtype=float).reshape(-1)
+    mask = np.asarray(mask, dtype=bool)
+    w = new_col[mask]
+    prev = q_prev[mask]
+    total = float(w.sum())
+    if total <= 0.0:
+        return {
+            "zero_column": True,
+            "parent_column": "NA",
+            "share": 0.0,
+            "second_column": "NA",
+            "second_share": "NA",
+            "p": "NA",
+            "n_extreme": "NA",
+            "fraction": "NA",
+        }
+    shares = (w[:, None] * prev).sum(axis=0) / total
+    order = sorted(range(len(shares)), key=lambda c: (-float(shares[c]), c))
+    parent = order[0]
+    share = float(shares[parent])
+    if len(order) < 2:
+        return {
+            "zero_column": False,
+            "parent_column": parent,
+            "share": share,
+            "second_column": "NA",
+            "second_share": "NA",
+            "p": "NA",
+            "n_extreme": "NA",
+            "fraction": "NA",
+        }
+    second = order[1]
+    t_obs = float(shares[second])
+    q_c = np.asarray(prev[:, parent], dtype=float)
+    denom = float(np.dot(q_c, q_c))
+    if denom <= 0.0 or n_perm == 0:
+        return {
+            "zero_column": False,
+            "parent_column": parent,
+            "share": share,
+            "second_column": second,
+            "second_share": t_obs,
+            "p": "NA",
+            "n_extreme": "NA",
+            "fraction": "NA",
+        }
+    a_hat = float(np.dot(w, q_c) / denom)
+    r = np.array(w - a_hat * q_c, dtype=float, copy=True)
+    rng = np.random.default_rng(seed)
+    n_extreme = 0
+    n_outside = 0
+    for _draw in range(n_perm):
+        r_perm = rng.permutation(r)
+        w_star = a_hat * q_c + r_perm
+        n_outside += int(np.count_nonzero((w_star < 0.0) | (w_star > 1.0)))
+        star_total = float(w_star.sum())
+        if star_total <= 0.0:
+            star = np.zeros(prev.shape[1])
+        else:
+            star = (w_star[:, None] * prev).sum(axis=0) / star_total
+        star_order = sorted(range(len(star)), key=lambda c: (-float(star[c]), c))
+        t_star = float(star[star_order[1]])
+        if t_star >= t_obs:
+            n_extreme += 1
+    fraction = float(n_outside) / float(n_perm * int(w.shape[0]))
+    return {
+        "zero_column": False,
+        "parent_column": parent,
+        "share": share,
+        "second_column": second,
+        "second_share": t_obs,
+        "p": (1.0 + float(n_extreme)) / float(n_perm + 1),
+        "n_extreme": n_extreme,
+        "fraction": fraction,
+    }
+
+
+def _oracle_nearest_rank(shares, alpha):
+    """1-based nearest rank. NA when B * alpha / 2 < 1. Does not call parent_share_ci."""
+    import math
+    ordered = sorted(float(item) for item in shares)
+    n_boot = len(ordered)
+    half = float(n_boot) * float(alpha) / 2.0
+    if half < 1.0:
+        return "NA", "NA"
+    low_rank = math.ceil(half)
+    high_rank = math.ceil(float(n_boot) * (1.0 - float(alpha) / 2.0))
+    return ordered[low_rank - 1], ordered[high_rank - 1]
+
+
+def _oracle_resampled_share(q_prev, new_col, mask, idx, column):
+    """One resampled parent share. A masked sum <= 0 contributes 0."""
+    picked = np.asarray(idx)
+    w = np.asarray(new_col, dtype=float)[picked]
+    prev = np.asarray(q_prev, dtype=float)[picked]
+    use = np.asarray(mask, dtype=bool)[picked]
+    w = w[use]
+    prev = prev[use]
+    total = float(w.sum())
+    if total <= 0.0:
+        return 0.0
+    shares = (w[:, None] * prev).sum(axis=0) / total
+    return float(shares[int(column)])
+
+
+class ParentShareTests(unittest.TestCase):
+    def test_help_defaults_and_readme_exemption_flags(self):
+        parser = qbar.build_parser()
+        self.assertFalse(_cli_flag(parser, "--parent-ci").default)
+        self.assertFalse(_cli_flag(parser, "--parent-test").default)
+        self.assertEqual(_cli_flag(parser, "--parent-alpha").default, 0.05)
+        for name in ("--parent-ci", "--parent-alpha", "--parent-test"):
+            help_s = _cli_flag(parser, name).help or ""
+            self.assertTrue(all(ord(ch) < 128 for ch in help_s), name)
+            self.assertNotIn("\u2013", help_s)
+            self.assertNotIn("\u2014", help_s)
+        args = parser.parse_args(["--q", "x.Q", "--outdir", "o"])
+        self.assertFalse(args.parent_ci)
+        self.assertFalse(args.parent_test)
+        self.assertEqual(args.parent_alpha, 0.05)
+        self.assertEqual(args.bootstrap, 0)
+        self.assertEqual(args.perm, 0)
+        self.assertEqual(_cli_flag(parser, "--id-col").default, "analysis_IID")
+        self.assertEqual(_cli_flag(parser, "--group-col").default, "Dong_Grp")
+        zh = qbar.build_parser(language="zh")
+        self.assertIn("bootstrap", (_cli_flag(zh, "--parent-ci").help or ""))
+        self.assertIn("perm", (_cli_flag(zh, "--parent-test").help or ""))
+        self.assertNotEqual(
+            _cli_flag(parser, "--parent-ci").help,
+            _cli_flag(zh, "--parent-ci").help,
+        )
+
+    def test_hand_shares_are_one_and_zero(self):
+        from qbar.parentshare import one_vs_two
+        q_prev, new_col, _q_new = _hand_block()
+        # sum(new) = 2. Column 0 weight 2, column 1 weight 0.
+        self.assertEqual(1 * 1 + 1 * 1 + 0 * 0 + 0 * 0, 2)
+        self.assertEqual(1 * 0 + 1 * 0 + 0 * 1 + 0 * 1, 0)
+        mask = np.ones(4, dtype=bool)
+        got = one_vs_two(q_prev, new_col, mask, 8, 0)
+        self.assertEqual(got["parent_column"], 0)
+        self.assertEqual(got["share"], 1.0)
+        self.assertEqual(got["second_column"], 1)
+        self.assertEqual(got["second_share"], 0.0)
+        self.assertFalse(got["zero_column"])
+        tied = np.array([[0.5, 0.5], [0.5, 0.5]], dtype=float)
+        tie = one_vs_two(tied, np.array([1.0, 1.0]), np.ones(2, dtype=bool), 0, 0)
+        self.assertEqual(tie["parent_column"], 0)
+        self.assertEqual(tie["share"], 0.5)
+        self.assertEqual(tie["second_share"], 0.5)
+        self.assertEqual(tie["p"], "NA")
+
+    def test_permutation_matches_independent_loop(self):
+        from qbar.parentshare import one_vs_two
+        q_prev, new_col, _q_new = _hand_block()
+        mask = np.ones(4, dtype=bool)
+        n_perm = 12
+        seed = 4
+        oracle = _oracle_residual(q_prev, new_col, mask, n_perm, seed)
+        got = one_vs_two(q_prev, new_col, mask, n_perm, seed)
+        self.assertEqual(got["p"], oracle["p"])
+        self.assertEqual(got["n_extreme"], oracle["n_extreme"])
+        self.assertEqual(got["fraction_outside_unit_interval"], oracle["fraction"])
+        self.assertEqual(got["p"], 1.0)
+        self.assertEqual(got["fraction_outside_unit_interval"], 0.0)
+        q_noisy = np.array([
+            [0.95, 0.05],
+            [0.80, 0.20],
+            [0.70, 0.30],
+            [0.40, 0.60],
+            [0.25, 0.75],
+            [0.10, 0.90],
+        ], dtype=float)
+        noisy_col = np.array([0.90, 0.85, 0.55, 0.50, 0.20, 0.15], dtype=float)
+        noisy_mask = np.array([True, True, True, True, True, False])
+        n_perm = 40
+        seed = 11
+        oracle = _oracle_residual(q_noisy, noisy_col, noisy_mask, n_perm, seed)
+        got = one_vs_two(q_noisy, noisy_col, noisy_mask, n_perm, seed)
+        self.assertGreater(oracle["n_extreme"], 0)
+        self.assertLess(oracle["n_extreme"], n_perm)
+        self.assertEqual(got["parent_column"], oracle["parent_column"])
+        self.assertEqual(got["share"], oracle["share"])
+        self.assertEqual(got["second_column"], oracle["second_column"])
+        self.assertEqual(got["second_share"], oracle["second_share"])
+        self.assertEqual(got["n_extreme"], oracle["n_extreme"])
+        self.assertEqual(got["p"], oracle["p"])
+        self.assertEqual(got["p"], (1 + oracle["n_extreme"]) / float(n_perm + 1))
+        self.assertEqual(got["fraction_outside_unit_interval"], oracle["fraction"])
+        self.assertFalse(got["zero_column"])
+
+    def test_percentile_nearest_rank(self):
+        from qbar.parentshare import parent_share_ci
+        doc = parent_share_ci.__doc__ or ""
+        self.assertIn("nearest-rank", doc)
+        self.assertIn("ceil(B * alpha / 2)", doc)
+        self.assertIn("ceil(B * (1 - alpha / 2))", doc)
+        self.assertIn("B * alpha / 2 < 1", doc)
+        got = parent_share_ci(list(range(100)), 0.05)
+        self.assertEqual(got["ci_low"], 2.0)
+        self.assertEqual(got["ci_high"], 97.0)
+        self.assertEqual(got["n_boot"], 100)
+        self.assertEqual(got["alpha"], 0.05)
+        small = parent_share_ci(list(range(10)), 0.05)
+        self.assertEqual(small["ci_low"], "NA")
+        self.assertEqual(small["ci_high"], "NA")
+        self.assertEqual(small["n_boot"], 10)
+        # B * alpha / 2 == 1 is not the NA case.
+        edge = parent_share_ci(list(range(40)), 0.05)
+        self.assertEqual(edge["ci_low"], 0.0)
+        self.assertEqual(edge["ci_high"], 38.0)
+        with self.assertRaises(SystemExit) as ctx_zero:
+            parent_share_ci([0.0, 1.0], 0)
+        self.assertEqual(
+            str(ctx_zero.exception),
+            "--parent-alpha must be greater than 0 and less than 1, got 0.0",
+        )
+        with self.assertRaises(SystemExit) as ctx_one:
+            parent_share_ci([0.0, 1.0], 1)
+        self.assertEqual(
+            str(ctx_one.exception),
+            "--parent-alpha must be greater than 0 and less than 1, got 1.0",
+        )
+
+    def test_zero_sum_of_squares_and_negative_seed(self):
+        from qbar.parentshare import one_vs_two
+        q_prev = np.zeros((4, 2))
+        new_col = np.array([0.4, 0.3, 0.2, 0.1])
+        mask = np.ones(4, dtype=bool)
+        got = one_vs_two(q_prev, new_col, mask, 10, -1)
+        self.assertFalse(got["zero_column"])
+        self.assertEqual(got["parent_column"], 0)
+        self.assertEqual(got["share"], 0.0)
+        self.assertEqual(got["second_share"], 0.0)
+        self.assertEqual(got["p"], "NA")
+        self.assertEqual(got["fraction_outside_unit_interval"], "NA")
+        zeros = one_vs_two(q_prev, np.zeros(4), mask, 5, -1)
+        self.assertTrue(zeros["zero_column"])
+        self.assertEqual(zeros["p"], "NA")
+        self.assertEqual(zeros["share"], 0.0)
+        self.assertEqual(zeros["parent_column"], "NA")
+        lone = np.array([[1.0], [0.0], [1.0], [0.0]])
+        one_col = one_vs_two(lone, np.array([1.0, 1.0, 0.0, 0.0]), mask, 5, -1)
+        self.assertEqual(one_col["second_column"], "NA")
+        self.assertEqual(one_col["p"], "NA")
+        self.assertEqual(one_col["fraction_outside_unit_interval"], "NA")
+        running = np.array([[1.0, 0.0], [0.0, 1.0]])
+        with self.assertRaises(SystemExit) as ctx:
+            one_vs_two(running, np.array([0.2, 0.8]), np.ones(2, dtype=bool), 3, -1)
+        self.assertEqual(
+            str(ctx.exception),
+            "seed must be an integer greater than or equal to 0, got -1",
+        )
+        with self.assertRaises(SystemExit) as ctx_n:
+            one_vs_two(running, np.array([0.2, 0.8]), np.ones(2, dtype=bool), -2, 0)
+        self.assertEqual(
+            str(ctx_n.exception),
+            "n_perm must be an integer greater than or equal to 0, got -2",
+        )
+
+    def test_bootstrap_indices_match_independent_draws(self):
+        from qbar.bootstrap import bootstrap_support
+        _q_prev, _new_col, q_new = _hand_block()
+        q_prev = _hand_block()[0]
+        q_by_k = {2: q_prev, 3: q_new}
+        n_boot = 12
+        seed = 3
+        plain = bootstrap_support(q_by_k, "greedy", n_boot, seed)
+        found = []
+        recorded = bootstrap_support(q_by_k, "greedy", n_boot, seed, indices_out=found)
+        self.assertEqual(plain, recorded)
+        self.assertEqual(len(found), n_boot)
+        rng = np.random.default_rng(seed)
+        for got in found:
+            expected = rng.integers(0, q_prev.shape[0], size=q_prev.shape[0])
+            self.assertTrue(np.array_equal(got, expected))
+
+    def _write_pair(self, tmp, q_prev, q_new):
+        path_prev = os.path.join(tmp, "t.2.Q")
+        path_new = os.path.join(tmp, "t.3.Q")
+        np.savetxt(path_prev, q_prev, fmt="%.6f")
+        np.savetxt(path_new, q_new, fmt="%.6f")
+        ids = os.path.join(tmp, "ids.txt")
+        with open(ids, "w", encoding="utf-8") as handle:
+            handle.write("".join("s%d\n" % i for i in range(q_prev.shape[0])))
+        return path_prev, path_new, ids, np.loadtxt(path_prev), np.loadtxt(path_new)
+
+    def test_cli_errors(self):
+        with self.assertRaises(SystemExit) as ctx_ci:
+            qbar.main(["--q", "missing.Q", "--outdir", "o", "--parent-ci"])
+        self.assertEqual(
+            str(ctx_ci.exception),
+            "--parent-ci requires --bootstrap greater than 0. Set --bootstrap.",
+        )
+        with self.assertRaises(SystemExit) as ctx_ci_zh:
+            qbar.main([
+                "--q", "missing.Q", "--outdir", "o", "--parent-ci", "--language", "zh",
+            ])
+        self.assertEqual(str(ctx_ci_zh.exception), "--parent-ci 需要设置 --bootstrap。")
+        with self.assertRaises(SystemExit) as ctx_test:
+            qbar.main(["--q", "missing.Q", "--outdir", "o", "--parent-test"])
+        self.assertEqual(
+            str(ctx_test.exception),
+            "--parent-test requires --perm greater than 0. Set --perm.",
+        )
+        with self.assertRaises(SystemExit) as ctx_test_zh:
+            qbar.main([
+                "--q", "missing.Q", "--outdir", "o", "--parent-test", "--language", "zh",
+            ])
+        self.assertEqual(str(ctx_test_zh.exception), "--parent-test 需要设置 --perm。")
+        with self.assertRaises(SystemExit) as ctx_alpha:
+            qbar.main(["--q", "missing.Q", "--outdir", "o", "--parent-alpha", "0"])
+        self.assertEqual(
+            str(ctx_alpha.exception),
+            "--parent-alpha must be greater than 0 and less than 1, got 0.0",
+        )
+        with self.assertRaises(SystemExit) as ctx_one:
+            qbar.main(["--q", "missing.Q", "--outdir", "o", "--parent-alpha", "1"])
+        self.assertEqual(
+            str(ctx_one.exception),
+            "--parent-alpha must be greater than 0 and less than 1, got 1.0",
+        )
+        with self.assertRaises(SystemExit) as ctx_alpha_zh:
+            qbar.main([
+                "--q", "missing.Q", "--outdir", "o", "--parent-alpha", "0", "--language", "zh",
+            ])
+        self.assertEqual(
+            str(ctx_alpha_zh.exception),
+            "--parent-alpha 必须大于 0 且小于 1，收到 0.0",
+        )
+        with self.assertRaises(SystemExit) as ctx_null:
+            qbar.main([
+                "--q", "missing.Q", "--outdir", "o", "--parent-test", "--perm", "4",
+            ])
+        message = str(ctx_null.exception)
+        self.assertIn("--perm requires --perm-null", message)
+        self.assertLess(message.find("rows"), message.find("column"))
+
+    def test_zero_column_row_and_header(self):
+        q_prev, _new_col, q_good = _hand_block()
+        q_zero = np.column_stack([q_prev, np.zeros(4)])
+        mask = np.ones(4, dtype=bool)
+        perm = _brute_greedy_perm(q_prev, q_zero, mask)
+        self.assertTrue(np.all(q_zero[:, perm[-1]] == 0.0))
+        with tempfile.TemporaryDirectory() as tmp:
+            path_prev, path_new, ids, _loaded_prev, _loaded_new = self._write_pair(
+                tmp, q_prev, q_zero,
+            )
+            out = os.path.join(tmp, "out")
+            qbar.main([
+                "--q", path_prev, path_new, "--ids", ids, "--outdir", out,
+                "--bootstrap", "4", "--parent-ci",
+                "--perm", "4", "--perm-null", "rows", "--parent-test",
+            ])
+            path = os.path.join(out, "parent_share_ci.tsv")
+            with open(path, encoding="utf-8") as handle:
+                lines = handle.read().splitlines()
+            self.assertEqual(lines[0], _PARENT_HEADER)
+            self.assertEqual(
+                lines[1],
+                "3\tC3\tNA\t0.000000\tNA\tNA\tNA\tNA\tNA\tNA\tzero_column\tNA\tNA",
+            )
+            good_prev, good_new, good_ids, loaded_prev, loaded_new = self._write_pair(
+                tmp, q_prev, q_good,
+            )
+            both = os.path.join(tmp, "both")
+            n_boot = 40
+            n_perm = 15
+            alpha = 0.05
+            seed = 0
+            qbar.main([
+                "--q", good_prev, good_new, "--ids", good_ids, "--outdir", both,
+                "--bootstrap", str(n_boot), "--bootstrap-seed", str(seed), "--parent-ci",
+                "--perm", str(n_perm), "--perm-seed", str(seed), "--perm-null", "rows",
+                "--parent-test",
+            ])
+            with open(os.path.join(both, "parent_share_ci.tsv"), encoding="utf-8") as handle:
+                body = handle.read().splitlines()
+            self.assertEqual(body[0], _PARENT_HEADER)
+            cells = body[1].split("\t")
+            self.assertEqual(len(cells), 13)
+            greedy = _brute_greedy_perm(loaded_prev, loaded_new, mask)
+            new_col = loaded_new[:, greedy[-1]]
+            oracle = _oracle_residual(loaded_prev, new_col, mask, n_perm, seed)
+            self.assertEqual(oracle["parent_column"], 0)
+            self.assertEqual(oracle["share"], 1.0)
+            self.assertEqual(oracle["second_share"], 0.0)
+            self.assertEqual(cells[0], "3")
+            self.assertEqual(cells[1], "C3")
+            self.assertEqual(cells[2], "C1")
+            self.assertEqual(cells[3], "1.000000")
+            self.assertEqual(cells[8], "C2")
+            self.assertEqual(cells[9], "0.000000")
+            self.assertEqual(cells[6], "0.050000")
+            self.assertEqual(cells[7], str(n_boot))
+            self.assertEqual(cells[10], "%.6f" % oracle["p"])
+            self.assertEqual(cells[11], str(n_perm))
+            self.assertEqual(cells[12], "%.6f" % oracle["fraction"])
+            rng = np.random.default_rng(seed)
+            series = []
+            for _draw in range(n_boot):
+                idx = rng.integers(0, loaded_prev.shape[0], size=loaded_prev.shape[0])
+                series.append(_oracle_resampled_share(
+                    loaded_prev, new_col, mask, idx, oracle["parent_column"],
+                ))
+            low, high = _oracle_nearest_rank(series, alpha)
+            self.assertNotEqual(low, "NA")
+            self.assertEqual(cells[4], "%.6f" % low)
+            self.assertEqual(cells[5], "%.6f" % high)
+            with open(os.path.join(both, "match_support.tsv"), encoding="utf-8") as handle:
+                support_header = handle.readline().rstrip("\n").split("\t")
+            self.assertNotIn("p_one_parent", support_header)
+            self.assertIn("n_perm", support_header)
+
+    def test_off_part_is_na_and_default_has_no_file(self):
+        q_prev, _new_col, q_new = _hand_block()
+        with tempfile.TemporaryDirectory() as tmp:
+            path_prev, path_new, ids, loaded_prev, loaded_new = self._write_pair(
+                tmp, q_prev, q_new,
+            )
+            base = ["--q", path_prev, path_new, "--ids", ids]
+            plain = os.path.join(tmp, "plain")
+            qbar.main(base + ["--outdir", plain, "--bootstrap", "5", "--perm", "5", "--perm-null", "rows"])
+            self.assertFalse(os.path.exists(os.path.join(plain, "parent_share_ci.tsv")))
+            self.assertTrue(os.path.exists(os.path.join(plain, "match_support.tsv")))
+            ci_only = os.path.join(tmp, "ci")
+            n_boot = 40
+            qbar.main(base + [
+                "--outdir", ci_only, "--bootstrap", str(n_boot), "--bootstrap-seed", "0",
+                "--parent-ci",
+            ])
+            with open(os.path.join(ci_only, "parent_share_ci.tsv"), encoding="utf-8") as handle:
+                ci_cells = handle.read().splitlines()[1].split("\t")
+            self.assertEqual(ci_cells[10:], ["NA", "NA", "NA"])
+            self.assertEqual(ci_cells[6], "0.050000")
+            self.assertEqual(ci_cells[7], str(n_boot))
+            self.assertNotEqual(ci_cells[4], "NA")
+            self.assertEqual(ci_cells[3], "1.000000")
+            self.assertEqual(ci_cells[8], "C2")
+            test_only = os.path.join(tmp, "test")
+            n_perm = 15
+            qbar.main(base + [
+                "--outdir", test_only, "--perm", str(n_perm), "--perm-seed", "0",
+                "--perm-null", "rows", "--parent-test",
+            ])
+            with open(os.path.join(test_only, "parent_share_ci.tsv"), encoding="utf-8") as handle:
+                test_cells = handle.read().splitlines()[1].split("\t")
+            self.assertEqual(test_cells[4:8], ["NA", "NA", "NA", "NA"])
+            self.assertNotEqual(test_cells[10], "NA")
+            self.assertEqual(test_cells[11], str(n_perm))
+            self.assertNotEqual(test_cells[12], "NA")
+            mask = np.ones(loaded_prev.shape[0], dtype=bool)
+            greedy = _brute_greedy_perm(loaded_prev, loaded_new, mask)
+            oracle = _oracle_residual(loaded_prev, loaded_new[:, greedy[-1]], mask, n_perm, 0)
+            self.assertEqual(test_cells[10], "%.6f" % oracle["p"])
+            boot_only = os.path.join(tmp, "boot")
+            qbar.main(base + ["--outdir", boot_only, "--bootstrap", str(n_boot), "--bootstrap-seed", "0"])
+            with open(os.path.join(ci_only, "match_support.tsv"), "rb") as handle:
+                flagged = handle.read()
+            with open(os.path.join(boot_only, "match_support.tsv"), "rb") as handle:
+                plain_support = handle.read()
+            self.assertEqual(flagged, plain_support)
+            with open(os.path.join(ci_only, "order.tsv"), "rb") as handle:
+                flagged_order = handle.read()
+            with open(os.path.join(boot_only, "order.tsv"), "rb") as handle:
+                plain_order = handle.read()
+            self.assertEqual(flagged_order, plain_order)
+            self.assertFalse(os.path.exists(os.path.join(boot_only, "parent_share_ci.tsv")))
+            single = os.path.join(tmp, "single")
+            qbar.main([
+                "--q", path_prev, "--ids", ids, "--outdir", single,
+                "--bootstrap", "3", "--parent-ci",
+                "--perm", "3", "--perm-null", "column", "--parent-test",
+            ])
+            self.assertFalse(os.path.exists(os.path.join(single, "parent_share_ci.tsv")))
+            self.assertFalse(os.path.exists(os.path.join(single, "match_support.tsv")))
+            no_align = os.path.join(tmp, "noalign")
+            qbar.main(base + [
+                "--outdir", no_align, "--no-align",
+                "--bootstrap", "3", "--parent-ci",
+            ])
+            self.assertFalse(os.path.exists(os.path.join(no_align, "parent_share_ci.tsv")))
 
 
 if __name__ == "__main__":

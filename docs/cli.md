@@ -323,3 +323,21 @@ Null used when --perm is greater than 0. rows shuffles the K+1 matrix row order 
 
 - Choices: rows, column
 - Default: not set
+
+### `--parent-ci`
+
+Write parent_share_ci.tsv with a percentile interval for the largest parent share. Off by default. Requires --bootstrap greater than 0. Uses the same row resamples as --bootstrap.
+
+- Default: false
+
+### `--parent-alpha`
+
+Two-sided alpha for --parent-ci. Default 0.05. Must be greater than 0 and less than 1.
+
+- Default: 0.05
+
+### `--parent-test`
+
+Add a residual test of one parent versus two to parent_share_ci.tsv. Off by default. Requires --perm greater than 0. Uses --perm and --perm-seed.
+
+- Default: false
