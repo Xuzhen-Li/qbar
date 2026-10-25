@@ -21,6 +21,7 @@ import numpy as np
 from .align import (
     ALIGN_METHODS,
     JACCARD_SETS,
+    REPLICATE_PEARSON_METHODS,
     jaccard_matrix,
     pearson_matrix,
     pong_sim,
@@ -79,7 +80,7 @@ def _check_cut(cut, language):
 def _column_similarity(left, right, method, jaccard_set, jaccard_cut):
     """K by K similarity of columns of ``left`` (rows) to ``right`` (columns)."""
     mask = np.ones(left.shape[0], dtype=bool)
-    if method in ("greedy", "hungarian"):
+    if method in REPLICATE_PEARSON_METHODS:
         return pearson_matrix(left, right, mask)
     if method == "pong":
         sim = np.zeros((left.shape[1], right.shape[1]), dtype=float)
