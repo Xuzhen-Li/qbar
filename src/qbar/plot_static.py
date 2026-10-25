@@ -844,7 +844,11 @@ def _column_means(q):
 
 
 def _flow_node_hex(hexes, k, c):
-    """Colour of aligned column ``c`` at K, else the bar palette."""
+    """Colour of aligned column ``c`` at K.
+
+    Use ``hexes[k][c]`` when that entry exists. Otherwise use
+    ``PALETTE[c]``, then ``hsv_hex(c)``.
+    """
     if hexes is not None and k in hexes and c < len(hexes[k]):
         return hexes[k][c]
     if c < len(PALETTE):
