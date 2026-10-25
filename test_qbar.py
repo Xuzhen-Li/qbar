@@ -799,6 +799,24 @@ class DocstringTests(unittest.TestCase):
             ]
             self.assertEqual(missing, [], path)
 
+    def test_group_separators_are_documented(self):
+        # Same splits as main() for --blocks and parse_colors for --color.
+        self.assertEqual(
+            [x.strip() for x in "East,West,North".split(",") if x.strip()],
+            ["East", "West", "North"],
+        )
+        self.assertEqual("A=B=#112233".split("=", 1)[0], "A")
+        blocks = _cli_flag(qbar.build_parser(), "--blocks").help or ""
+        color = _cli_flag(qbar.build_parser(), "--color").help or ""
+        self.assertIn("不能含逗号", blocks)
+        self.assertIn("不能含等号", color)
+        en = open("README.md", encoding="utf-8").read()
+        zh = open("README.zh.md", encoding="utf-8").read()
+        self.assertIn("cannot contain a comma", en)
+        self.assertIn("cannot contain `=`", en)
+        self.assertIn("不能含逗号", zh)
+        self.assertIn("不能含等号", zh)
+
 
 if __name__ == "__main__":
     unittest.main()
