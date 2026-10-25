@@ -11,6 +11,7 @@ qbar is a command-line tool that reads ADMIXTURE Q matrix files (.Q), sorts samp
 To run qbar, you need to open a terminal, which is a text window where you type commands to control your computer. On macOS, open the Terminal app; on Linux, open a Linux terminal; on Windows, use WSL (Windows Subsystem for Linux, a feature that lets you run a Linux terminal on Windows). After opening the terminal, go to the qbar folder and type your commands there.
 
 A browser page that runs the same program is described in [docs/web.md](docs/web.md).
+The documentation index is [docs/README.md](docs/README.md). The walk-through is [docs/tutorial.md](docs/tutorial.md).
 
 ## Install
 
