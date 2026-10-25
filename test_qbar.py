@@ -674,6 +674,34 @@ class ColorTests(unittest.TestCase):
         self.assertTrue(np.all(img[-1, 0] == np.array([255, 0, 0])))
         self.assertTrue(np.all(img[0, 0] == np.array([0, 0, 255])))
 
+    def test_narrow_group_name_warns_on_stderr(self):
+        # render skips a name when the bar span is under 14 px. That skip must be said on stderr.
+        # n=4 and bar_w=40: samples 3:4 are 10 px, samples 0:3 are 30 px.
+        import io
+        from contextlib import redirect_stderr
+        n = 4
+        bar_w = 40
+        self.assertLess(int(4 * bar_w / n) - int(3 * bar_w / n), 14)
+        self.assertGreaterEqual(int(3 * bar_w / n) - int(0 * bar_w / n), 14)
+        image = np.zeros((2, n, 3), dtype=np.uint8)
+        image[:, :, 0] = 255
+        spans = [
+            {"name": "Wide", "start": 0, "end": 3},
+            {"name": "Tiny", "start": 3, "end": 4},
+        ]
+        rows = [{"k": 2, "image": image, "legend": [("#ff0000", "C1")]}]
+        buf = io.StringIO()
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "bar.png")
+            with redirect_stderr(buf):
+                qbar.render(path, rows, spans, bar_w, 20, "")
+            err = buf.getvalue()
+            self.assertIn("注意：组 Tiny 的条宽小于 14 像素，图上没写组名", err)
+            self.assertNotIn("Wide", err)
+            with Image.open(path) as img:
+                self.assertEqual(img.mode, "RGB")
+                self.assertGreater(img.size[0], bar_w)
+
 
 class DemoTests(unittest.TestCase):
     def test_chip2448_q_plots_in_block_order(self):
