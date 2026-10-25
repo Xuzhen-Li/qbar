@@ -1187,9 +1187,11 @@ class DocstringTests(unittest.TestCase):
         ``docs/factpacks/S10.md``.         ``--q-format`` and ``--ind`` are
         documented in ``docs/cli.md`` and ``docs/factpacks/S2.md``.
         ``--language`` is named in both READMEs.
+        ``--logs`` and ``--logs-map`` are documented in ``docs/cli.md`` and
+        ``docs/factpacks/F5.md``.
         """
         import re
-        later = {"--provenance", "--q-format", "--ind"}
+        later = {"--provenance", "--q-format", "--ind", "--logs", "--logs-map"}
         flags = []
         for action in qbar.build_parser()._actions:
             for name in action.option_strings:
@@ -1972,6 +1974,334 @@ class LanguageTests(unittest.TestCase):
             self.assertEqual(ctx_en.exception.code, 0)
             self.assertIn("greedy is the default align method", en_help.getvalue())
             self.assertTrue(all(ord(ch) < 128 for ch in en_help.getvalue()))
+
+
+def _invented_banner(path, *, k="4", seed="11", cv="0.81234", loglik="-12345.678",
+                     iterations="9", cv_line=True, truncated=False):
+    # Line structure follows ADMIXTURE 1.3.0 stdout opened 2026-10-23.
+    # The numbers are invented.
+    tab = "\t"
+    em = (
+        "1 (EM) " + tab + "Elapsed: 1.5" + tab
+        + "Loglikelihood: -1000.25" + tab + "(delta): 12.5"
+    )
+    qn = (
+        "1 (QN/Block) " + tab + "Elapsed: 2.25" + tab
+        + "Loglikelihood: -900.5" + tab + "(delta): 0.02"
+    )
+    lines = [
+        "****                   ADMIXTURE Version 1.3.0                  ****",
+        "****                                                ****",
+        "",
+        "Cross-validation will be performed.  Folds=4.",
+        "Parallel execution requested.  Will use 2 threads.",
+        "Random seed: %s" % seed,
+        "Point estimation method: Block relaxation algorithm",
+        "Convergence acceleration algorithm: QuasiNewton, 3 secant conditions",
+        "Point estimation will terminate when objective function delta < 0.002",
+        "Estimation of standard errors disabled; will compute point estimates only.",
+        "Size of G: 12x34",
+        "Performing five EM steps to prime main algorithm",
+        em,
+        "Initial loglikelihood: -2222.5",
+        "Starting main algorithm",
+        qn,
+        "Summary: ",
+        "Converged in %s iterations (3.5 sec)" % iterations,
+        "Loglikelihood: %s" % loglik,
+        "Fst divergences between estimated populations: ",
+        tab + "Pop0" + tab + "Pop1" + tab,
+        "Pop0" + tab,
+        "Pop1" + tab + "0.12" + tab,
+    ]
+    if cv_line:
+        lines.append("CV error (K=%s): %s" % (k, cv))
+    lines.append("Writing output files.")
+    if truncated:
+        lines.append("4 (QN/Block)")
+        text = "\n".join(lines)
+    else:
+        text = "\n".join(lines) + "\n"
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(text)
+
+
+def _tiny_q(directory):
+    q_path = os.path.join(directory, "t.2.Q")
+    ids_path = os.path.join(directory, "ids.txt")
+    with open(q_path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write("0.4 0.6\n")
+    with open(ids_path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write("s1\n")
+    return q_path, ids_path
+
+
+class CvLoglikTests(unittest.TestCase):
+    def test_banner_row_keeps_printed_tokens(self):
+        from qbar.logs import parse_admixture_log
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "run.out")
+            _invented_banner(path)
+            rows = parse_admixture_log(path)
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["file"], path)
+        self.assertEqual(row["k"], "4")
+        self.assertEqual(row["seed"], "11")
+        self.assertEqual(row["cv_error"], "0.81234")
+        self.assertEqual(row["loglik"], "-12345.678")
+        self.assertEqual(row["iterations"], "9")
+        self.assertEqual(row["converged"], "yes")
+        self.assertEqual(row["warnings"], "NA")
+        self.assertNotEqual(row["loglik"], "-2222.5")
+
+    def test_missing_cv_warns_and_keeps_iterations(self):
+        import io
+        from contextlib import redirect_stderr
+        from qbar.logs import parse_admixture_log
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "nocv.out")
+            _invented_banner(path, cv_line=False, iterations="6", seed="12")
+            english = "Warning: %s has no CV error line" % path
+            chinese = "注意：%s 没有 CV error 行" % path
+            buf = io.StringIO()
+            with redirect_stderr(buf):
+                rows = parse_admixture_log(path)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["cv_error"], "NA")
+            self.assertEqual(rows[0]["k"], "NA")
+            self.assertEqual(rows[0]["iterations"], "6")
+            self.assertEqual(rows[0]["warnings"], english)
+            self.assertIn(english, buf.getvalue())
+            buf_zh = io.StringIO()
+            with redirect_stderr(buf_zh):
+                rows_zh = parse_admixture_log(path, language="zh")
+            self.assertEqual(rows_zh[0]["warnings"], chinese)
+            self.assertIn(chinese, buf_zh.getvalue())
+
+    def test_cv_only_file_returns_one_row_per_line(self):
+        from qbar.logs import parse_admixture_log
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "grep.txt")
+            # Line structure follows ADMIXTURE 1.3.0 stdout opened 2026-10-23.
+            # The numbers are invented.
+            text = "\n".join([
+                "CV error (K=2): 0.11",
+                "CV error (K=3): 0.22",
+                "CV error (K=6): 0.33",
+            ]) + "\n"
+            with open(path, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(text)
+            rows = parse_admixture_log(path)
+        self.assertEqual(len(rows), 3)
+        self.assertEqual([row["k"] for row in rows], ["2", "3", "6"])
+        self.assertEqual([row["cv_error"] for row in rows], ["0.11", "0.22", "0.33"])
+        for row in rows:
+            self.assertEqual(row["file"], path)
+            self.assertEqual(row["seed"], "NA")
+            self.assertEqual(row["loglik"], "NA")
+            self.assertEqual(row["warnings"], "NA")
+
+    def test_bad_line_names_path_and_hello(self):
+        from qbar.logs import parse_admixture_log
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "bad.out")
+            text = (
+                "****                   ADMIXTURE Version 1.3.0                  ****\n"
+                "hello\n"
+            )
+            with open(path, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(text)
+            with self.assertRaises(SystemExit) as ctx:
+                parse_admixture_log(path)
+        message = str(ctx.exception)
+        self.assertIn(path, message)
+        self.assertIn("hello", message)
+
+    def test_truncated_iteration_returns_a_row(self):
+        import io
+        from contextlib import redirect_stderr
+        from qbar.logs import parse_admixture_log
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "cut.out")
+            _invented_banner(path, truncated=True, k="3", cv="0.55", seed="14")
+            warning = "Warning: %s is truncated" % path
+            buf = io.StringIO()
+            with redirect_stderr(buf):
+                rows = parse_admixture_log(path)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["cv_error"], "0.55")
+            self.assertEqual(rows[0]["warnings"], warning)
+            self.assertIn(warning, buf.getvalue())
+            both = os.path.join(td, "both.out")
+            _invented_banner(both, cv_line=False, truncated=True, seed="15")
+            no_cv = "Warning: %s has no CV error line" % both
+            cut = "Warning: %s is truncated" % both
+            buf_both = io.StringIO()
+            with redirect_stderr(buf_both):
+                rows_both = parse_admixture_log(both)
+            self.assertEqual(rows_both[0]["warnings"], no_cv + "; " + cut)
+            self.assertIn(no_cv, buf_both.getvalue())
+            self.assertIn(cut, buf_both.getvalue())
+
+    def test_plot_median_min_max_and_count_match_tsv(self):
+        from qbar.plot_static import cv_k_marks
+        with tempfile.TemporaryDirectory() as td:
+            q_path, ids_path = _tiny_q(td)
+            logs = []
+            specs = [
+                ("a.out", "3", "0.25", "101"),
+                ("b.out", "3", "0.75", "102"),
+                ("c.out", "5", "0.125", "103"),
+            ]
+            for name, k, cv, seed in specs:
+                path = os.path.join(td, name)
+                _invented_banner(
+                    path, k=k, cv=cv, seed=seed,
+                    loglik="-10.5", iterations="4",
+                )
+                logs.append(path)
+            out = os.path.join(td, "out")
+            qbar.main([
+                "--q", q_path, "--ids", ids_path, "--outdir", out,
+                "--logs", logs[0], logs[1], logs[2],
+            ])
+            tsv = os.path.join(out, "cv_loglik.tsv")
+            png = os.path.join(out, "cv_loglik.png")
+            pdf = os.path.join(out, "cv_loglik.pdf")
+            with open(tsv, encoding="utf-8") as handle:
+                lines = handle.read().splitlines()
+            header = lines[0].split("\t")
+            self.assertEqual(
+                header,
+                ["file", "k", "seed", "cv_error", "loglik", "iterations", "converged", "warnings"],
+            )
+            parsed = []
+            for line in lines[1:]:
+                cells = line.split("\t")
+                parsed.append(dict(zip(header, cells)))
+            by_k = {}
+            for row in parsed:
+                by_k.setdefault(int(row["k"]), []).append(float(row["cv_error"]))
+            self.assertEqual(sorted(by_k), [3, 5])
+            self.assertEqual(by_k[3], [0.25, 0.75])
+            self.assertEqual(by_k[5], [0.125])
+            self.assertEqual(float(np.min(by_k[3])), 0.25)
+            self.assertEqual(float(np.max(by_k[3])), 0.75)
+            self.assertEqual(float(np.median(by_k[3])), 0.5)
+            self.assertEqual(len(by_k[3]), 2)
+            self.assertEqual(float(np.median(by_k[5])), 0.125)
+            self.assertEqual(len(by_k[5]), 1)
+            marks = {item["k"]: item for item in cv_k_marks(parsed)}
+            self.assertEqual(marks[3]["median"], float(np.median(by_k[3])))
+            self.assertEqual(marks[3]["vmin"], float(np.min(by_k[3])))
+            self.assertEqual(marks[3]["vmax"], float(np.max(by_k[3])))
+            self.assertEqual(marks[3]["n"], 2)
+            self.assertEqual(marks[5]["n"], 1)
+            self.assertEqual(marks[5]["median"], float(np.median(by_k[5])))
+            with Image.open(png) as image:
+                self.assertEqual(image.size, (800, 500))
+                self.assertEqual(image.mode, "RGB")
+            self.assertGreater(os.path.getsize(pdf), 0)
+
+    def test_command_without_logs_skips_cv_table(self):
+        with tempfile.TemporaryDirectory() as td:
+            q_path, ids_path = _tiny_q(td)
+            out = os.path.join(td, "out")
+            qbar.main(["--q", q_path, "--ids", ids_path, "--outdir", out])
+            self.assertTrue(os.path.isfile(os.path.join(out, "args.txt")))
+            self.assertFalse(os.path.exists(os.path.join(out, "cv_loglik.tsv")))
+            self.assertFalse(os.path.exists(os.path.join(out, "cv_loglik.png")))
+            self.assertFalse(os.path.exists(os.path.join(out, "cv_loglik.pdf")))
+            with open(os.path.join(out, "args.txt"), encoding="utf-8") as handle:
+                args_txt = handle.read()
+            self.assertNotIn("--logs", args_txt)
+
+    def test_logs_map_checks(self):
+        with tempfile.TemporaryDirectory() as td:
+            q_path, ids_path = _tiny_q(td)
+            log_a = os.path.join(td, "a.out")
+            log_b = os.path.join(td, "b.out")
+            _invented_banner(log_a, k="2", cv="0.4", seed="21", loglik="-8.5")
+            _invented_banner(log_b, k="3", cv="0.3", seed="22", loglik="-8.25")
+            out = os.path.join(td, "out")
+            map_path = os.path.join(td, "map.txt")
+            with open(map_path, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("%s %s\n%s %s\n" % (log_a, q_path, log_b, q_path))
+            qbar.main([
+                "--q", q_path, "--ids", ids_path, "--outdir", out,
+                "--logs", log_a, log_b, "--logs-map", map_path, "--provenance",
+            ])
+            tsv = os.path.join(out, "cv_loglik.tsv")
+            with open(tsv, encoding="utf-8") as handle:
+                header = handle.readline().rstrip("\n")
+            self.assertNotIn("q_path", header)
+            self.assertFalse(any(name.startswith("pair") for name in os.listdir(out)))
+            import json
+            with open(os.path.join(out, "run.json"), encoding="utf-8") as handle:
+                payload = json.load(handle)
+            input_paths = [item["path"] for item in payload["inputs"]]
+            self.assertEqual(input_paths[-3:], [log_a, log_b, map_path])
+
+            missing_q = os.path.join(td, "missing.Q")
+            bad_map = os.path.join(td, "missing-q.txt")
+            with open(bad_map, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("%s %s\n" % (log_a, missing_q))
+            with self.assertRaises(SystemExit) as ctx_q:
+                qbar.main([
+                    "--q", q_path, "--ids", ids_path,
+                    "--outdir", os.path.join(td, "out-missing-q"),
+                    "--logs", log_a, "--logs-map", bad_map,
+                ])
+            self.assertIn("Mapped Q file not found:", str(ctx_q.exception))
+            self.assertIn(missing_q, str(ctx_q.exception))
+
+            other = os.path.join(td, "not-read.out")
+            _invented_banner(other, k="2", cv="0.2", seed="23", loglik="-7.5")
+            stray = os.path.join(td, "stray.txt")
+            with open(stray, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("%s %s\n" % (other, q_path))
+            with self.assertRaises(SystemExit) as ctx_log:
+                qbar.main([
+                    "--q", q_path, "--ids", ids_path,
+                    "--outdir", os.path.join(td, "out-stray"),
+                    "--logs", log_a, "--logs-map", stray,
+                ])
+            self.assertIn("is not in --logs", str(ctx_log.exception))
+            self.assertIn(other, str(ctx_log.exception))
+
+            with self.assertRaises(SystemExit) as ctx_flag:
+                qbar.main([
+                    "--q", q_path, "--ids", ids_path,
+                    "--outdir", os.path.join(td, "out-nomap"),
+                    "--logs-map", map_path,
+                ])
+            self.assertEqual(ctx_flag.exception.code, "--logs-map requires --logs")
+
+    def test_parser_defaults_stay(self):
+        parser = qbar.build_parser()
+        self.assertEqual(_cli_flag(parser, "--id-col").default, "analysis_IID")
+        self.assertEqual(_cli_flag(parser, "--group-col").default, "Dong_Grp")
+        logs = _cli_flag(parser, "--logs")
+        logs_map = _cli_flag(parser, "--logs-map")
+        self.assertEqual(logs.nargs, "+")
+        self.assertFalse(logs.required)
+        self.assertIsNone(logs.default)
+        self.assertEqual(
+            logs.help,
+            "ADMIXTURE stdout files, a quoted wildcard, or a directory. "
+            "A directory reads .out and .log. Default is off.",
+        )
+        self.assertEqual(
+            logs_map.help,
+            "Two columns, log path and Q path, no header. Each log must be "
+            "one of the --logs files, and each Q path must exist.",
+        )
+        args = parser.parse_args(["--q", "x.Q", "--outdir", "o"])
+        self.assertIsNone(args.logs)
+        self.assertIsNone(args.logs_map)
+        self.assertEqual(args.id_col, "analysis_IID")
+        self.assertEqual(args.group_col, "Dong_Grp")
 
 
 if __name__ == "__main__":

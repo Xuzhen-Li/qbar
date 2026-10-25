@@ -109,6 +109,8 @@ order	demo/out/order.tsv
 * `--width` 是条形图宽度，单位是像素。默认 2200。
 * `--bar-height` 是每一行 K 的高度，单位是像素。默认 0，表示只有一个 K 时用 220，有多个 K 时用 120。
 
+可选的 `--logs` 和 `--logs-map` 用来读取 ADMIXTURE 的 CV error 和 log-likelihood，默认运行不设置这两项。
+
 如果只输入单个 `.Q` 文件，程序就只会生成对应 K 值的单张图（例如 `bar_K8.png` 和 `bar_K8.pdf`），不会生成汇总图 `panel` 和对齐文件 `align.tsv`：
 
 ```bash

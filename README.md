@@ -111,6 +111,8 @@ All results are saved in the folder set by `--outdir`. `panel.png` and `panel.pd
 * `--width` is the bar width in pixels. The default is 2200.
 * `--bar-height` is the height in pixels of one K row. The default is 0, which means 220 for a single K and 120 when several K are drawn.
 
+Optional `--logs` and `--logs-map` read ADMIXTURE CV error and log-likelihood from stdout, and the default run does not set them.
+
 If you give a single `.Q` file, qbar writes only `bar_K8.png` and `bar_K8.pdf` for that K, with no panel image and no `align.tsv`:
 
 ```bash

@@ -383,6 +383,70 @@ _CATALOG = {
         "en": "Warning: K=%(k_from)s to %(k_to)s has %(n)s columns with Pearson < 0.5, so these two runs may not be the same solution",
         "zh": "注意：K=%(k_from)s\u2192%(k_to)s 有 %(n)s 列的 Pearson < 0.5，这两次的列可能不是同一个解",
     },
+    "help_logs": {
+        "en": "ADMIXTURE stdout files, a quoted wildcard, or a directory. A directory reads .out and .log. Default is off.",
+        "zh": "ADMIXTURE 的标准输出，或带引号的通配符，或一个目录。目录读取 .out 和 .log。默认不读。",
+    },
+    "help_logs_map": {
+        "en": "Two columns, log path and Q path, no header. Each log must be one of the --logs files, and each Q path must exist.",
+        "zh": "两列，日志路径和 Q 路径，没有表头。每条日志必须在 --logs 里，Q 路径必须存在。",
+    },
+    "logs_dir_empty": {
+        "en": "The directory has no .out or .log files: %(path)s",
+        "zh": "目录里没有 .out 或 .log：%(path)s",
+    },
+    "logs_no_match": {
+        "en": "No log files matched: %(item)s",
+        "zh": "没有匹配到日志：%(item)s",
+    },
+    "logs_none": {
+        "en": "No log files",
+        "zh": "没有日志",
+    },
+    "logs_map_requires": {
+        "en": "--logs-map requires --logs",
+        "zh": "--logs-map 需要 --logs",
+    },
+    "logs_map_dup": {
+        "en": "Duplicate log in --logs-map: %(path)s",
+        "zh": "--logs-map 里的日志重复：%(path)s",
+    },
+    "logs_map_no_row": {
+        "en": "Log %(path)s has no row in --logs-map",
+        "zh": "日志 %(path)s 在 --logs-map 里没有一行",
+    },
+    "logs_map_not_in_logs": {
+        "en": "Log %(path)s is not in --logs",
+        "zh": "日志 %(path)s 不在 --logs 里",
+    },
+    "logs_map_line": {
+        "en": "%(path)s map line must be log path and Q path: %(line)s",
+        "zh": "%(path)s 的对照行必须是日志路径和 Q 路径：%(line)s",
+    },
+    "logs_map_q_missing": {
+        "en": "Mapped Q file not found: %(path)s",
+        "zh": "对照表里的 Q 找不到：%(path)s",
+    },
+    "logs_map_missing": {
+        "en": "Log map not found: %(path)s",
+        "zh": "对照表找不到：%(path)s",
+    },
+    "log_not_found": {
+        "en": "Log file not found: %(path)s",
+        "zh": "找不到日志：%(path)s",
+    },
+    "log_format": {
+        "en": "%(path)s does not match the ADMIXTURE log format: %(line)s",
+        "zh": "%(path)s 不符合 ADMIXTURE 日志格式：%(line)s",
+    },
+    "log_no_cv": {
+        "en": "Warning: %(path)s has no CV error line",
+        "zh": "注意：%(path)s 没有 CV error 行",
+    },
+    "log_truncated": {
+        "en": "Warning: %(path)s is truncated",
+        "zh": "注意：%(path)s 被截断",
+    },
 }
 
 
