@@ -457,6 +457,28 @@ class AlignTests(unittest.TestCase):
             self.assertEqual(qbar.hclust_order(q, dist, link), want)
         self.assertNotEqual(qbar.hclust_order(q, "euclidean", "ward"), qbar.hclust_order(q))
 
+    def test_braycurtis_nonfinite_distance_exits(self):
+        # Bray-Curtis of two all-zero rows is 0/0, which is not finite.
+        # Correlation already jitters a zero-variance row and must still return an order.
+        zeros = np.zeros((4, 3))
+        with self.assertRaises(SystemExit) as cm:
+            qbar.hclust_order(zeros, "braycurtis", "average")
+        self.assertIn("braycurtis", str(cm.exception.code))
+        self.assertIn("非有限", str(cm.exception.code))
+        one_zero = np.array([[1.0, 0.0], [0.0, 1.0], [0.0, 0.0], [0.4, 0.6]])
+        # One all-zero row against nonzero rows is finite: the denominator is the other row.
+        self.assertEqual(sorted(qbar.hclust_order(one_zero, "braycurtis", "average")), [0, 1, 2, 3])
+        two_zero = np.array([[0.0, 0.0], [0.0, 0.0], [0.2, 0.8], [0.7, 0.3]])
+        with self.assertRaises(SystemExit) as cm2:
+            qbar.hclust_order(two_zero, "braycurtis", "average")
+        self.assertIn("非有限", str(cm2.exception.code))
+        corr = qbar.hclust_order(zeros, "correlation", "average")
+        self.assertEqual(sorted(corr), [0, 1, 2, 3])
+        finite = np.array([[0.2, 0.8], [0.9, 0.1], [0.4, 0.6], [0.7, 0.3]])
+        from scipy.cluster.hierarchy import leaves_list, linkage
+        want = [int(x) for x in leaves_list(linkage(finite, "average", "braycurtis"))]
+        self.assertEqual(qbar.hclust_order(finite, "braycurtis", "average"), want)
+
     def test_ward_needs_euclidean(self):
         for dist in ("correlation", "braycurtis"):
             with self.assertRaises(SystemExit) as cm:
