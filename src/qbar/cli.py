@@ -208,6 +208,10 @@ def build_parser(language="en"):
     p.add_argument("--bootstrap", type=int, default=0, help=say("help_bootstrap"))
     p.add_argument("--bootstrap-seed", type=int, default=0,
                    help=say("help_bootstrap_seed"))
+    p.add_argument("--perm", type=int, default=0, help=say("help_perm"))
+    p.add_argument("--perm-seed", type=int, default=0, help=say("help_perm_seed"))
+    p.add_argument("--perm-null", choices=("rows", "column"), default=None,
+                   help=say("help_perm_null"))
     return p
 
 

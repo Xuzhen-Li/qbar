@@ -10,6 +10,7 @@ The package version is 0.2.0.dev0. No git tag exists.
 
 ### Added
 
+- `--perm` adds an optional permutation p value for each column match on `match_support.tsv`. The default is 0, which adds no columns. `--perm-null` is required when `--perm` is greater than 0. The choices are `rows` and `column`, and the help lists `rows` first. `--perm-seed` defaults to 0 and is used only when `--perm` is greater than 0.
 - `--bootstrap` resamples individuals and writes `match_support.tsv` with how often each column match returns. The default is 0, which writes no file. `--bootstrap-seed` defaults to 0 and is used only when `--bootstrap` is greater than 0.
 - `--align-compare` writes `align_compare.tsv` and `align_compare.txt`. It compares every align method that can run with the chosen method. No method is declared better. It is off by default.
 - `--align-method clumppling-ilp` assigns each column of the next Q to one column of the previous Q by a binary program solved with scipy.optimize.milp. A solver status other than 0 stops the run.

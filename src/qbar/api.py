@@ -20,6 +20,7 @@ import numpy as np
 
 from .align import align_qs
 from .bootstrap import bootstrap_support, write_match_support
+from .permtest import permutation_columns
 from .io import (
     check_shapes,
     collect_q,
@@ -279,6 +280,72 @@ def _bootstrap_request(args, language):
     return n_boot, int(seed)
 
 
+def _perm_request(args, language):
+    """Return ``(n_perm, seed, null)``. Seed and null are checked only when ``n_perm`` > 0."""
+    n_perm = getattr(args, "perm", 0)
+    if isinstance(n_perm, bool) or not isinstance(n_perm, (int, np.integer)) or int(n_perm) < 0:
+        raise SystemExit(_msg("perm_negative", language, n=n_perm))
+    n_perm = int(n_perm)
+    if n_perm == 0:
+        return 0, 0, None
+    seed = getattr(args, "perm_seed", 0)
+    if isinstance(seed, bool) or not isinstance(seed, (int, np.integer)) or int(seed) < 0:
+        raise SystemExit(_msg("perm_seed_negative", language, seed=seed))
+    null = getattr(args, "perm_null", None)
+    if null is None:
+        raise SystemExit(_msg("perm_null_required", language))
+    if null not in ("rows", "column"):
+        raise SystemExit(_msg("perm_null_choice", language, null=null))
+    return n_perm, int(seed), null
+
+
+def _na_support_rows(perm, meta, method):
+    """ST1 columns when bootstrap did not run. Counts and the bootstrap seed are NA."""
+    rows = []
+    for k_to in sorted(meta):
+        for index, raw in enumerate(perm[k_to]):
+            rows.append({
+                "K_to": int(k_to),
+                "aligned_column": "C%d" % (index + 1),
+                "raw_column": int(raw) + 1,
+                "n_boot": "NA",
+                "n_same": "NA",
+                "support": "NA",
+                "seed": "NA",
+                "method": method,
+                "n_empty_mask": "NA",
+            })
+    return rows
+
+
+def _attach_permutation(rows, aligned, q_by_k, meta, method, n_perm, seed, null, *,
+                        groups, align_mode, align_groups, qmax, jaccard_set, jaccard_cut,
+                        language):
+    """Append permutation fields. One K step is rerun, not the whole chain."""
+    stats = []
+    for k_to in sorted(meta):
+        # q_prev is the aligned matrix from the full-data run, anchor included.
+        stats.extend(permutation_columns(
+            aligned[k_to - 1],
+            q_by_k[k_to],
+            method,
+            n_perm,
+            seed,
+            null,
+            groups=groups,
+            align_mode=align_mode,
+            align_groups=align_groups,
+            qmax=qmax,
+            jaccard_set=jaccard_set,
+            jaccard_cut=jaccard_cut,
+            language=language,
+        ))
+    if len(stats) != len(rows):
+        raise SystemExit(_msg("perm_internal", language))
+    for row, item in zip(rows, stats):
+        row.update(item)
+
+
 def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     """Run one plot from a parsed command line.
 
@@ -331,6 +398,16 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     The matrices are the ones alignment used. With ``args.replicates``,
     that is one matrix per K: the major-mode mean when that K had two or
     more files, otherwise the loaded matrix.
+
+    When ``args.perm`` is greater than 0 and this run aligned at least one
+    K to K+1 step, ``match_support.tsv`` also carries ``n_perm``,
+    ``n_extreme``, ``p``, ``null``, and ``zero_column``. ``args.perm_null``
+    is required then and is ``rows`` or ``column``. The default 0 adds no
+    columns and does not draw a seed. If bootstrap is 0, the bootstrap
+    columns ``n_boot``, ``n_same``, ``support``, ``seed``, and
+    ``n_empty_mask`` are NA. ``rows`` shuffles the K+1 matrix and reruns
+    that one match. ``column`` shuffles the matched new column and
+    recomputes its similarity. The null name is written on every row.
     """
     if args.provenance:
         started = datetime.datetime.now().astimezone().isoformat()
@@ -343,6 +420,7 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
 
     language = args.language
     n_boot, boot_seed = _bootstrap_request(args, language)
+    n_perm, perm_seed, perm_null = _perm_request(args, language)
     check_hclust_opts(args.hclust_dist, args.hclust_linkage, language=language)
     logs = getattr(args, "logs", None)
     logs_map = getattr(args, "logs_map", None)
@@ -454,6 +532,7 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
             args.jaccard_set, args.jaccard_cut,
         )
     support_path = None
+    support_rows = []
     if n_boot > 0 and meta:
         support_rows = bootstrap_support(
             q_by_k,
@@ -469,9 +548,23 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
             jaccard_cut=args.jaccard_cut,
             language=language,
         )
-        if support_rows:
-            support_path = os.path.join(args.outdir, "match_support.tsv")
-            write_match_support(support_path, support_rows)
+    if n_perm > 0 and meta:
+        if not support_rows:
+            support_rows = _na_support_rows(perm, meta, args.align_method)
+        _attach_permutation(
+            support_rows, aligned, q_by_k, meta, args.align_method,
+            n_perm, perm_seed, perm_null,
+            groups=groups,
+            align_mode=args.align_mode,
+            align_groups=align_groups,
+            qmax=args.qmax,
+            jaccard_set=args.jaccard_set,
+            jaccard_cut=args.jaccard_cut,
+            language=language,
+        )
+    if support_rows:
+        support_path = os.path.join(args.outdir, "match_support.tsv")
+        write_match_support(support_path, support_rows)
     if log_paths is not None:
         write_cv_loglik_tsv(os.path.join(args.outdir, "cv_loglik.tsv"), log_rows)
         write_cv_loglik_plot(os.path.join(args.outdir, "cv_loglik.png"), log_rows)
