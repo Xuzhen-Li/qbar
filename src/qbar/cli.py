@@ -57,6 +57,12 @@ Precedence is the command line, then the file, then the defaults. A flag
 on the command line wins even when its value equals the default. Keys are
 argparse dest names. Without PyYAML, --config exits and names
 pip install "qbar[config]".
+--sites is omitted by default. When set, map_pies.png and map_pies.tsv
+are written for the aligned Q at --sort-k, or at the largest K when
+--sort-k is omitted. Mean Q is the mean of every sample in that group.
+The alignment mask does not drop those samples. --basemap-image and
+--basemap-bbox must be given together. A world file is not read. Nothing
+is downloaded. --vector does not write a map PDF or SVG.
 https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.hierarchy.linkage.html
 """
 from __future__ import annotations
@@ -180,11 +186,41 @@ def _language_from_argv(argv):
     return language
 
 
+def _attach_negative_bbox(args):
+    """Keep a negative --basemap-bbox value attached to the flag.
+
+    ``-10,-10,10,10`` does not match argparse's negative-number pattern,
+    because of the commas, so it would be read as another flag. Writing
+    it as ``--basemap-bbox=-10,-10,10,10`` keeps the four numbers together.
+    """
+    items = list(args)
+    out = []
+    index = 0
+    while index < len(items):
+        item = items[index]
+        if item == "--basemap-bbox" and index + 1 < len(items):
+            nxt = items[index + 1]
+            if nxt.startswith("-") and not nxt.startswith("--"):
+                out.append(item + "=" + nxt)
+                index += 2
+                continue
+        out.append(item)
+        index += 1
+    return out
+
+
+class _Parser(argparse.ArgumentParser):
+    def parse_known_args(self, args=None, namespace=None):
+        if args is None:
+            args = sys.argv[1:]
+        return super().parse_known_args(_attach_negative_bbox(args), namespace)
+
+
 def build_parser(language="en"):
     def say(key):
         return _msg(key, language)
 
-    p = argparse.ArgumentParser(
+    p = _Parser(
         prog="qbar",
         description=say("description"),
         formatter_class=HelpFormatter,
@@ -199,6 +235,9 @@ def build_parser(language="en"):
     p.add_argument("--groups", help=say("help_groups"))
     p.add_argument("--id-col", default="analysis_IID")
     p.add_argument("--group-col", default="Dong_Grp")
+    p.add_argument("--sites", default=None, help=say("help_sites"))
+    p.add_argument("--basemap-image", default=None, help=say("help_basemap_image"))
+    p.add_argument("--basemap-bbox", default=None, help=say("help_basemap_bbox"))
     p.add_argument("--blocks", default="", help=say("help_blocks"))
     p.add_argument("--rest-name", default="NA", help=say("help_rest_name"))
     p.add_argument("--within", default="iid", choices=WITHIN, help=say("help_within"))

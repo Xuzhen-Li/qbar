@@ -563,6 +563,18 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     dendrogram built from that K is built again on the displayed matrix.
     A K that was not swapped keeps the scores and the tree from the alignment.
 
+    ``args.sites`` is omitted by default. When it is set, the run writes
+    ``map_pies.png`` and ``map_pies.tsv`` for the aligned matrix at
+    ``--sort-k``, or the largest K when ``--sort-k`` is omitted. Column
+    order and colours match the bar at that K, including ``--palette``,
+    ``--color``, ``--color-file``, and colours from ``--state``. Mean Q
+    is the arithmetic mean of every sample whose group equals the site
+    group. The alignment mask does not remove rows from the bar, and it
+    does not remove them from this mean. ``--basemap-image`` and
+    ``--basemap-bbox`` are omitted together. The image is stretched to
+    that box. A world file is not read. Nothing is downloaded.
+    ``--vector`` does not write a map PDF or SVG.
+
     ``main`` applies ``--config`` before calling ``run``. ``run`` does not
     read YAML. ``config_resolved.json`` is written by ``main`` after a
     successful run when ``--config`` was passed.
@@ -601,6 +613,12 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         raise SystemExit(_msg("palette_choice", language, name=palette_name))
     if color_lock not in ("off", "on"):
         raise SystemExit(_msg("color_lock_choice", language, mode=color_lock))
+    sites_arg = getattr(args, "sites", None) or None
+    basemap_image = getattr(args, "basemap_image", None) or None
+    basemap_bbox = getattr(args, "basemap_bbox", None) or None
+    if sites_arg or basemap_image or basemap_bbox:
+        from .mappies import require_basemap_pair
+        require_basemap_pair(sites_arg, basemap_image, basemap_bbox, language=language)
     flow_mode = getattr(args, "cluster_flow", "none")
     flow_weight = getattr(args, "flow_weight", "share")
     if flow_mode not in ("none", "sankey"):
@@ -894,6 +912,26 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
             figures, spans, args.width, args.title, dendro_spec, vector_mode,
             language=language, rect_cap=vector_cap,
         )
+    map_image = None
+    map_geometry = None
+    if sites_arg:
+        from .mappies import pies
+        legend_for_k = None
+        for row in rows:
+            if row["k"] == sort_k:
+                legend_for_k = row["legend"]
+                break
+        map_image, map_geometry = pies(
+            sites_arg,
+            aligned[sort_k],
+            groups,
+            hexes[sort_k],
+            legend_for_k,
+            k=sort_k,
+            basemap_image=basemap_image,
+            bbox=basemap_bbox,
+            language=language,
+        )
     os.makedirs(args.outdir, exist_ok=True)
     linkage_paths = []
     for _name, _z in arranged["matrices"]:
@@ -906,6 +944,11 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         write_linkage_index(_path, arranged["index_groups"])
         linkage_paths.append(_path)
         print(_path)
+    if map_image is not None:
+        from .mappies import write_map_files
+        map_png, map_tsv = write_map_files(args.outdir, map_image, map_geometry)
+        print(map_png)
+        print(map_tsv)
     grey_path = None
     html_path = None
     editor_path = None
@@ -1204,6 +1247,9 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
             paths.append(os.path.splitext(_panel)[0] + ".svg")
     if grey_path is not None:
         paths.append(grey_path)
+    if map_image is not None:
+        paths.append(os.path.join(args.outdir, "map_pies.png"))
+        paths.append(os.path.join(args.outdir, "map_pies.tsv"))
     if html_path is not None:
         paths.append(html_path)
     if editor_path is not None:
