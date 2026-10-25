@@ -550,15 +550,22 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     The label has no directory. Otherwise the run label is empty.
     ``args.editor`` defaults to off. When set, the run also writes
     ``editor.html`` and ``state.json``. The page reuses the panel drawing
-    code. ``args.state`` replays a state file after alignment: sample order,
+    code.     ``args.state`` replays a state file after alignment: sample order,
     group order, per-K column swaps, names, and colours. It is an error
-    together with ``--order-file``, ``--color``, or ``--color-file``.
+    together with ``--order-file``, ``--color``, or ``--color-file``
+    when those flags were passed on the command line. The same three keys
+    from a config file are cleared by ``main`` before ``run`` and are
+    not an error.
     A K list or align method in the state that differs from the command
     is an error that names both values. Inputs in the state are base names
     and SHA256 only. Where a state swap moves columns of a K, the alignment
     scores for that step are computed again on the displayed columns, and a
     dendrogram built from that K is built again on the displayed matrix.
     A K that was not swapped keeps the scores and the tree from the alignment.
+
+    ``main`` applies ``--config`` before calling ``run``. ``run`` does not
+    read YAML. ``config_resolved.json`` is written by ``main`` after a
+    successful run when ``--config`` was passed.
     """
     if args.provenance:
         started = datetime.datetime.now().astimezone().isoformat()
@@ -573,6 +580,8 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     language = args.language
     editor_on = bool(getattr(args, "editor", False))
     state_arg = getattr(args, "state", None) or None
+    # Config-sourced color, color_file, and order_file are cleared in main
+    # when --state is set. A command-line flag still errors here.
     if state_arg and getattr(args, "order_file", None):
         raise SystemExit(_msg("state_conflict_order", language))
     if state_arg and (getattr(args, "color", None) or getattr(args, "color_file", None)):

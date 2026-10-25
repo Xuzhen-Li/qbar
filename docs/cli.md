@@ -300,6 +300,12 @@ Replay order, colours, names, and column swaps from a state.json file.
 
 - Default: not set
 
+### `--config`
+
+YAML file of settings. Omitted by default. Keys are argparse dest names. Precedence is the command line, then this file, then the defaults. A flag on the command line wins even when it repeats the default.
+
+- Default: not set
+
 ### `--title`
 
 - Default: ""
@@ -476,3 +482,34 @@ PLINK 1.9 eigenvec for --auto-groups hclust or kmeans. No header: FID, IID, then
 How many leading score columns to use from --pca. Required with --pca. From 1 up to the number of score columns.
 
 - Default: not set
+
+## Config file
+
+`--config PATH` reads a YAML mapping. It is omitted by default. PyYAML is imported only when this flag is present. If PyYAML is missing, qbar exits and the message names `pip install "qbar[config]"`.
+
+Precedence is the command line, then the config file, then the defaults from `build_parser`. A flag that is present on the command line wins, including when the value equals the default. A flag that is absent does not replace a value from the file.
+
+Keys are argparse dest names, such as `align_method` and `order_mode`. `align-method` and `--align-method` are accepted and mapped to `align_method`. The key `config` is rejected. The key `state` is allowed and means the same thing as `--state`. `--q` and `--outdir` may be omitted on the command line when the file sets them. A sample id file (`ids`, `fam`, or `ind`) can be set in the file as well. The run still requires one id source.
+
+`on`, `off`, `yes`, and `no` must be quoted when the option expects a string. PyYAML 1.1 reads those words as booleans. A repeated YAML key keeps the last value.
+
+Paths in the file are resolved against the current working directory, the same way as paths on the command line. The directory that contains the config file is not used.
+
+A `store_true` key set to true in the file stays true. The command line cannot turn it off. Those flags have no `--no-` form. The exception is `align`, which has `--align` and `--no-align`. Edit the file to turn the key off.
+
+A float that is not finite is an error and the message names the key. That includes `.nan`, `.inf`, `-.inf`, and the string `NaN` on a float key. The same check applies to a command-line float when `--config` is used, so `config_resolved.json` is not written.
+
+When `--config` is passed and the run finishes, the output directory contains `config_resolved.json`. Keys are sorted, indent is 2, and the file ends with a newline. Each dest is the value the run used. `sources` maps each dest to `cli`, `config`, or `default`. `config_file` is the base name of the YAML file. `config_sha256` is the SHA256 of its bytes. The directory is not stored. File-valued options are base names only.
+
+`--state` is applied after that resolution. It replaces sample order and colours. `state_override` records `order` and `colours` when both `--config` and `--state` are used. If the file sets `align_method`, the command line does not pass `--align-method`, and the state names a different method, the run uses the state method. `state_override.align_method` records the config value and the state value. A command-line `--align-method` must still match the state.
+
+`color`, `color_file`, and `order_file` from the file are ignored when `--state` is set. stderr prints one line naming those keys. `state_override` records each one as the config value and `used: state`. File values in that record are base names. Passing `--color`, `--color-file`, or `--order-file` on the command line together with `--state` is still an error.
+
+```yaml
+q:
+  - k2.Q
+  - k3.Q
+ids: ids.txt
+align_method: hungarian
+outdir: out
+```
