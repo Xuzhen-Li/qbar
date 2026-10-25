@@ -52,6 +52,7 @@ The package version is 0.2.0.dev0. No git tag exists.
 
 ### Changed
 
+- Pong alignment scores each raw column pair once and each merged column once. The bar image counts cumulative bounds on a finite non-decreasing row and still uses searchsorted on any other row. Floats and pixels match the previous bodies. A constant column still has Pearson correlation 0.
 - The default bar colours are now the Science palette (`--palette science`). `--palette classic` restores the previous 20 colours. `--palette` also accepts `tab10`, `set1`, `dark2`, and `paired`. `--color-lock on` keeps each aligned column's colour from the lowest K unless `--color` sets that column. The default is `off`. `--greyscale-preview` writes `panel_grey.png` and is off by default.
 - The scipy dependency in `pyproject.toml` and `requirements.txt` is now `scipy>=1.9.0`, because clumppling-ilp uses `scipy.optimize.milp`.
 - Help and errors are English. `--language zh` selects the previous Chinese text. Column-name defaults are unchanged.
