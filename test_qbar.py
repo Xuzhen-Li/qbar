@@ -913,6 +913,33 @@ class CliTests(unittest.TestCase):
             self.assertEqual(ctx_inf.exception.code, "K=2 的 Q 有超出 [0,1] 的数")
             self.assertFalse(os.path.isfile(os.path.join(out_inf, "bar_K2.png")))
 
+    def test_read_q_keeps_one_row_and_one_column(self):
+        with tempfile.TemporaryDirectory() as td:
+            one_row = os.path.join(td, "only.Q")
+            with open(one_row, "w") as f:
+                f.write("0.2 0.3 0.5\n")
+            got = qbar.read_q(one_row)
+            self.assertEqual(got.shape, (1, 3))
+            self.assertTrue(np.allclose(got, [[0.2, 0.3, 0.5]]))
+            one_col = os.path.join(td, "col.Q")
+            with open(one_col, "w") as f:
+                f.write("0.2\n0.4\n0.6\n0.8\n")
+            got_c = qbar.read_q(one_col)
+            self.assertEqual(got_c.shape, (4, 1))
+            self.assertTrue(np.allclose(got_c, [[0.2], [0.4], [0.6], [0.8]]))
+            both = os.path.join(td, "both.2.Q")
+            with open(both, "w") as f:
+                f.write("0.2 0.8\n0.3 0.7\n")
+            got_b = qbar.read_q(both)
+            self.assertEqual(got_b.shape, (2, 2))
+            self.assertTrue(np.allclose(got_b, [[0.2, 0.8], [0.3, 0.7]]))
+            single = os.path.join(td, "single.Q")
+            with open(single, "w") as f:
+                f.write("0.5\n")
+            got_1 = qbar.read_q(single)
+            self.assertEqual(got_1.shape, (1, 1))
+            self.assertTrue(np.allclose(got_1, [[0.5]]))
+
 
 def _cli_flag(parser, name):
     for action in parser._actions:
