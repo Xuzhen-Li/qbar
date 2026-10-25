@@ -292,3 +292,15 @@ Accept several Q files at one K, group them into modes, and align the major-mode
 Similarity at or above which two replicates are linked into one mode. Required with --replicates. Not calibrated.
 
 - Default: not set
+
+### `--bootstrap`
+
+Resample individuals with replacement this many times and write match_support.tsv. Default 0 writes no file.
+
+- Default: 0
+
+### `--bootstrap-seed`
+
+Seed for --bootstrap. Used only when --bootstrap is greater than 0. Default 0.
+
+- Default: 0

@@ -523,7 +523,7 @@ def match_next(q_prev, q_new, mask, method="greedy", jaccard_set="dominant", jac
 
 
 def align_qs(q_by_k, groups, anchor, mode, align_groups, qmax_cut, do_align, method="greedy",
-             jaccard_set="dominant", jaccard_cut=0.5, *, language="en"):
+             jaccard_set="dominant", jaccard_cut=0.5, *, language="en", warn=True, row_mask=None):
     ks = sorted(q_by_k)
     if do_align and len(ks) > 1:
         for a, b in zip(ks, ks[1:]):
@@ -551,6 +551,16 @@ def align_qs(q_by_k, groups, anchor, mode, align_groups, qmax_cut, do_align, met
                 mask = np.ones(len(groups), dtype=bool)
             if not mask.any():
                 raise SystemExit(_msg("align_empty", language))
+        if row_mask is not None:
+            extra = np.asarray(row_mask, dtype=bool)
+            if extra.ndim != 1 or extra.shape[0] != mask.shape[0]:
+                got = int(extra.shape[0]) if extra.ndim >= 1 else int(extra.size)
+                raise SystemExit(_msg(
+                    "bootstrap_mask_shape", language, rows=int(mask.shape[0]), got=got,
+                ))
+            mask = mask & extra
+            if not mask.any():
+                raise SystemExit(_msg("align_empty", language))
         if method == "pong":
             p, rs, split = match_next_pong(aligned[k], q_by_k[k + 1], mask, language=language)
         elif method == "jaccard":
@@ -573,7 +583,7 @@ def align_qs(q_by_k, groups, anchor, mode, align_groups, qmax_cut, do_align, met
             continue
         # Pearson < 0.5 on stderr is only for greedy and hungarian.
         low = [r for r in rs[:-1] if r is not None and r < 0.5]
-        if low:
+        if warn and low:
             print(
                 _msg("pearson_low", language, k_from=k, k_to=k + 1, n=len(low)),
                 file=sys.stderr,
