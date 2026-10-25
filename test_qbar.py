@@ -1319,5 +1319,23 @@ class CompareOutputsTests(unittest.TestCase):
         self.assertIn("identical-after-path-normalisation", text)
 
 
+class CliDocTests(unittest.TestCase):
+    def test_cli_md_matches_generator(self):
+        import importlib.util
+        root = os.path.dirname(os.path.abspath(__file__))
+        script = os.path.join(root, "tools", "gen_cli_docs.py")
+        doc = os.path.join(root, "docs", "cli.md")
+        if not os.path.isfile(script) or not os.path.isfile(doc):
+            raise unittest.SkipTest("cli docs are not next to the test")
+        spec = importlib.util.spec_from_file_location("qbar_gen_cli_docs", script)
+        if spec is None or spec.loader is None:
+            raise unittest.SkipTest("cli docs generator cannot be loaded")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with open(doc, encoding="utf-8") as handle:
+            found = handle.read()
+        self.assertEqual(found, module.render_cli_markdown())
+
+
 if __name__ == "__main__":
     unittest.main()
