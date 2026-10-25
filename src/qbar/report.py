@@ -6,7 +6,7 @@ import os
 
 import numpy as np
 
-from .align import col_pearson
+from .align import ALIGN_METHODS, CLUMPP_PERM_LIMIT, col_pearson, match_next
 
 REPORT_LOW = {"greedy": 0.5, "hungarian": 0.5, "pong": 0.8, "jaccard": 0.5}
 
@@ -224,4 +224,111 @@ def write_align_report(outdir, aligned, meta, groups, method, perm, low=None):
                     f.write("  %s <- %s  %s %s%s%s; top groups: %s\n"
                             % (r["column"], r["matched_from"], measure, r["similarity"], ref,
                                "  LOW CONFIDENCE" if r["low_confidence"] == "yes" else "", r["top_groups_mean"]))
+    return rows
+
+
+_COMPARE_COLS = (
+    "K_to", "column", "method", "matched_from", "similarity", "agrees_with_default",
+)
+
+_SCIPY_SYMBOL = {
+    "hungarian": "linear_sum_assignment",
+    "pong": "linear_sum_assignment",
+    "jaccard": "linear_sum_assignment",
+    "clumppling-ilp": "milp",
+}
+
+
+def _score_text(value):
+    if value is None:
+        return "NA"
+    return "%.3f" % float(value)
+
+
+def _scipy_import_ok(method):
+    """True when this method does not need scipy, or the symbol imports."""
+    symbol = _SCIPY_SYMBOL.get(method)
+    if symbol is None:
+        return True
+    try:
+        from scipy import optimize
+    except ImportError:
+        return False
+    return hasattr(optimize, symbol)
+
+
+def _compare_skip_reason(method, k_to):
+    """Why this method is left out of one K step, or None when it can run."""
+    if method in ("clumpp-full", "clumpp-greedy") and k_to > CLUMPP_PERM_LIMIT:
+        return "K+1 is above 8"
+    if not _scipy_import_ok(method):
+        return "scipy import failed"
+    return None
+
+
+def write_align_compare(outdir, q_by_k, aligned, meta, perm, chosen,
+                        jaccard_set="dominant", jaccard_cut=0.5):
+    """Write align_compare.tsv and align_compare.txt for one finished run.
+
+    Each method sees the chosen method's already aligned previous matrix
+    and the raw next Q, with that step's mask. The chosen alignment is
+    not changed. The text names who shares that mapping and who does not.
+    It does not declare a better method.
+    """
+    os.makedirs(outdir, exist_ok=True)
+    rows = []
+    sections = []
+    for k_to in sorted(meta):
+        k_from = k_to - 1
+        mask = meta[k_to]["mask"]
+        chosen_perm = list(perm[k_to])
+        same = []
+        different = []
+        skipped = []
+        for method in ALIGN_METHODS:
+            reason = _compare_skip_reason(method, k_to)
+            if reason is not None:
+                skipped.append((method, reason))
+                continue
+            result = match_next(
+                aligned[k_from], q_by_k[k_to], mask, method,
+                jaccard_set, jaccard_cut,
+            )
+            method_perm = list(result[0])
+            scores = list(result[1])
+            shown = [_score_text(scores[c]) for c in range(k_to)]
+            agrees_all = method_perm == chosen_perm
+            entry = "%s (%s)" % (method, ", ".join(shown))
+            if agrees_all:
+                same.append(entry)
+            else:
+                different.append(entry)
+            for c in range(k_to):
+                agrees = "yes" if method_perm[c] == chosen_perm[c] else "no"
+                rows.append([
+                    str(k_to),
+                    "C%d" % (c + 1),
+                    method,
+                    str(method_perm[c] + 1),
+                    shown[c],
+                    agrees,
+                ])
+        sections.append((k_from, k_to, same, different, skipped))
+    with open(os.path.join(outdir, "align_compare.tsv"), "w") as handle:
+        handle.write("\t".join(_COMPARE_COLS) + "\n")
+        for row in rows:
+            handle.write("\t".join(row) + "\n")
+    with open(os.path.join(outdir, "align_compare.txt"), "w") as handle:
+        handle.write("No method is declared better.\n")
+        handle.write("Chosen method: %s\n" % chosen)
+        for k_from, k_to, same, different, skipped in sections:
+            handle.write("\nK=%d -> K=%d\n" % (k_from, k_to))
+            handle.write("Same mapping as %s: %s\n" % (
+                chosen, "; ".join(same) if same else "none",
+            ))
+            handle.write("Different mapping from %s: %s\n" % (
+                chosen, "; ".join(different) if different else "none",
+            ))
+            for method, reason in skipped:
+                handle.write("%s was not compared: %s.\n" % (method, reason))
     return rows

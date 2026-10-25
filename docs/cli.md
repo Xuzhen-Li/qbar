@@ -180,6 +180,12 @@ Also write align_report.tsv and align_report.txt
 
 - Default: false
 
+### `--align-compare`
+
+Also write align_compare.tsv and align_compare.txt, comparing every available align method with the chosen one. No method is declared better.
+
+- Default: false
+
 ### `--align-report-low`
 
 Low-confidence cutoff. Default 0.5 for greedy/hungarian/jaccard, and 0.8 for pong

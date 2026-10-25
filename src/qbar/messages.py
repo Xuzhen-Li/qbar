@@ -115,6 +115,10 @@ _CATALOG = {
         "en": "Also write align_report.tsv and align_report.txt",
         "zh": "另写 align_report.tsv 和 align_report.txt",
     },
+    "help_align_compare": {
+        "en": "Also write align_compare.tsv and align_compare.txt, comparing every available align method with the chosen one. No method is declared better.",
+        "zh": "另写 align_compare.tsv 和 align_compare.txt，把每种可用的对齐方法和当前方法对照。不判定哪种更好。",
+    },
     "help_align_report_low": {
         "en": "Low-confidence cutoff. Default 0.5 for greedy/hungarian/jaccard, and 0.8 for pong",
         "zh": "低置信阈值。默认 greedy/hungarian/jaccard 0.5，pong 0.8",
