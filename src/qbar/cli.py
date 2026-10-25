@@ -47,6 +47,11 @@ is written.
 --html writes panel.html and is off by default. The file embeds the
 sample rows and draws the bars on a canvas. Hover text shows the sample.
 It does not load a network file.
+--editor writes editor.html and state.json and is off by default. The
+page reuses that canvas. It can move a sample within its group, reorder
+groups, swap two columns at one K, rename a column, and set a column
+colour. --state replays state.json after alignment. It cannot be combined
+with --order-file, --color, or --color-file.
 https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.hierarchy.linkage.html
 """
 from __future__ import annotations
@@ -245,6 +250,8 @@ def build_parser(language="en"):
     p.add_argument("--vector", choices=("off", "pdf", "svg", "both"), default="off",
                    help=say("help_vector"))
     p.add_argument("--html", action="store_true", help=say("help_html"))
+    p.add_argument("--editor", action="store_true", help=say("help_editor"))
+    p.add_argument("--state", default=None, help=say("help_state"))
     p.add_argument("--title", default="")
     p.add_argument("--width", type=int, default=2200, help=say("help_width"))
     p.add_argument("--bar-height", type=int, default=0, help=say("help_bar_height"))
