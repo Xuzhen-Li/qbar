@@ -1029,7 +1029,7 @@ def build_parser():
         formatter_class=HelpFormatter,
         epilog="排序：--order-file 用你给的名单；否则按 --blocks 的组序分块，组内用 --within。\n"
         "组内 iid=名字，q=该组占比最高的那一列从高到低，hclust=平均连锁、距离 1−Pearson，input=Q 里的原顺序。\n"
-        "多个 K 默认做 Pearson 贪心对齐，新列放在最上面。--no-align 保持每个 Q 自己的列顺序。",
+        "多个 K 默认做 Pearson 贪心对齐，新列放在最上面。--no-align 保持每个 Q 自己的列顺序；若同时给了 --anchor-group，每个 K 仍把该组最纯的人的主列放到 C1。",
     )
     p.add_argument("--q", nargs="+", required=True, help="一个或多个 .Q，或带引号的通配符，或一个目录")
     p.add_argument("--fam", help="PLINK .fam，IID 在第 2 列，行序与 Q 相同")
@@ -1069,7 +1069,7 @@ def build_parser():
                    help="低置信阈值。默认 greedy/hungarian/jaccard 0.5，pong 0.8")
     p.add_argument("--align-groups", default="", help="参与对齐的组，逗号分隔。core 模式必填")
     p.add_argument("--qmax", type=float, default=0.75, help="core 模式的 qmax 阈值。默认 0.75")
-    p.add_argument("--anchor-group", default="", help="最低 K 把这个组最纯的人的主列放到 C1")
+    p.add_argument("--anchor-group", default="", help="对齐时只改最低 K，把这个组最纯的人的主列放到 C1。--no-align 或只有一个 K 时，每个 K 都这样做。")
     p.add_argument("--color", action="append", default=[], help="组名=#rrggbb 或 C3=#rrggbb。可重复")
     p.add_argument("--color-file", help="两列：名字 #rrggbb")
     p.add_argument("--title", default="")
