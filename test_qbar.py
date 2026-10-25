@@ -981,6 +981,57 @@ class CliTests(unittest.TestCase):
         self.assertIn("A directory passed to `--q` includes `.Q` and `.q` files.", en)
         self.assertIn("`--q` 传入目录时，会读取其中的 `.Q` 和 `.q` 文件。", zh)
 
+    def test_ids_extra_tokens_warn_and_keep_first(self):
+        import io
+        from contextlib import redirect_stderr
+        warning = "注意：--ids 有 2 行含有多个字段，只保留了每行第一个。例如：Alice Smith"
+        with tempfile.TemporaryDirectory() as td:
+            q = os.path.join(td, "t.2.Q")
+            with open(q, "w") as f:
+                f.write("0.2 0.8\n0.3 0.7\n0.9 0.1\n")
+            ids = os.path.join(td, "ids.txt")
+            with open(ids, "w") as f:
+                f.write("# comment stays ignored\n\nAlice Smith\nBob\nCarol Jones extra\n")
+            out = os.path.join(td, "out")
+            buf = io.StringIO()
+            with redirect_stderr(buf):
+                qbar.main(["--q", q, "--ids", ids, "--outdir", out])
+            with open(os.path.join(out, "order.tsv")) as f:
+                got = [line.split("\t")[1] for line in f.read().splitlines()[1:]]
+            self.assertEqual(sorted(got), ["Alice", "Bob", "Carol"])
+            self.assertNotIn("Smith", got)
+            self.assertIn(warning, buf.getvalue())
+            plain = os.path.join(td, "plain.txt")
+            with open(plain, "w") as f:
+                f.write("Alice\nBob\n")
+            q2 = os.path.join(td, "two.2.Q")
+            with open(q2, "w") as f:
+                f.write("0.2 0.8\n0.3 0.7\n")
+            out2 = os.path.join(td, "out2")
+            buf2 = io.StringIO()
+            with redirect_stderr(buf2):
+                qbar.main(["--q", q2, "--ids", plain, "--outdir", out2])
+            self.assertNotIn("多个字段", buf2.getvalue())
+            fam = os.path.join(td, "t.fam")
+            with open(fam, "w") as f:
+                f.write("F Alice Smith 0 0 1 -9\nF Bob Jones 0 0 2 -9\n")
+            out3 = os.path.join(td, "out3")
+            buf3 = io.StringIO()
+            with redirect_stderr(buf3):
+                qbar.main(["--q", q2, "--fam", fam, "--outdir", out3])
+            with open(os.path.join(out3, "order.tsv")) as f:
+                fam_ids = [line.split("\t")[1] for line in f.read().splitlines()[1:]]
+            self.assertEqual(sorted(fam_ids), ["Alice", "Bob"])
+            self.assertNotIn("多个字段", buf3.getvalue())
+        help_s = _cli_flag(qbar.build_parser(), "--ids").help or ""
+        self.assertIn("多出来的字段", help_s)
+        with open("README.md", encoding="utf-8") as f:
+            en = f.read()
+        with open("README.zh.md", encoding="utf-8") as f:
+            zh = f.read()
+        self.assertIn("keeps the first token and writes a warning to stderr", en)
+        self.assertIn("只保留第一个字段，并在 stderr 给出警告", zh)
+
 
 def _cli_flag(parser, name):
     for action in parser._actions:
