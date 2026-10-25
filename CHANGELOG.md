@@ -84,6 +84,7 @@ The package version is 0.2.0.dev0. No git tag exists.
 
 ### Fixed
 
+- A status-0 clumppling-ilp solution that is not a valid assignment stops with a message that names clumppling-ilp and what was malformed.
 - Pearson correlation is 0 when either column is constant. Centering a constant float column is not always an exact zero, so those columns used to score about 1 or about -1 (c25f65f).
 - When groups share the highest column mean, the legend keeps the group that appears first in the sample list. An exact tie no longer follows hash order (97bfe75).
 - A Q matrix that contains NaN stops with an error instead of being drawn. Inf is still rejected by the range check (b9d8639).

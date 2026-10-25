@@ -3523,13 +3523,15 @@ class ClumppGreedyTests(unittest.TestCase):
                 mask = np.ones(n_rows, dtype=bool)
                 if int(rng.integers(0, 2)) == 1:
                     mask[int(rng.integers(0, n_rows))] = False
+                expect = _lex_smallest_gprime_perm(q, p, mask)
                 full, full_scores = qbar.match_next(q, p, mask, "clumpp-full")
                 got, got_scores = qbar.match_next(q, p, mask, "clumpp-greedy")
                 ignored, ignored_scores = match_next_clumpp_greedy(
                     q, p, mask, seed=11, repeats=5,
                 )
-                self.assertEqual(got, full)
-                self.assertEqual(ignored, full)
+                self.assertEqual(got, expect)
+                self.assertEqual(ignored, expect)
+                self.assertEqual(full, expect)
                 self.assertEqual(len(got_scores), len(full_scores))
                 for left, right in zip(got_scores, full_scores):
                     if left is None:
@@ -3566,6 +3568,40 @@ class ClumppGreedyTests(unittest.TestCase):
         zh = _cli_flag(qbar.build_parser(language="zh"), "--align-method").help or ""
         self.assertIn("clumpp-greedy 在单个 K 到 K+1 的一对矩阵上与 clumpp-full 返回同一排列", zh)
         self.assertEqual(qbar.build_parser().parse_args(["--q", "x.Q", "--outdir", "o"]).align_method, "greedy")
+
+    def test_known_block_and_tie_match_the_documented_search(self):
+        # Invented block. Q columns are [1, 1, 0] and [0, 0, 1].
+        # P raw columns are that second column, a zero column, then the first.
+        # The documented search pads Q with zeros and keeps the lex-smallest
+        # perm of maximum G'. That perm is [2, 0, 1], and the zero column is last.
+        from qbar.align import match_next_clumpp_greedy
+        q = np.array([
+            [1.0, 0.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+        ])
+        p = np.array([
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0],
+        ])
+        mask = np.ones(3, dtype=bool)
+        expect = [2, 0, 1]
+        self.assertEqual(_lex_smallest_gprime_perm(q, p, mask), expect)
+        got, scores = qbar.match_next(q, p, mask, "clumpp-greedy")
+        again, _again_scores = match_next_clumpp_greedy(q, p, mask, seed=3, repeats=4)
+        self.assertEqual(got, expect)
+        self.assertEqual(again, expect)
+        self.assertEqual(got[-1], 1)
+        self.assertIsNone(scores[-1])
+        # Invented tie. The two P columns are the same, so both perms share G'.
+        # The documented tie keeps the lexicographically smallest perm.
+        q_tie = np.array([[1.0], [0.0], [0.4]])
+        p_tie = np.array([[1.0, 1.0], [0.0, 0.0], [0.4, 0.4]])
+        mask_tie = np.ones(3, dtype=bool)
+        self.assertEqual(_lex_smallest_gprime_perm(q_tie, p_tie, mask_tie), [0, 1])
+        tied, _tied_scores = qbar.match_next(q_tie, p_tie, mask_tie, "clumpp-greedy")
+        self.assertEqual(tied, [0, 1])
 
 
 def _independent_largek_perm(q_prev, q_new, mask):
@@ -3795,6 +3831,52 @@ class ClumpplingIlpTests(unittest.TestCase):
             str(ctx_zh.exception),
             "clumppling-ilp 没有得到最优解（status 2：problem is infeasible）",
         )
+
+    def test_status_0_malformed_assignment_names_the_method(self):
+        from unittest.mock import patch
+
+        class _Result:
+            def __init__(self, values):
+                self.status = 0
+                self.message = "optimal"
+                self.x = np.asarray(values, dtype=float)
+                self.fun = 0.0
+
+        # K+1 = 2, K = 1. Both variables are 0, so column 0 has no ones.
+        q = np.array([[0.2], [0.8]])
+        p = np.array([[0.2, 0.1], [0.8, 0.7]])
+        mask = np.ones(2, dtype=bool)
+        column_en = (
+            "clumppling-ilp returned a malformed assignment: "
+            "column 0 has 0 ones, not 1 or 2."
+        )
+        column_zh = "clumppling-ilp 返回的分配不完整：第 0 列有 0 个 1，不是 1 或 2。"
+        with patch("scipy.optimize.milp", return_value=_Result([0.0, 0.0])):
+            with self.assertRaises(SystemExit) as ctx:
+                qbar.match_next(q, p, mask, "clumppling-ilp")
+        self.assertEqual(ctx.exception.code, column_en)
+        with patch("scipy.optimize.milp", return_value=_Result([0.0, 0.0])):
+            with self.assertRaises(SystemExit) as ctx_zh:
+                qbar.match_next(q, p, mask, "clumppling-ilp", language="zh")
+        self.assertEqual(ctx_zh.exception.code, column_zh)
+        # K+1 = 3, K = 2. Each old column has one one, so none is doubled.
+        q2 = np.array([[0.9, 0.1], [0.2, 0.8]])
+        p2 = np.array([[0.9, 0.0, 0.1], [0.2, 0.1, 0.7]])
+        mask2 = np.ones(2, dtype=bool)
+        double_en = (
+            "clumppling-ilp returned a malformed assignment: "
+            "it does not double exactly one column."
+        )
+        double_zh = "clumppling-ilp 返回的分配不完整：没有恰好把一列加倍。"
+        flat = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+        with patch("scipy.optimize.milp", return_value=_Result(flat)):
+            with self.assertRaises(SystemExit) as ctx_double:
+                qbar.match_next(q2, p2, mask2, "clumppling-ilp")
+        self.assertEqual(ctx_double.exception.code, double_en)
+        with patch("scipy.optimize.milp", return_value=_Result(flat)):
+            with self.assertRaises(SystemExit) as ctx_double_zh:
+                qbar.match_next(q2, p2, mask2, "clumppling-ilp", language="zh")
+        self.assertEqual(ctx_double_zh.exception.code, double_zh)
 
     def test_missing_milp_refuses(self):
         import scipy.optimize as so
@@ -7080,6 +7162,48 @@ class AutoGroupsTests(unittest.TestCase):
         self.assertIn("1", ctx.exception.code)
         self.assertIn("2", ctx.exception.code)
         self.assertIn("maxclust", ctx.exception.code)
+
+    def test_hclust_pre_ignored_warns(self):
+        from contextlib import redirect_stderr
+        from io import StringIO
+        q = np.array([
+            [0.95, 0.05],
+            [0.90, 0.10],
+            [0.10, 0.90],
+            [0.05, 0.95],
+            [0.08, 0.92],
+        ], dtype=float)
+        flags = [
+            "--auto-groups", "hclust", "--auto-g", "2",
+            "--hclust-dist", "euclidean", "--hclust-linkage", "average",
+        ]
+        english = (
+            "Warning: --hclust-pre is not used by --auto-groups hclust. "
+            "The tree uses every row."
+        )
+        chinese = "注意：--auto-groups hclust 不使用 --hclust-pre。树使用全部行。"
+        with tempfile.TemporaryDirectory() as tmp:
+            cmd, _ids = self._write_case(tmp, q)
+            out = os.path.join(tmp, "pre")
+            buf = StringIO()
+            with redirect_stderr(buf):
+                qbar.main(cmd + flags + ["--hclust-pre", "dominant", "--outdir", out])
+            self.assertEqual(buf.getvalue().strip(), english)
+            with open(os.path.join(out, "groups_auto.tsv"), encoding="utf-8") as handle:
+                table = handle.read()
+            self.assertNotIn("dominant", table)
+            self.assertIn("dist=euclidean", table)
+            quiet = StringIO()
+            with redirect_stderr(quiet):
+                qbar.main(cmd + flags + ["--outdir", os.path.join(tmp, "plain")])
+            self.assertNotIn("--hclust-pre", quiet.getvalue())
+            zh_buf = StringIO()
+            with redirect_stderr(zh_buf):
+                qbar.main(cmd + flags + [
+                    "--language", "zh", "--hclust-pre", "dominant",
+                    "--outdir", os.path.join(tmp, "zh"),
+                ])
+            self.assertEqual(zh_buf.getvalue().strip(), chinese)
 
     def test_hclust_byte_cap_refuses_before_pdist(self):
         import scipy.spatial.distance as distance

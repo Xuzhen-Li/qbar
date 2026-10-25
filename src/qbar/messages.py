@@ -611,6 +611,14 @@ _CATALOG = {
         "en": "clumppling-ilp did not reach an optimal solution (status %(status)s: %(message)s)",
         "zh": "clumppling-ilp 没有得到最优解（status %(status)s：%(message)s）",
     },
+    "clumppling_assignment_column": {
+        "en": "clumppling-ilp returned a malformed assignment: column %(column)s has %(n)s ones, not 1 or 2.",
+        "zh": "clumppling-ilp 返回的分配不完整：第 %(column)s 列有 %(n)s 个 1，不是 1 或 2。",
+    },
+    "clumppling_assignment_double": {
+        "en": "clumppling-ilp returned a malformed assignment: it does not double exactly one column.",
+        "zh": "clumppling-ilp 返回的分配不完整：没有恰好把一列加倍。",
+    },
     "align_needs_scipy": {
         "en": "--align-method %(method)s requires scipy (scipy.optimize)",
         "zh": "--align-method %(method)s 需要 scipy（scipy.optimize）",

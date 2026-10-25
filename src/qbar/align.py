@@ -488,13 +488,14 @@ def clumppling_cost_matrix(q, p):
     return cost
 
 
-def clumppling_perm_from_w(cost, w):
+def clumppling_perm_from_w(cost, w, *, language="en"):
     """Turn a binary assignment into the qbar perm.
 
     cost and w have shape (K+1, K). Each row of w sums to 1. Exactly one
     column of w sums to 2. That column keeps the child with the smaller
     cost, and the smaller row index on a tie. The other child is last.
     Every other column keeps its single child at that position.
+    A status-0 solution that is not that assignment stops with a message.
     """
     cost = np.asarray(cost, dtype=float)
     rounded = np.rint(np.asarray(w, dtype=float))
@@ -507,15 +508,18 @@ def clumppling_perm_from_w(cost, w):
             perm[j] = assigned[0]
             continue
         if len(assigned) != 2:
-            raise ValueError(
-                "clumppling assignment column %s has %s ones" % (j, len(assigned))
-            )
+            raise SystemExit(_msg(
+                "clumppling_assignment_column",
+                language,
+                column=j,
+                n=len(assigned),
+            ))
         n_doubled += 1
         keep, extra = sorted(assigned, key=lambda i: (float(cost[i, j]), i))
         perm[j] = keep
         perm[k_old] = extra
     if n_doubled != 1 or any(item is None for item in perm):
-        raise ValueError("clumppling assignment does not double exactly one column")
+        raise SystemExit(_msg("clumppling_assignment_double", language))
     return [int(item) for item in perm]
 
 
@@ -576,7 +580,7 @@ def match_next_clumppling_ilp(q_prev, q_new, mask, *, language="en"):
     q, p = _masked_pair(q_prev, q_new, mask)
     cost = clumppling_cost_matrix(q, p)
     w, _fun = _milp_clumppling(cost, language)
-    perm = clumppling_perm_from_w(cost, w)
+    perm = clumppling_perm_from_w(cost, w, language=language)
     return perm, _old_column_gprime(q, p, perm)
 
 
