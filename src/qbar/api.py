@@ -498,7 +498,9 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     is ``membership weight``. ``low_confidence`` on an edge is the
     destination column's flag from the alignment report when that report
     is written, and NA otherwise. ``--no-align`` with ``sankey`` is an
-    error. A gap in K is reported first.     No HTML flow file is written.
+    error. A gap in K is reported first. When ``args.html`` is also set,
+    the run writes ``cluster_flow.html`` beside those three files.
+    Either flag alone does not write that file.
 
     When ``args.auto_groups`` is ``none`` (the default), the run writes no
     ``groups_auto.tsv`` and no ``groups_auto_summary.txt``. ``major``,
@@ -1183,6 +1185,7 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         else:
             print(_msg("lowconf_unused", language), file=sys.stderr)
     flow_tsv = None
+    flow_html_path = None
     if flow_mode == "sankey":
         edges = cluster_flow(
             aligned,
@@ -1199,6 +1202,14 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         flow_png = os.path.join(args.outdir, "cluster_flow.png")
         write_cluster_flow_plot(flow_png, aligned, edges, hexes)
         print(flow_png)
+        if bool(getattr(args, "html", False)):
+            # Offline flow page. Written only when sankey and --html are both set.
+            from .html_panel import write_cluster_flow_html
+            flow_html_path = os.path.join(args.outdir, "cluster_flow.html")
+            write_cluster_flow_html(
+                flow_html_path, edges, hexes, aligned=aligned, language=language,
+            )
+            print(flow_html_path)
     if getattr(args, "align_compare", False) and meta:
         write_align_compare(
             args.outdir, q_by_k, aligned, meta, perm, args.align_method,
@@ -1350,6 +1361,8 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         paths.append(flow_tsv)
         paths.append(os.path.join(args.outdir, "cluster_flow.png"))
         paths.append(os.path.join(args.outdir, "cluster_flow.pdf"))
+        if flow_html_path is not None:
+            paths.append(flow_html_path)
     if groups_auto_tsv is not None:
         paths.append(groups_auto_tsv)
         paths.append(os.path.join(args.outdir, "groups_auto_summary.txt"))

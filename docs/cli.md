@@ -446,7 +446,7 @@ Add a residual test of one parent versus two to parent_share_ci.tsv. Off by defa
 
 ### `--cluster-flow`
 
-Write cluster_flow.tsv, cluster_flow.png, and cluster_flow.pdf. none writes nothing. sankey draws membership weight between aligned columns at consecutive K. Default none.
+Write cluster_flow.tsv, cluster_flow.png, and cluster_flow.pdf. With --html, also write cluster_flow.html. none writes nothing. sankey draws membership weight between aligned columns at consecutive K. Default none.
 
 - Choices: none, sankey
 - Default: none

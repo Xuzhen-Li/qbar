@@ -952,8 +952,8 @@ _CATALOG = {
         "zh": "score_matches 需要布尔值，收到 %(value)s",
     },
     "help_cluster_flow": {
-        "en": "Write cluster_flow.tsv, cluster_flow.png, and cluster_flow.pdf. none writes nothing. sankey draws membership weight between aligned columns at consecutive K. Default none.",
-        "zh": "写 cluster_flow.tsv、cluster_flow.png 和 cluster_flow.pdf。none 不写。sankey 画连续 K 的对齐列之间的成员权重。默认 none。",
+        "en": "Write cluster_flow.tsv, cluster_flow.png, and cluster_flow.pdf. With --html, also write cluster_flow.html. none writes nothing. sankey draws membership weight between aligned columns at consecutive K. Default none.",
+        "zh": "写 cluster_flow.tsv、cluster_flow.png 和 cluster_flow.pdf。同时有 --html 时另写 cluster_flow.html。none 不写。sankey 画连续 K 的对齐列之间的成员权重。默认 none。",
     },
     "help_flow_weight": {
         "en": "Edge weight used only with --cluster-flow sankey. share is the destination parent share. jaccard is the member-set Jaccard. Default share.",

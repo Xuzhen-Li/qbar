@@ -6109,6 +6109,7 @@ class ClusterFlowTests(unittest.TestCase):
             self.assertEqual(_pdf_without_dates(pdf_a), _pdf_without_dates(pdf_b))
             with open(pdf_a, "rb") as handle:
                 self.assertTrue(handle.read().startswith(b"%PDF"))
+            # cluster_flow.html is absent unless --html is also set.
             for name in ("cluster_flow.html",):
                 self.assertFalse(os.path.exists(os.path.join(out_a, name)))
             with Image.open(png_a) as img:
@@ -6222,6 +6223,204 @@ class ClusterFlowTests(unittest.TestCase):
                 ctx.exception.code,
                 "Cross-K alignment requires consecutive K. Missing K=3",
             )
+
+    def _check_flow_script(self, html_path):
+        import shutil
+        node = shutil.which("node")
+        if not node:
+            return
+        harness = "\n".join([
+            'var fs = require("fs");',
+            'var assert = require("assert");',
+            'var html = fs.readFileSync(process.argv[2], "utf8");',
+            "function grab(id) {",
+            "  var needle = 'id=\"' + id + '\">';",
+            "  var start = html.indexOf(needle) + needle.length;",
+            "  var end = html.indexOf('</script>', start);",
+            "  return html.slice(start, end);",
+            "}",
+            'var data = JSON.parse(grab("qbar-flow-data"));',
+            'var src = grab("qbar-flow-draw");',
+            'var api = new Function(src + "\\nreturn {flowLinkIndexAt: flowLinkIndexAt, flowCurvePoint: flowCurvePoint, flowNodeBox: flowNodeBox, flowTooltip: flowTooltip};")();',
+            "var edge = data.edges[0];",
+            "var from = api.flowNodeBox(data, edge.K_from, edge.col_from);",
+            "var to = api.flowNodeBox(data, edge.K_to, edge.col_to);",
+            "assert.ok(from);",
+            "assert.ok(to);",
+            "var c1 = api.flowNodeBox(data, edge.K_from, \"C1\");",
+            "var c2 = api.flowNodeBox(data, edge.K_from, \"C2\");",
+            "assert.ok(c1.y > c2.y);",
+            "var mid = api.flowCurvePoint(from, to, 0.5);",
+            "assert.strictEqual(api.flowLinkIndexAt(data, mid.x, mid.y), 0);",
+            "assert.strictEqual(api.flowLinkIndexAt(data, 0, 0), -1);",
+            "var tip = api.flowTooltip(edge);",
+            "assert.ok(tip.indexOf(\"K_from: \" + edge.K_from) >= 0);",
+            "assert.ok(tip.indexOf(\"col_from: \" + edge.col_from) >= 0);",
+            "assert.ok(tip.indexOf(\"K_to: \" + edge.K_to) >= 0);",
+            "assert.ok(tip.indexOf(\"col_to: \" + edge.col_to) >= 0);",
+            "assert.ok(tip.indexOf(\"weight: \") >= 0);",
+            "assert.ok(tip.indexOf(\"weight_definition: \" + edge.weight_definition) >= 0);",
+            "assert.ok(tip.indexOf(\"method: \" + edge.method) >= 0);",
+            "assert.ok(tip.indexOf(\"low_confidence: \" + edge.low_confidence) >= 0);",
+            "assert.strictEqual(tip.indexOf(\"innerHTML\"), -1);",
+            "",
+        ])
+        with open(html_path, encoding="utf-8") as handle:
+            script = _html_script(handle.read(), "qbar-flow-draw")
+        folder = os.path.dirname(html_path)
+        script_path = os.path.join(folder, "flow-draw.js")
+        harness_path = os.path.join(folder, "flow-hit.js")
+        with open(script_path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(script)
+        with open(harness_path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(harness)
+        checked = subprocess.run(
+            [node, "--check", script_path],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+        ran = subprocess.run(
+            [node, harness_path, html_path],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(ran.returncode, 0, ran.stderr + ran.stdout)
+
+    def test_cluster_flow_html_requires_both_flags(self):
+        import json
+        from qbar.html_panel import flow_script, round_q, write_cluster_flow_html
+        script = flow_script()
+        self.assertNotIn("http", script.lower())
+        self.assertNotIn("//", script)
+        self.assertNotIn("innerHTML", script)
+        self.assertIn("textContent", script)
+        self.assertIn("function flowLinkIndexAt", script)
+        help_s = _cli_flag(qbar.build_parser(), "--cluster-flow").help or ""
+        self.assertIn("cluster_flow.html", help_s)
+        self.assertIn("--html", help_s)
+        zh_help = _cli_flag(qbar.build_parser(language="zh"), "--cluster-flow").help or ""
+        self.assertIn("cluster_flow.html", zh_help)
+        nasty = '</script><b>"&'
+        with tempfile.TemporaryDirectory() as tmp:
+            first = os.path.join(tmp, "a.html")
+            second = os.path.join(tmp, "b.html")
+            edges = [{
+                "K_from": 2,
+                "col_from": nasty,
+                "K_to": 3,
+                "col_to": "C1",
+                "weight": 2.0 / 3.0,
+                "weight_definition": "share",
+                "method": nasty,
+                "low_confidence": "NA",
+                "dest_masked_sum": 9.5,
+            }]
+            hexes = {2: ["#112233", "#445566"], 3: ["#778899"]}
+            write_cluster_flow_html(first, edges, hexes)
+            write_cluster_flow_html(second, edges, hexes)
+            with open(first, "rb") as handle:
+                blob_a = handle.read()
+            with open(second, "rb") as handle:
+                blob_b = handle.read()
+            self.assertEqual(blob_a, blob_b)
+            html = blob_a.decode("utf-8")
+            self.assertNotIn("http://", html.lower())
+            self.assertNotIn("https://", html.lower())
+            self.assertNotIn("</script><b>", html)
+            self.assertEqual(html.count("</script>"), 2)
+            self.assertNotIn("dest_masked_sum", html)
+            _assert_html_offline(self, html)
+            payload = json.loads(_html_script(html, "qbar-flow-data").strip())
+            edge = payload["edges"][0]
+            self.assertEqual(edge["col_from"], nasty)
+            self.assertEqual(edge["method"], nasty)
+            self.assertEqual(edge["col_to"], "C1")
+            self.assertEqual(edge["weight"], round_q(2.0 / 3.0))
+            self.assertEqual("%.6f" % edge["weight"], "0.666667")
+            self.assertEqual(list(edge), [
+                "K_from", "col_from", "K_to", "col_to", "weight",
+                "weight_definition", "method", "low_confidence",
+            ])
+        with tempfile.TemporaryDirectory() as tmp:
+            path2, path3, ids = self._write_q(tmp)
+            both_a = os.path.join(tmp, "both-a")
+            both_b = os.path.join(tmp, "both-b")
+            sankey_only = os.path.join(tmp, "sankey")
+            html_only = os.path.join(tmp, "html-only")
+            one = os.path.join(tmp, "one")
+            base = ["--q", path2, path3, "--ids", ids, "--align-report"]
+            both_cmd = base + ["--cluster-flow", "sankey", "--html"]
+            args_a = qbar.build_parser().parse_args(both_cmd + ["--outdir", both_a])
+            result_a = qbar.run(args_a, both_cmd + ["--outdir", both_a])
+            args_b = qbar.build_parser().parse_args(both_cmd + ["--outdir", both_b])
+            qbar.run(args_b, both_cmd + ["--outdir", both_b])
+            html_a = os.path.join(both_a, "cluster_flow.html")
+            html_b = os.path.join(both_b, "cluster_flow.html")
+            self.assertTrue(os.path.isfile(html_a))
+            self.assertIn(html_a, result_a.paths)
+            self.assertTrue(os.path.isfile(os.path.join(both_a, "panel.html")))
+            self.assertTrue(os.path.isfile(os.path.join(both_a, "cluster_flow.tsv")))
+            with open(html_a, "rb") as handle:
+                raw_a = handle.read()
+            with open(html_b, "rb") as handle:
+                raw_b = handle.read()
+            self.assertEqual(raw_a, raw_b)
+            text = raw_a.decode("utf-8")
+            self.assertNotIn("http://", text.lower())
+            self.assertNotIn("https://", text.lower())
+            _assert_html_offline(self, text)
+            payload = json.loads(_html_script(text, "qbar-flow-data").strip())
+            with open(os.path.join(both_a, "cluster_flow.tsv"), encoding="utf-8") as handle:
+                lines = handle.read().splitlines()
+            self.assertEqual(lines[0].split("\t"), [
+                "K_from", "col_from", "K_to", "col_to", "weight",
+                "weight_definition", "method", "low_confidence",
+            ])
+            data_lines = lines[1:]
+            self.assertEqual(len(payload["edges"]), len(data_lines))
+            self.assertGreater(len(data_lines), 0)
+            for got, line in zip(payload["edges"], data_lines):
+                parts = line.split("\t")
+                self.assertEqual(got["K_from"], int(parts[0]))
+                self.assertEqual(got["col_from"], parts[1])
+                self.assertEqual(got["K_to"], int(parts[2]))
+                self.assertEqual(got["col_to"], parts[3])
+                self.assertEqual("%.6f" % got["weight"], parts[4])
+                self.assertEqual(got["weight"], round_q(float(parts[4])))
+                self.assertEqual(got["weight_definition"], parts[5])
+                self.assertEqual(got["method"], parts[6])
+                self.assertEqual(got["low_confidence"], parts[7])
+            for column in payload["columns"]:
+                k = column["k"]
+                with open(os.path.join(both_a, "perm_K%d.tsv" % k), encoding="utf-8") as handle:
+                    perm_lines = handle.read().splitlines()
+                perm_hex = [line.split("\t")[2] for line in perm_lines[1:]]
+                self.assertEqual(column["hex"], perm_hex)
+                self.assertEqual(
+                    column["names"],
+                    ["C%d" % (index + 1) for index in range(k)],
+                )
+            self._check_flow_script(html_a)
+            self.assertEqual(qbar.main(base + [
+                "--cluster-flow", "sankey", "--outdir", sankey_only,
+            ]), 0)
+            self.assertFalse(os.path.exists(os.path.join(sankey_only, "cluster_flow.html")))
+            self.assertTrue(os.path.isfile(os.path.join(sankey_only, "cluster_flow.tsv")))
+            self.assertEqual(qbar.main(base + ["--html", "--outdir", html_only]), 0)
+            self.assertTrue(os.path.isfile(os.path.join(html_only, "panel.html")))
+            self.assertFalse(os.path.exists(os.path.join(html_only, "cluster_flow.html")))
+            self.assertFalse(os.path.exists(os.path.join(html_only, "cluster_flow.tsv")))
+            self.assertEqual(qbar.main([
+                "--q", path2, "--ids", ids, "--cluster-flow", "sankey", "--html",
+                "--outdir", one,
+            ]), 0)
+            one_html = os.path.join(one, "cluster_flow.html")
+            self.assertTrue(os.path.isfile(one_html))
+            with open(one_html, encoding="utf-8") as handle:
+                one_payload = json.loads(_html_script(handle.read(), "qbar-flow-data").strip())
+            self.assertEqual(one_payload["edges"], [])
+            self.assertEqual([column["k"] for column in one_payload["columns"]], [2])
 
 
 class GlobalHclustTests(unittest.TestCase):
@@ -7923,6 +8122,7 @@ class HtmlPanelTests(unittest.TestCase):
             html_path = os.path.join(out, "panel.html")
             self.assertTrue(os.path.isfile(html_path))
             self.assertIn(html_path, result.paths)
+            # --html alone does not write cluster_flow.html.
             self.assertFalse(os.path.exists(os.path.join(out, "cluster_flow.html")))
             with open(html_path, encoding="utf-8") as handle:
                 html = handle.read()
@@ -8057,6 +8257,7 @@ class HtmlPanelTests(unittest.TestCase):
             ]), 0)
             self.assertTrue(os.path.isfile(os.path.join(out, "panel.png")))
             self.assertFalse(os.path.exists(os.path.join(out, "panel.html")))
+            # Neither flag is set, so cluster_flow.html is absent.
             self.assertFalse(os.path.exists(os.path.join(out, "cluster_flow.html")))
 
     def test_replicates_fill_run_otherwise_empty(self):
