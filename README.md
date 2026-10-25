@@ -91,6 +91,12 @@ order	demo/out/order.tsv
 
 All results are saved in the folder set by `--outdir`. `panel.png` and `panel.pdf` show all K values stacked together in one figure, while `bar_K*.png` and `bar_K*.pdf` show the bar plot for one K at a time. `order.tsv` lists the final sample order from left to right, and `blocks.tsv` records the start and end positions of each group block on the plot. `align.tsv` gives the alignment scores between K values, `perm_K*.tsv` maps each raw column to its aligned column, and `args.txt` saves the full command you ran. `align_report.tsv` and `align_report.txt` appear only when you add `--align-report`.
 
+* `--align` forces cross-K alignment on. Omitting both `--align` and `--no-align` does the same when two or more K files are given.
+* `--color-file` is a text file of two whitespace-separated columns: a name and `#rrggbb`.
+* `--title` is drawn above the figure. The default is empty, which draws no title.
+* `--width` is the bar width in pixels. The default is 2200.
+* `--bar-height` is the height in pixels of one K row. The default is 0, which means 220 for a single K and 120 when several K are drawn.
+
 If you give a single `.Q` file, qbar writes only `bar_K8.png` and `bar_K8.pdf` for that K, with no panel image and no `align.tsv`:
 
 ```bash
