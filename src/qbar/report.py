@@ -189,6 +189,7 @@ def write_align_report(outdir, aligned, meta, groups, method, perm, low=None):
         "pong": "pong similarity",
         "jaccard": "Jaccard",
         "clumpp-full": "column G'",
+        "clumpp-greedy": "column G'",
     }[method]
     with open(os.path.join(outdir, "align_report.txt"), "w") as f:
         if cut is None:

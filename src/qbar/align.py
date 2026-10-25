@@ -14,10 +14,12 @@ from .messages import text as _msg
 # search. CLUMPP does not define a hard stop at 8.
 CLUMPP_PERM_LIMIT = 8
 
-ALIGN_METHODS = ("greedy", "hungarian", "pong", "jaccard", "clumpp-full")
+ALIGN_METHODS = (
+    "greedy", "hungarian", "pong", "jaccard", "clumpp-full", "clumpp-greedy",
+)
 
 # Methods whose align.tsv score is column G', not Pearson, pong, or Jaccard.
-GPRIME_METHODS = ("clumpp-full",)
+GPRIME_METHODS = ("clumpp-full", "clumpp-greedy")
 
 # Same-K replicate pairs use Pearson for these methods.
 REPLICATE_PEARSON_METHODS = ("greedy", "hungarian") + GPRIME_METHODS
@@ -310,6 +312,17 @@ def match_next_clumpp_full(q_prev, q_new, mask, *, language="en"):
     return _match_clumpp_full_search(q_prev, q_new, mask, "clumpp-full", language)
 
 
+def match_next_clumpp_greedy(q_prev, q_new, mask, seed=None, repeats=None, *, language="en"):
+    """Same permutation as clumpp-full on one K to one K+1 pair.
+
+    seed and repeats are accepted and ignored. No command-line flags are
+    added for them. Published CLUMPP Greedy differs only when more than
+    two runs share one K.
+    """
+    del seed, repeats
+    return _match_clumpp_full_search(q_prev, q_new, mask, "clumpp-greedy", language)
+
+
 def match_next(q_prev, q_new, mask, method="greedy", jaccard_set="dominant", jaccard_cut=0.5, *, language="en"):
     """q_prev is already aligned. Return raw-column order for q_new.
 
@@ -324,6 +337,8 @@ def match_next(q_prev, q_new, mask, method="greedy", jaccard_set="dominant", jac
         return match_next_jaccard(q_prev, q_new, mask, jaccard_set, jaccard_cut, language=language)
     if method == "clumpp-full":
         return match_next_clumpp_full(q_prev, q_new, mask, language=language)
+    if method == "clumpp-greedy":
+        return match_next_clumpp_greedy(q_prev, q_new, mask, language=language)
     k_new = q_new.shape[1]
     k_old = q_prev.shape[1]
     if k_new != k_old + 1:
