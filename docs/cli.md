@@ -162,7 +162,7 @@ Dendrogram above the bars. none draws none (default). top is allowed for global-
 
 ### `--hclust-max-bytes`
 
-Refuse before the distance vector when N*(N-1)/2*8 exceeds this many bytes. 0 means no cap. When omitted, global-hclust and the between-group tree use 4294967296, and within-group trees have no cap.
+Refuse before the distance vector when N*(N-1)/2*8 exceeds this many bytes. 0 means no cap. When omitted, global-hclust, the between-group tree, and --auto-groups hclust use 4294967296, and within-group trees have no cap.
 
 - Default: not set
 
@@ -388,3 +388,46 @@ Edge weight used only with --cluster-flow sankey. share is the destination paren
 
 - Choices: share, jaccard
 - Default: share
+
+### `--auto-groups`
+
+Write groups_auto.tsv. none writes nothing (default). major uses the highest column. threshold uses --admix-cut. hclust and kmeans need --auto-g and name groups G1, G2, ... hclust and kmeans can read --pca.
+
+- Choices: none, major, threshold, hclust, kmeans
+- Default: none
+
+### `--auto-k`
+
+K of the aligned matrix used for max_q, top_column, and Q clustering. Default: the largest K.
+
+- Default: not set
+
+### `--admix-cut`
+
+Strict cut for --auto-groups threshold. A row is admixed only when its maximum is below this cut. Must be above 0 and at most 1. Default 0.5.
+
+- Default: 0.5
+
+### `--auto-g`
+
+Number of groups for --auto-groups hclust or kmeans. Required for those methods. At least 1, and at most the row count.
+
+- Default: not set
+
+### `--auto-seed`
+
+Seed for --auto-groups kmeans. One numpy Generator draws the 10 restarts. Default 0.
+
+- Default: 0
+
+### `--pca`
+
+PLINK 1.9 eigenvec for --auto-groups hclust or kmeans. No header: FID, IID, then scores. Rows match on IID. Requires --pca-n.
+
+- Default: not set
+
+### `--pca-n`
+
+How many leading score columns to use from --pca. Required with --pca. From 1 up to the number of score columns.
+
+- Default: not set

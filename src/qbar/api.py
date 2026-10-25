@@ -37,6 +37,14 @@ from .logs import (
     parse_admixture_log,
     write_cv_loglik_tsv,
 )
+from .autogroups import (
+    auto_groups,
+    check_auto_g_against_n,
+    read_plink19_eigenvec,
+    validate_auto_flags,
+    write_groups_auto_summary,
+    write_groups_auto_tsv,
+)
 from .flow import check_consecutive_k, cluster_flow, write_cluster_flow_tsv
 from .lowconf import append_low_confidence_rows, read_low_confidence_table
 from .messages import text as _msg
@@ -222,7 +230,10 @@ def _file_record(path):
 
 def _input_records(q_paths, args, extra_paths=None):
     paths = list(q_paths)
-    for path in (args.fam, args.ids, args.ind, args.groups, args.order_file, args.color_file):
+    for path in (
+        args.fam, args.ids, args.ind, args.groups, args.order_file, args.color_file,
+        getattr(args, "pca", None),
+    ):
         if path:
             paths.append(path)
     if extra_paths:
@@ -479,7 +490,23 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     is ``membership weight``. ``low_confidence`` on an edge is the
     destination column's flag from the alignment report when that report
     is written, and NA otherwise. ``--no-align`` with ``sankey`` is an
-    error. A gap in K is reported first. No HTML flow file is written.
+    error. A gap in K is reported first.     No HTML flow file is written.
+
+    When ``args.auto_groups`` is ``none`` (the default), the run writes no
+    ``groups_auto.tsv`` and no ``groups_auto_summary.txt``. ``major``,
+    ``threshold``, ``hclust``, and ``kmeans`` write both. Those groups do
+    not replace ``args.groups`` in the figure order. ``--auto-k`` selects
+    the aligned matrix and defaults to the largest K. ``threshold`` uses
+    ``--admix-cut``, which must be above 0 and at most 1 (default 0.5).
+    A row is admixed only when its maximum is below the cut. ``hclust``
+    and ``kmeans`` require ``--auto-g``. ``kmeans`` keeps the lowest
+    within-cluster sum of squares among 10 restarts from one Generator
+    seeded by ``--auto-seed`` (default 0). ``--pca`` with a required
+    ``--pca-n`` is a PLINK 1.9 eigenvec (no header; FID, IID, then scores)
+    and is accepted only by ``hclust`` and ``kmeans``. A non-default auto
+    flag while ``--auto-groups`` is ``none`` is an error. ``hclust`` on
+    every row uses the same byte cap as an all-rows tree: 4294967296 when
+    ``--hclust-max-bytes`` is omitted.
 
     ``--order-mode within`` (the default) orders inside groups and writes no
     linkage file. ``global-hclust`` clusters every row at ``--hclust-k`` and
@@ -517,6 +544,19 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     # share is not an error, including when the user passes it explicitly.
     if flow_mode != "sankey" and flow_weight != "share":
         raise SystemExit(_msg("flow_weight_needs_sankey", language, weight=flow_weight))
+    auto_method = getattr(args, "auto_groups", "none")
+    auto_k_arg = getattr(args, "auto_k", None)
+    admix_cut = getattr(args, "admix_cut", 0.5)
+    auto_g = getattr(args, "auto_g", None)
+    auto_seed = getattr(args, "auto_seed", 0)
+    pca_path = getattr(args, "pca", None)
+    pca_n = getattr(args, "pca_n", None)
+    # A non-default auto flag with --auto-groups none is an error. Passing
+    # the stored defaults is not. Same rule as --flow-weight above.
+    validate_auto_flags(
+        auto_method, auto_k_arg, admix_cut, auto_g, auto_seed, pca_path, pca_n,
+        language=language,
+    )
     table_path = getattr(args, "low_confidence_table", None)
     table_rows = None
     if table_path is not None:
@@ -617,6 +657,47 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         "olo": args.hclust_olo,
         "pre": args.hclust_pre,
     }
+    # Auto groups, including the all-rows byte cap, finish before outdir exists.
+    # The figure still orders by the known groups, not by these labels.
+    auto_rows = None
+    auto_details = {}
+    auto_q = None
+    if auto_method != "none":
+        if auto_k_arg is None:
+            auto_k = ks[-1]
+        else:
+            auto_k = auto_k_arg
+            if auto_k not in aligned:
+                raise SystemExit(_msg("auto_k_missing", language, k=auto_k))
+        auto_q = aligned[auto_k]
+        if auto_method in ("hclust", "kmeans"):
+            check_auto_g_against_n(auto_g, auto_q.shape[0], language=language)
+        pca_data = None
+        if pca_path:
+            pca_scores, n_ignored = read_plink19_eigenvec(
+                pca_path, iids, pca_n, language=language,
+            )
+            pca_data = pca_scores
+            auto_details["eigenvec_rows_ignored"] = n_ignored
+        if auto_method == "hclust" and getattr(args, "hclust_pre", "none") != "none":
+            print(_msg("hclust_pre_ignored", language), file=sys.stderr)
+        auto_rows = auto_groups(
+            auto_q,
+            iids,
+            auto_method,
+            cut=admix_cut,
+            g=auto_g,
+            seed=auto_seed,
+            dist=args.hclust_dist,
+            link=args.hclust_linkage,
+            olo=args.hclust_olo,
+            max_bytes=explicit_cap,
+            data=pca_data,
+            pca_n=pca_n,
+            k=auto_k,
+            language=language,
+            details=auto_details,
+        )
     # Ordering, including the byte cap, finishes before outdir is created.
     arranged = apply_order_mode(
         iids, groups, blocks, args.within, within_group, args.rest_name,
@@ -669,6 +750,21 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         render(panel, rows, spans, args.width, bar_h, args.title, language=language, dendrogram=dendro_spec)
         print(panel)
     write_tables(args.outdir, iids, groups, order, spans, perm, owners, hexes, meta, aligned)
+    groups_auto_tsv = None
+    if auto_rows is not None:
+        groups_auto_tsv = os.path.join(args.outdir, "groups_auto.tsv")
+        write_groups_auto_tsv(groups_auto_tsv, auto_rows)
+        groups_auto_summary = os.path.join(args.outdir, "groups_auto_summary.txt")
+        write_groups_auto_summary(
+            groups_auto_summary,
+            auto_rows,
+            auto_q,
+            known_groups=groups if getattr(args, "groups", None) else None,
+            rest_name=args.rest_name,
+            details=auto_details,
+        )
+        print(groups_auto_tsv)
+        print(groups_auto_summary)
     report_rows = None
     if args.align_report and meta:
         report_rows = write_align_report(args.outdir, aligned, meta, groups, args.align_method, perm, args.align_report_low)
@@ -826,6 +922,9 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         paths.append(flow_tsv)
         paths.append(os.path.join(args.outdir, "cluster_flow.png"))
         paths.append(os.path.join(args.outdir, "cluster_flow.pdf"))
+    if groups_auto_tsv is not None:
+        paths.append(groups_auto_tsv)
+        paths.append(os.path.join(args.outdir, "groups_auto_summary.txt"))
     if log_paths is not None:
         paths.append(os.path.join(args.outdir, "cv_loglik.tsv"))
         paths.append(os.path.join(args.outdir, "cv_loglik.png"))
