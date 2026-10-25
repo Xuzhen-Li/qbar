@@ -751,6 +751,82 @@ _CATALOG = {
         "en": "Cluster-flow mask has %(got)s entries, expected %(rows)s rows",
         "zh": "聚类流掩码有 %(got)s 项，应为 %(rows)s 行",
     },
+    "help_order_mode": {
+        "en": "within orders inside groups (default). global-hclust clusters every row as one tree. group-hclust keeps each group contiguous.",
+        "zh": "within=组内排序（默认）。global-hclust=所有人一棵树。group-hclust=每组保持连续。",
+    },
+    "help_group_order": {
+        "en": "Group order for --order-mode group-hclust. input keeps the first-seen order (default). hclust orders groups by the mean Q row.",
+        "zh": "group-hclust 的组顺序。input=按首次出现（默认）。hclust=按各组 Q 的均值排序。",
+    },
+    "help_dendrogram": {
+        "en": "Dendrogram above the bars. none draws none (default). top is allowed for global-hclust, or for group-hclust with --group-order hclust.",
+        "zh": "条形图上方的树状图。none=不画（默认）。top 只用于 global-hclust，或 group-hclust 且 --group-order hclust。",
+    },
+    "help_hclust_max_bytes": {
+        "en": "Refuse before the distance vector when N*(N-1)/2*8 exceeds this many bytes. 0 means no cap. When omitted, global-hclust and the between-group tree use 4294967296, and within-group trees have no cap.",
+        "zh": "距离向量字节数 N*(N-1)/2*8 超过该值时，在建立向量前停止。0 表示不限制。省略时，global-hclust 和组间树用 4294967296，组内树不限制。",
+    },
+    "hclust_over_cap": {
+        "en": "Hierarchical clustering of N=%(n)s needs %(nbytes)s bytes (N*(N-1)/2*8), which is above --hclust-max-bytes %(cap)s. Use within-group clustering or --hclust-pre dominant.",
+        "zh": "N=%(n)s 的层次聚类需要 %(nbytes)s 字节（N*(N-1)/2*8），超过 --hclust-max-bytes %(cap)s。请改用组内聚类或 --hclust-pre dominant。",
+    },
+    "hclust_max_bytes_negative": {
+        "en": "--hclust-max-bytes must be 0 or greater, got %(cap)s.",
+        "zh": "--hclust-max-bytes 必须大于等于 0，收到 %(cap)s。",
+    },
+    "hclust_max_bytes_type": {
+        "en": "--hclust-max-bytes must be an integer, got %(cap)s.",
+        "zh": "--hclust-max-bytes 必须是整数，收到 %(cap)s。",
+    },
+    "order_mode_choice": {
+        "en": "--order-mode must be one of %(choices)s, got %(mode)s.",
+        "zh": "--order-mode 只能是 %(choices)s，收到 %(mode)s。",
+    },
+    "group_order_choice": {
+        "en": "--group-order must be one of %(choices)s, got %(mode)s.",
+        "zh": "--group-order 只能是 %(choices)s，收到 %(mode)s。",
+    },
+    "dendrogram_choice": {
+        "en": "--dendrogram must be one of %(choices)s, got %(mode)s.",
+        "zh": "--dendrogram 只能是 %(choices)s，收到 %(mode)s。",
+    },
+    "group_order_needs_mode": {
+        "en": "--group-order hclust requires --order-mode group-hclust.",
+        "zh": "--group-order hclust 需要 --order-mode group-hclust。",
+    },
+    "dendrogram_needs_tree": {
+        "en": "--dendrogram top needs --order-mode global-hclust, or --order-mode group-hclust with --group-order hclust.",
+        "zh": "--dendrogram top 需要 --order-mode global-hclust，或 --order-mode group-hclust 且 --group-order hclust。",
+    },
+    "order_file_with_mode": {
+        "en": "--order-file cannot be combined with --order-mode %(mode)s.",
+        "zh": "--order-file 不能和 --order-mode %(mode)s 一起用。",
+    },
+    "hclust_tree_kind": {
+        "en": "Internal error: unknown hclust tree %(tree)s.",
+        "zh": "内部错误：未知的 hclust 树 %(tree)s。",
+    },
+    "group_hclust_shape": {
+        "en": "group_hclust_order needs one group label per row, got %(groups)s labels and %(rows)s rows.",
+        "zh": "group_hclust_order 需要每行一个组名，收到 %(groups)s 个组名和 %(rows)s 行。",
+    },
+    "blocks_ignored": {
+        "en": "Warning: --blocks is not used when --order-mode is %(mode)s.",
+        "zh": "注意：--order-mode 为 %(mode)s 时不使用 --blocks。",
+    },
+    "within_ignored_global": {
+        "en": "Warning: --within and --within-group are not used when --order-mode is global-hclust.",
+        "zh": "注意：--order-mode 为 global-hclust 时不使用 --within 和 --within-group。",
+    },
+    "dendrogram_leaf_count": {
+        "en": "Dendrogram leaf count %(leaves)s does not match the linkage (%(obs)s observations).",
+        "zh": "树状图叶数 %(leaves)s 和 linkage 的观测数 %(obs)s 不一致。",
+    },
+    "dendrogram_kind": {
+        "en": "Internal error: unknown dendrogram layer %(kind)s.",
+        "zh": "内部错误：未知的树状图层 %(kind)s。",
+    },
 }
 
 

@@ -1205,6 +1205,9 @@ class DocstringTests(unittest.TestCase):
         ``docs/factpacks/ST3.md``.
         ``--cluster-flow`` and ``--flow-weight`` are documented in
         ``docs/cli.md`` and ``docs/factpacks/F7.md``.
+        ``--order-mode``, ``--group-order``, ``--dendrogram``, and
+        ``--hclust-max-bytes`` are documented in ``docs/cli.md`` and
+        ``docs/factpacks/F1.md``.
         """
         import re
         # --select-k and --plateau-fraction are documented in docs/cli.md
@@ -1222,6 +1225,8 @@ class DocstringTests(unittest.TestCase):
         # docs/factpacks/ST3.md.
         # --cluster-flow and --flow-weight are documented in docs/cli.md
         # and docs/factpacks/F7.md.
+        # --order-mode, --group-order, --dendrogram, and --hclust-max-bytes
+        # are documented in docs/cli.md and docs/factpacks/F1.md.
         later = {
             "--provenance", "--q-format", "--ind", "--logs", "--logs-map",
             "--select-k", "--plateau-fraction",
@@ -1232,6 +1237,7 @@ class DocstringTests(unittest.TestCase):
             "--parent-ci", "--parent-alpha", "--parent-test",
             "--low-confidence-table",
             "--cluster-flow", "--flow-weight",
+            "--order-mode", "--group-order", "--dendrogram", "--hclust-max-bytes",
         }
         flags = []
         for action in qbar.build_parser()._actions:
@@ -6171,6 +6177,512 @@ class ClusterFlowTests(unittest.TestCase):
                 ctx.exception.code,
                 "Cross-K alignment requires consecutive K. Missing K=3",
             )
+
+
+class GlobalHclustTests(unittest.TestCase):
+    def _fixed_q(self):
+        # 6 by 3, written here. No constant row, so correlation does not jitter.
+        q = np.array([
+            [0.70, 0.20, 0.10],
+            [0.65, 0.25, 0.10],
+            [0.10, 0.20, 0.70],
+            [0.15, 0.15, 0.70],
+            [0.40, 0.40, 0.20],
+            [0.20, 0.70, 0.10],
+        ], dtype=float)
+        self.assertTrue(np.all(q.std(axis=1) > 0))
+        return q
+
+    def _write_q(self, tmp, q, groups=None, name=None):
+        q = np.asarray(q, dtype=float)
+        if name is None:
+            name = "t.%d.Q" % q.shape[1]
+        path = os.path.join(tmp, name)
+        np.savetxt(path, q, fmt="%.6f")
+        ids = os.path.join(tmp, "ids.txt")
+        with open(ids, "w", encoding="utf-8", newline="\n") as handle:
+            for i in range(len(q)):
+                handle.write("s%02d\n" % i)
+        cmd = ["--q", path, "--ids", ids]
+        if groups is not None:
+            gpath = os.path.join(tmp, "groups.tsv")
+            with open(gpath, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("analysis_IID\tDong_Grp\n")
+                for i, group in enumerate(groups):
+                    handle.write("s%02d\t%s\n" % (i, group))
+            cmd.extend(["--groups", gpath])
+        return cmd
+
+    def _order_from_tsv(self, path):
+        with open(path, encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+        self.assertEqual(lines[0].split("\t"), ["rank", "iid", "group"])
+        return [int(line.split("\t")[1][1:]) for line in lines[1:]]
+
+    def _scipy_leaves(self, q, dist, link, olo):
+        from scipy.cluster.hierarchy import leaves_list, linkage, optimal_leaf_ordering
+        from scipy.spatial.distance import pdist
+        z = linkage(np.asarray(q, dtype=float), method=link, metric=dist)
+        if olo:
+            z = optimal_leaf_ordering(z, pdist(np.asarray(q, dtype=float), metric=dist))
+        return z, [int(x) for x in leaves_list(z)]
+
+    def test_fixed_matrix_matches_scipy_with_and_without_olo(self):
+        q = self._fixed_q()
+        cases = (
+            ("euclidean", "average", False),
+            ("euclidean", "average", True),
+            ("correlation", "average", False),
+            ("correlation", "complete", True),
+            ("euclidean", "ward", False),
+        )
+        for dist, link, olo in cases:
+            _z, want = self._scipy_leaves(q, dist, link, olo)
+            self.assertEqual(qbar.hclust_order(q, dist, link, olo=olo), want)
+            self.assertEqual(qbar.linkage_matrix(q, dist, link, olo=olo).shape, (5, 4))
+            got = qbar.linkage_matrix(q, dist, link, olo=olo)
+            self.assertTrue(np.allclose(got, _z))
+        with tempfile.TemporaryDirectory() as tmp:
+            cmd = self._write_q(tmp, q)
+            out = os.path.join(tmp, "out")
+            qbar.main(cmd + [
+                "--order-mode", "global-hclust",
+                "--hclust-dist", "euclidean",
+                "--hclust-linkage", "average",
+                "--outdir", out,
+            ])
+            _z, want = self._scipy_leaves(q, "euclidean", "average", False)
+            self.assertEqual(self._order_from_tsv(os.path.join(out, "order.tsv")), want)
+            out_olo = os.path.join(tmp, "olo")
+            qbar.main(cmd + [
+                "--order-mode", "global-hclust",
+                "--hclust-dist", "euclidean",
+                "--hclust-linkage", "average",
+                "--hclust-olo",
+                "--outdir", out_olo,
+            ])
+            _z, want_olo = self._scipy_leaves(q, "euclidean", "average", True)
+            self.assertEqual(self._order_from_tsv(os.path.join(out_olo, "order.tsv")), want_olo)
+
+    def test_group_order_matches_hand_euclidean_means(self):
+        # Two groups have a single merge, so the leaf order can stay the input
+        # order. Three groups make the closest pair sit together.
+        a = np.array([1.0, 0.0, 0.0])
+        b = np.array([0.0, 1.0, 0.0])
+        c = np.array([0.9, 0.1, 0.0])
+        dab = (1.0 - 0.0) ** 2 + (0.0 - 1.0) ** 2 + (0.0 - 0.0) ** 2
+        dac = (1.0 - 0.9) ** 2 + (0.0 - 0.1) ** 2 + (0.0 - 0.0) ** 2
+        dbc = (0.0 - 0.9) ** 2 + (1.0 - 0.1) ** 2 + (0.0 - 0.0) ** 2
+        self.assertEqual(dab, 2.0)
+        self.assertAlmostEqual(dac, 0.02)
+        self.assertAlmostEqual(dbc, 1.62)
+        self.assertLess(dac, dab)
+        self.assertLess(dac, dbc)
+        q = np.vstack([a, a, a, b, b, b, c, c, c])
+        groups = ["A", "A", "A", "B", "B", "B", "C", "C", "C"]
+        got = qbar.group_hclust_order(q, groups, "euclidean", "average", False)
+        labels = [groups[i] for i in got]
+        spans = []
+        for label in labels:
+            if not spans or spans[-1] != label:
+                spans.append(label)
+        self.assertEqual(sorted(spans), ["A", "B", "C"])
+        self.assertEqual(len(labels), 9)
+        # Each group stays contiguous: three identical labels in a row.
+        self.assertEqual(len(spans), 3)
+        self.assertEqual(labels, [label for label in spans for _i in range(3)])
+        # Closest means are A and C, so B is not between them.
+        self.assertTrue(
+            (spans[0] == "B" and set(spans[1:]) == {"A", "C"})
+            or (spans[2] == "B" and set(spans[:2]) == {"A", "C"})
+        )
+        means = np.vstack([a, b, c])
+        _z, leaves = self._scipy_leaves(means, "euclidean", "average", False)
+        want = [["A", "B", "C"][i] for i in leaves]
+        self.assertEqual(spans, want)
+        # Rows inside a group stay in input order.
+        for label, start in (("A", 0), ("B", 3), ("C", 6)):
+            self.assertEqual([i for i in got if groups[i] == label], list(range(start, start + 3)))
+        one = qbar.group_hclust_order(q[:3], ["A", "A", "A"], "euclidean", "average", False)
+        self.assertEqual(one, [0, 1, 2])
+        # Two groups: still contiguous. Record whether SciPy reorders them.
+        two_q = np.vstack([a, a, a, c, c, c])
+        two_groups = ["A", "A", "A", "C", "C", "C"]
+        two = qbar.group_hclust_order(two_q, two_groups, "euclidean", "average", False)
+        two_labels = []
+        for label in (two_groups[i] for i in two):
+            if not two_labels or two_labels[-1] != label:
+                two_labels.append(label)
+        self.assertEqual(len(two_labels), 2)
+        _z2, two_leaves = self._scipy_leaves(np.vstack([a, c]), "euclidean", "average", False)
+        self.assertEqual(two_labels, [["A", "C"][i] for i in two_leaves])
+
+    def test_leaf_x_uses_renderer_left_margin(self):
+        from qbar.plot_static import BAR_LEFT, sample_leaf_x
+        self.assertEqual(BAR_LEFT, 56)
+        n = 4
+        bar_w = 400
+        for i in range(n):
+            self.assertEqual(
+                sample_leaf_x(i, n, bar_w, BAR_LEFT),
+                BAR_LEFT + (i + 0.5) * bar_w / n,
+            )
+
+    def test_dendrogram_height_and_leaf_columns(self):
+        from PIL import Image
+        from qbar.plot_static import (
+            BAR_LEFT,
+            DENDRO_PANEL_PX,
+            dendrogram_panel_height,
+            render,
+        )
+        q = np.array([
+            [1.0, 0.0, 0.0],
+            [0.9, 0.1, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ], dtype=float)
+        z, leaves = self._scipy_leaves(q, "euclidean", "average", False)
+        self.assertEqual(qbar.hclust_order(q, "euclidean", "average"), leaves)
+        rank_of = [0] * 4
+        for rank, obs in enumerate(leaves):
+            rank_of[obs] = rank
+        spec = {"layers": [{"kind": "samples", "Z": z, "ranks": rank_of}]}
+        self.assertEqual(DENDRO_PANEL_PX, 160)
+        panel_h = dendrogram_panel_height(float(z[:, 2].max()))
+        self.assertEqual(panel_h, 160)
+        image = np.full((8, 4, 3), 255, dtype=np.uint8)
+        rows = [{"k": 2, "image": image, "legend": [("#0072b2", "C1")]}]
+        spans = [{"name": "A", "start": 0, "end": 4}]
+        with tempfile.TemporaryDirectory() as tmp:
+            plain = os.path.join(tmp, "plain.png")
+            topped = os.path.join(tmp, "top.png")
+            render(plain, rows, spans, 400, 40, "", dendrogram=None)
+            render(topped, rows, spans, 400, 40, "", dendrogram=spec)
+            with Image.open(plain) as base, Image.open(topped) as drawn:
+                self.assertEqual(drawn.size[0], base.size[0])
+                self.assertEqual(drawn.size[1], base.size[1] + panel_h)
+                ink = (31, 41, 55)
+                # title_h is 8 when the title is empty. Distance 0 is the bottom edge.
+                y_bottom = 8 + panel_h
+                for i in range(4):
+                    x = int(round(BAR_LEFT + (i + 0.5) * 400 / 4))
+                    column = [drawn.getpixel((x, y)) for y in range(8, y_bottom)]
+                    self.assertIn(ink, column)
+
+    def test_dendrogram_band_is_160_for_tall_and_short_trees(self):
+        from PIL import Image
+        from qbar.plot_static import dendrogram_distance_label, render
+        image = np.full((8, 2, 3), 255, dtype=np.uint8)
+        rows = [{"k": 2, "image": image, "legend": [("#0072b2", "C1")]}]
+        spans = [
+            {"name": "A", "start": 0, "end": 1},
+            {"name": "B", "start": 1, "end": 2},
+        ]
+        self.assertEqual(dendrogram_distance_label(15.046), "max distance 15.046")
+        self.assertEqual(dendrogram_distance_label(0.5), "max distance 0.500")
+        self.assertEqual(dendrogram_distance_label(0), "max distance 0.000")
+
+        def spec_for(distance, kind):
+            z = np.array([[0.0, 1.0, float(distance), 2.0]])
+            if kind == "samples":
+                layer = {"kind": "samples", "Z": z, "ranks": [0, 1]}
+            else:
+                layer = {"kind": "groups", "Z": z, "spans": spans}
+            return {"layers": [layer]}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            plain = os.path.join(tmp, "plain.png")
+            render(plain, rows, spans, 400, 40, "", dendrogram=None)
+            with Image.open(plain) as base:
+                base_w, base_h = base.size
+            for distance in (15.0, 0.5):
+                for kind in ("samples", "groups"):
+                    path = os.path.join(tmp, "%s-%s.png" % (kind, distance))
+                    render(path, rows, spans, 400, 40, "", dendrogram=spec_for(distance, kind))
+                    with Image.open(path) as drawn:
+                        self.assertEqual(drawn.size[0], base_w)
+                        self.assertEqual(drawn.size[1] - base_h, 160)
+            zero = os.path.join(tmp, "zero.png")
+            render(zero, rows, spans, 400, 40, "", dendrogram=spec_for(0.0, "samples"))
+            with Image.open(zero) as drawn:
+                self.assertEqual(drawn.size[1] - base_h, 160)
+
+    def test_byte_arithmetic_and_cap_resolution(self):
+        self.assertEqual(qbar.pdist_nbytes(10000), 399960000)
+        self.assertEqual(qbar.pdist_nbytes(100000), 39999600000)
+        self.assertEqual(qbar.pdist_nbytes(10), 360)
+        self.assertLess(360, 1000)
+        # N=10 needs 360 bytes, so a cap of 1000 does not refuse.
+        qbar.check_hclust_bytes(10, 1000)
+        with self.assertRaises(SystemExit) as ctx:
+            qbar.check_hclust_bytes(10, 100)
+        self.assertIn("N=10", ctx.exception.code)
+        self.assertIn("360", ctx.exception.code)
+        self.assertIn("100", ctx.exception.code)
+        self.assertIn("within-group", ctx.exception.code)
+        self.assertIn("--hclust-pre dominant", ctx.exception.code)
+        n = 40000
+        nbytes = qbar.pdist_nbytes(n)
+        self.assertGreater(nbytes, 4294967296)
+        self.assertEqual(
+            qbar.resolve_hclust_max_bytes(None, "global-hclust", "global"),
+            4294967296,
+        )
+        self.assertEqual(
+            qbar.resolve_hclust_max_bytes(None, "group-hclust", "between"),
+            4294967296,
+        )
+        self.assertIsNone(qbar.resolve_hclust_max_bytes(None, "group-hclust", "within"))
+        self.assertIsNone(qbar.resolve_hclust_max_bytes(None, "within", "within"))
+        self.assertIsNone(qbar.resolve_hclust_max_bytes(None, "within", "global"))
+        self.assertIsNone(qbar.resolve_hclust_max_bytes(0, "global-hclust", "global"))
+        self.assertEqual(qbar.resolve_hclust_max_bytes(1000, "within", "within"), 1000)
+        with self.assertRaises(SystemExit):
+            qbar.resolve_hclust_max_bytes(-1, "within", "within")
+        # Default cap refuses the all-rows vector and the between-group vector only.
+        with self.assertRaises(SystemExit):
+            qbar.check_hclust_bytes(n, qbar.resolve_hclust_max_bytes(None, "global-hclust", "global"))
+        with self.assertRaises(SystemExit):
+            qbar.check_hclust_bytes(n, qbar.resolve_hclust_max_bytes(None, "group-hclust", "between"))
+        qbar.check_hclust_bytes(n, qbar.resolve_hclust_max_bytes(None, "group-hclust", "within"))
+        qbar.check_hclust_bytes(n, qbar.resolve_hclust_max_bytes(None, "within", "within"))
+        # A dominant block that is not every row is uncapped when the flag is omitted.
+        self.assertIsNone(qbar.cap_for_tree(None, "global-hclust", "global", 10, n))
+        self.assertEqual(qbar.cap_for_tree(None, "global-hclust", "global", n, n), 4294967296)
+        self.assertEqual(qbar.cap_for_tree(100, "global-hclust", "global", 10, n), 100)
+
+    def test_cap_refuses_before_any_output_file(self):
+        q = np.full((10, 2), 0.5)
+        with tempfile.TemporaryDirectory() as tmp:
+            cmd = self._write_q(tmp, q)
+            out = os.path.join(tmp, "out")
+            with self.assertRaises(SystemExit) as ctx:
+                qbar.main(cmd + [
+                    "--order-mode", "global-hclust",
+                    "--hclust-max-bytes", "100",
+                    "--outdir", out,
+                ])
+            self.assertIn("N=10", ctx.exception.code)
+            self.assertIn("360", ctx.exception.code)
+            self.assertIn("100", ctx.exception.code)
+            self.assertFalse(os.path.exists(out))
+            # 360 is not above 1000, so this cap runs and writes the linkage.
+            ok = os.path.join(tmp, "ok")
+            qbar.main(cmd + [
+                "--order-mode", "global-hclust",
+                "--hclust-max-bytes", "1000",
+                "--outdir", ok,
+            ])
+            self.assertTrue(os.path.isfile(os.path.join(ok, "linkage_global.tsv")))
+            negative = os.path.join(tmp, "neg")
+            with self.assertRaises(SystemExit) as neg:
+                qbar.main(cmd + [
+                    "--order-mode", "global-hclust",
+                    "--hclust-max-bytes", "-1",
+                    "--outdir", negative,
+                ])
+            self.assertIn("0 or greater", neg.exception.code)
+            self.assertFalse(os.path.exists(negative))
+            # An explicit cap also applies inside --order-mode within.
+            within = os.path.join(tmp, "within")
+            with self.assertRaises(SystemExit) as wctx:
+                qbar.main(cmd + [
+                    "--order-mode", "within",
+                    "--within", "hclust",
+                    "--hclust-max-bytes", "100",
+                    "--outdir", within,
+                ])
+            self.assertIn("360", wctx.exception.code)
+            self.assertFalse(os.path.exists(within))
+
+    def test_within_hclust_writes_no_linkage_and_matches_default(self):
+        import hashlib
+        import re
+        q = self._fixed_q()
+        date = re.compile(br"/(?:CreationDate|ModDate)[ \t]+\([^)\r\n]*\)")
+
+        def digest(folder):
+            found = []
+            for dirpath, _dirs, files in os.walk(folder):
+                for name in files:
+                    full = os.path.join(dirpath, name)
+                    rel = os.path.relpath(full, folder)
+                    with open(full, "rb") as handle:
+                        data = handle.read()
+                    if name.lower().endswith(".pdf"):
+                        data = date.sub(b"", data)
+                    found.append((rel, hashlib.sha256(data).hexdigest()))
+            return sorted(found)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cmd = self._write_q(tmp, q)
+            plain = os.path.join(tmp, "plain")
+            flagged = os.path.join(tmp, "flagged")
+            qbar.main(cmd + ["--within", "hclust", "--hclust-dist", "euclidean", "--outdir", plain])
+            qbar.main(cmd + [
+                "--within", "hclust",
+                "--hclust-dist", "euclidean",
+                "--order-mode", "within",
+                "--group-order", "input",
+                "--dendrogram", "none",
+                "--outdir", flagged,
+            ])
+            # args.txt stores the command, so naming the default flags changes that file.
+            plain_files = [item for item in digest(plain) if item[0] != "args.txt"]
+            flagged_files = [item for item in digest(flagged) if item[0] != "args.txt"]
+            self.assertEqual(plain_files, flagged_files)
+            for folder in (plain, flagged):
+                names = os.listdir(folder)
+                self.assertFalse(any(name.startswith("linkage_") for name in names))
+
+    def test_linkage_tsv_scipy_coding_and_index(self):
+        q = self._fixed_q()
+        groups = ["A", "A", "A", "B", "C", "C"]
+        with tempfile.TemporaryDirectory() as tmp:
+            cmd = self._write_q(tmp, q, groups)
+            out = os.path.join(tmp, "out")
+            qbar.main(cmd + [
+                "--order-mode", "group-hclust",
+                "--group-order", "hclust",
+                "--within", "hclust",
+                "--hclust-dist", "euclidean",
+                "--hclust-linkage", "average",
+                "--outdir", out,
+            ])
+            between = os.path.join(out, "linkage_between_groups.tsv")
+            with open(between, encoding="utf-8") as handle:
+                lines = handle.read().splitlines()
+            self.assertEqual(lines[0].split("\t"), ["row", "idx1", "idx2", "distance", "count"])
+            means = np.vstack([
+                q[0:3].mean(axis=0),
+                q[3:4].mean(axis=0),
+                q[4:6].mean(axis=0),
+            ])
+            z, _leaves = self._scipy_leaves(means, "euclidean", "average", False)
+            self.assertEqual(len(lines), 1 + z.shape[0])
+            for i, row in enumerate(z):
+                fields = lines[i + 1].split("\t")
+                self.assertEqual(fields, [
+                    str(i),
+                    str(int(round(float(row[0])))),
+                    str(int(round(float(row[1])))),
+                    "%.6f" % float(row[2]),
+                    str(int(round(float(row[3])))),
+                ])
+            self.assertTrue(any(
+                int(line.split("\t")[1]) >= 3 or int(line.split("\t")[2]) >= 3
+                for line in lines[1:]
+            ))
+            self.assertNotIn("A", os.path.basename(between))
+            with open(os.path.join(out, "linkage_index.tsv"), encoding="utf-8") as handle:
+                index_lines = handle.read().splitlines()
+            self.assertEqual(index_lines, ["index\tgroup", "1\tA", "2\tB", "3\tC"])
+            self.assertTrue(os.path.isfile(os.path.join(out, "linkage_group_1.tsv")))
+            self.assertFalse(os.path.isfile(os.path.join(out, "linkage_group_2.tsv")))
+            self.assertTrue(os.path.isfile(os.path.join(out, "linkage_group_3.tsv")))
+            with open(os.path.join(out, "linkage_group_1.tsv"), encoding="utf-8") as handle:
+                group_lines = handle.read().splitlines()
+            gz, _gleaves = self._scipy_leaves(q[0:3], "euclidean", "average", False)
+            self.assertEqual(group_lines[0].split("\t"), ["row", "idx1", "idx2", "distance", "count"])
+            self.assertEqual(len(group_lines), 1 + gz.shape[0])
+            self.assertNotIn("linkage_global.tsv", os.listdir(out))
+            # input group order is first appearance. B, A, B, A is not alphabetical.
+            seen = np.array([
+                [0.2, 0.8],
+                [0.9, 0.1],
+                [0.3, 0.7],
+                [0.8, 0.2],
+            ], dtype=float)
+            seen_cmd = self._write_q(tmp, seen, ["B", "A", "B", "A"], name="seen.2.Q")
+            first = os.path.join(tmp, "first")
+            qbar.main(seen_cmd + [
+                "--order-mode", "group-hclust",
+                "--group-order", "input",
+                "--within", "input",
+                "--outdir", first,
+            ])
+            with open(os.path.join(first, "order.tsv"), encoding="utf-8") as handle:
+                got_groups = [line.split("\t")[2] for line in handle.read().splitlines()[1:]]
+            self.assertEqual(got_groups, ["B", "B", "A", "A"])
+            self.assertFalse(os.path.exists(os.path.join(first, "linkage_between_groups.tsv")))
+            self.assertFalse(os.path.exists(os.path.join(first, "linkage_index.tsv")))
+
+    def test_dendrogram_top_errors_for_within_and_input_group_order(self):
+        q = self._fixed_q()[:4]
+        with tempfile.TemporaryDirectory() as tmp:
+            cmd = self._write_q(tmp, q, ["A", "A", "B", "B"])
+            out = os.path.join(tmp, "out")
+            with self.assertRaises(SystemExit) as ctx:
+                qbar.main(cmd + ["--dendrogram", "top", "--outdir", out])
+            self.assertEqual(
+                ctx.exception.code,
+                "--dendrogram top needs --order-mode global-hclust, or --order-mode group-hclust with --group-order hclust.",
+            )
+            self.assertFalse(os.path.exists(out))
+            with self.assertRaises(SystemExit) as zh:
+                qbar.main(cmd + ["--dendrogram", "top", "--language", "zh", "--outdir", os.path.join(tmp, "zh")])
+            self.assertIn("global-hclust", zh.exception.code)
+            self.assertIn("group-hclust", zh.exception.code)
+            with self.assertRaises(SystemExit) as grouped:
+                qbar.main(cmd + [
+                    "--order-mode", "group-hclust",
+                    "--group-order", "input",
+                    "--dendrogram", "top",
+                    "--outdir", os.path.join(tmp, "input"),
+                ])
+            self.assertEqual(grouped.exception.code, ctx.exception.code)
+            with self.assertRaises(SystemExit) as needs:
+                qbar.main(cmd + ["--group-order", "hclust", "--outdir", os.path.join(tmp, "bad")])
+            self.assertEqual(
+                needs.exception.code,
+                "--group-order hclust requires --order-mode group-hclust.",
+            )
+            self.assertFalse(os.path.exists(os.path.join(tmp, "input")))
+            self.assertFalse(os.path.exists(os.path.join(tmp, "bad")))
+
+    def test_help_defaults_are_ascii_and_columns_stay(self):
+        parser = qbar.build_parser()
+        self.assertEqual(_cli_flag(parser, "--order-mode").default, "within")
+        self.assertEqual(_cli_flag(parser, "--group-order").default, "input")
+        self.assertEqual(_cli_flag(parser, "--dendrogram").default, "none")
+        self.assertIsNone(_cli_flag(parser, "--hclust-max-bytes").default)
+        self.assertEqual(_cli_flag(parser, "--id-col").default, "analysis_IID")
+        self.assertEqual(_cli_flag(parser, "--group-col").default, "Dong_Grp")
+        for name in ("--order-mode", "--group-order", "--dendrogram", "--hclust-max-bytes"):
+            help_s = _cli_flag(parser, name).help or ""
+            self.assertTrue(all(ord(ch) < 128 for ch in help_s), name)
+            self.assertNotIn("\u2013", help_s)
+            self.assertNotIn("\u2014", help_s)
+        import qbar.order as order_mod
+        with open(order_mod.__file__, encoding="utf-8") as handle:
+            blob = handle.read()
+        for line in blob.splitlines():
+            stripped = line.strip()
+            self.assertFalse(stripped.startswith("import PIL"))
+            self.assertFalse(stripped.startswith("from PIL"))
+            self.assertFalse(stripped.startswith("import matplotlib"))
+            self.assertFalse(stripped.startswith("from matplotlib"))
+
+    def test_global_run_writes_linkage_and_taller_png(self):
+        from PIL import Image
+        q = self._fixed_q()
+        with tempfile.TemporaryDirectory() as tmp:
+            cmd = self._write_q(tmp, q, ["A", "B", "A", "B", "A", "B"])
+            plain = os.path.join(tmp, "plain")
+            topped = os.path.join(tmp, "top")
+            qbar.main(cmd + ["--order-mode", "global-hclust", "--hclust-dist", "euclidean", "--outdir", plain])
+            qbar.main(cmd + [
+                "--order-mode", "global-hclust",
+                "--hclust-dist", "euclidean",
+                "--dendrogram", "top",
+                "--outdir", topped,
+            ])
+            self.assertTrue(os.path.isfile(os.path.join(plain, "linkage_global.tsv")))
+            self.assertFalse(any(name.startswith("linkage_group_") for name in os.listdir(plain)))
+            with Image.open(os.path.join(plain, "bar_K3.png")) as base, Image.open(os.path.join(topped, "bar_K3.png")) as drawn:
+                self.assertEqual(drawn.size[0], base.size[0])
+                self.assertGreater(drawn.size[1], base.size[1])
 
 
 if __name__ == "__main__":

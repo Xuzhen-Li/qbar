@@ -18,6 +18,19 @@ PALETTE = [
 ]
 
 
+# Same left margin render() has always used for the bars.
+BAR_LEFT = 56
+
+
+# Fixed height of the dendrogram band. The scale is this height divided by
+# the largest merge distance on the figure. A largest distance of 0 draws a
+# flat tree on the baseline and does not divide. qbar's own scale.
+DENDRO_PANEL_PX = 160
+
+
+DENDRO_INK = (31, 41, 55)
+
+
 FONT_CANDIDATES = [
     "/System/Library/Fonts/Supplemental/Arial.ttf",
     "/Library/Fonts/Arial.ttf",
@@ -124,14 +137,152 @@ def draw_rotated(base, x, y, text, font, fill):
     return rot.size
 
 
-def render(path, rows, spans, bar_w, bar_h, title, *, language="en"):
-    """rows: list of {k, image(ndarray HxN), legend[(hex, text)]} in K order."""
+def sample_leaf_x(rank, n, bar_w, left=None):
+    """X of sample rank ``rank`` at the centre of its bar.
+
+    ``left + (rank + 0.5) * bar_w / n``. ``left`` defaults to ``BAR_LEFT``.
+    """
+    if left is None:
+        left = BAR_LEFT
+    return float(left) + (float(rank) + 0.5) * float(bar_w) / float(n)
+
+
+def span_bounds(span, n, bar_w, left):
+    """Pixel interval of one group span. Same truncation as the group labels."""
+    px0 = left + int(span["start"] * bar_w / n)
+    px1 = left + int(span["end"] * bar_w / n)
+    return px0, px1
+
+
+def span_centre(span, n, bar_w, left=None):
+    """Integer centre of a group span, the same point as the group label."""
+    if left is None:
+        left = BAR_LEFT
+    px0, px1 = span_bounds(span, n, bar_w, left)
+    return (px0 + px1) // 2
+
+
+def dendrogram_distance_label(max_distance):
+    """ASCII note of the largest merge distance, three digits after the decimal."""
+    return "max distance %.3f" % float(max_distance)
+
+
+def dendrogram_panel_height(max_distance):
+    """Height of the dendrogram band. ``None`` means there is no tree.
+
+    A tree uses ``DENDRO_PANEL_PX`` whether the largest merge distance is
+    positive or zero.
+    """
+    if max_distance is None:
+        return 0
+    return DENDRO_PANEL_PX
+
+
+def _spec_max_distance(spec):
+    """Largest merge distance on a dendrogram spec, or None when it has no rows."""
+    if not spec:
+        return None
+    max_d = None
+    for layer in spec.get("layers") or []:
+        z = np.asarray(layer["Z"], dtype=float)
+        if z.size == 0:
+            continue
+        layer_max = float(z[:, 2].max())
+        max_d = layer_max if max_d is None else max(max_d, layer_max)
+    return max_d
+
+
+def _px_per_distance(max_distance):
+    """Pixels per distance unit. Zero when the largest distance is not positive."""
+    if max_distance is None or float(max_distance) <= 0.0:
+        return 0.0
+    return DENDRO_PANEL_PX / float(max_distance)
+
+
+def layer_leaf_xs(layer, n, bar_w, left=None, *, language="en"):
+    """Leaf x positions in observation order for one linkage layer."""
+    if left is None:
+        left = BAR_LEFT
+    kind = layer["kind"]
+    if kind == "samples":
+        return [sample_leaf_x(rank, n, bar_w, left) for rank in layer["ranks"]]
+    if kind == "groups":
+        return [span_centre(span, n, bar_w, left) for span in layer["spans"]]
+    raise SystemExit(_msg("dendrogram_kind", language, kind=kind))
+
+
+def _linkage_segments(z, leaf_x, *, language="en"):
+    """Horizontal and vertical segments in distance units, plus the max distance.
+
+    An internal node sits at the midpoint of its two children. A leaf sits at
+    ``leaf_x``. Distance 0 is a leaf. qbar's own geometry of a SciPy linkage.
+    """
+    z = np.asarray(z, dtype=float)
+    n = len(leaf_x)
+    if z.shape[0] == 0:
+        return [], 0.0
+    if z.shape != (n - 1, 4):
+        raise SystemExit(_msg(
+            "dendrogram_leaf_count", language, leaves=n, obs=z.shape[0] + 1,
+        ))
+    xs = [0.0] * (2 * n - 1)
+    hs = [0.0] * (2 * n - 1)
+    for i, x in enumerate(leaf_x):
+        xs[i] = float(x)
+    segments = []
+    max_d = 0.0
+    for i in range(z.shape[0]):
+        a = int(round(float(z[i, 0])))
+        b = int(round(float(z[i, 1])))
+        dist = float(z[i, 2])
+        nid = n + i
+        xs[nid] = (xs[a] + xs[b]) / 2.0
+        hs[nid] = dist
+        if dist > max_d:
+            max_d = dist
+        segments.append((xs[a], hs[a], xs[a], dist))
+        segments.append((xs[b], hs[b], xs[b], dist))
+        segments.append((xs[a], dist, xs[b], dist))
+    return segments, max_d
+
+
+def dendrogram_height(spec):
+    """Panel height for a dendrogram spec. 0 when the spec has no linkage rows."""
+    return dendrogram_panel_height(_spec_max_distance(spec))
+
+
+def _paint_dendrogram(draw, spec, n, bar_w, left, top, panel_h, *, language="en"):
+    if panel_h <= 0 or not spec:
+        return
+    max_d = _spec_max_distance(spec)
+    if max_d is None:
+        return
+    # A largest distance of 0 keeps every segment on the baseline.
+    px_per = _px_per_distance(max_d)
+    y_bottom = top + panel_h
+    for layer in spec.get("layers") or []:
+        leaf_x = layer_leaf_xs(layer, n, bar_w, left, language=language)
+        segments, _layer_max = _linkage_segments(layer["Z"], leaf_x, language=language)
+        for x1, d1, x2, d2 in segments:
+            y1 = y_bottom - d1 * px_per
+            y2 = y_bottom - d2 * px_per
+            draw.line([(float(x1), float(y1)), (float(x2), float(y2))], fill=DENDRO_INK, width=1)
+    label_font = load_font(11)
+    draw.text((8, top), dendrogram_distance_label(max_d), font=label_font, fill=DENDRO_INK)
+
+
+def render(path, rows, spans, bar_w, bar_h, title, *, language="en", dendrogram=None):
+    """rows: list of {k, image(ndarray HxN), legend[(hex, text)]} in K order.
+
+    ``dendrogram`` None draws the bars as before. A spec ``{"layers": [...]}``
+    draws qbar's own tree above the bars and adds that panel to the height.
+    """
     font = load_font(15)
     font_s = load_font(13)
     font_k = load_font(16)
     title_font = load_font(18)
     ink = (31, 41, 55, 255)
-    left = 56
+    left = BAR_LEFT
     gap = 12
     leg_w = 0
     for row in rows:
@@ -151,14 +302,19 @@ def render(path, rows, spans, bar_w, bar_h, title, *, language="en"):
     for row in rows:
         need = 4 + len(row["legend"]) * 18
         row_pitch.append(max(bar_h, need))
+    n = rows[0]["image"].shape[1]
+    dendro_h = dendrogram_height(dendrogram) if dendrogram else 0
     width = left + bar_w + gap + leg_w + 16
-    height = title_h + sum(row_pitch) + label_h + 12
+    height = title_h + dendro_h + sum(row_pitch) + label_h + 12
     canvas = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(canvas)
     if title:
         draw.text((left, 6), title, font=title_font, fill=(31, 41, 55))
-    y = title_h
-    n = rows[0]["image"].shape[1]
+    if dendro_h:
+        _paint_dendrogram(
+            draw, dendrogram, n, bar_w, left, title_h, dendro_h, language=language,
+        )
+    y = title_h + dendro_h
     for row, pitch in zip(rows, row_pitch):
         img = Image.fromarray(row["image"])
         img = img.resize((bar_w, bar_h), Image.Resampling.NEAREST)
@@ -174,19 +330,19 @@ def render(path, rows, spans, bar_w, bar_h, title, *, language="en"):
         y += pitch
     # group boundaries and names, shared x
     boundary = (148, 163, 184)
+    bar_top = title_h + dendro_h
     for span in spans:
         if span["start"] <= 0:
             continue
-        x = left + int(span["start"] * bar_w / n)
-        draw.line([(x, title_h), (x, title_h + sum(row_pitch))], fill=boundary, width=1)
-    y_lab = title_h + sum(row_pitch) + 4
+        x = span_bounds(span, n, bar_w, left)[0]
+        draw.line([(x, bar_top), (x, bar_top + sum(row_pitch))], fill=boundary, width=1)
+    y_lab = bar_top + sum(row_pitch) + 4
     for span in spans:
-        px0 = left + int(span["start"] * bar_w / n)
-        px1 = left + int(span["end"] * bar_w / n)
+        px0, px1 = span_bounds(span, n, bar_w, left)
         if px1 - px0 < 14:
             print(_msg("narrow_group", language, name=span["name"]), file=sys.stderr)
             continue
-        mid = (px0 + px1) // 2
+        mid = span_centre(span, n, bar_w, left)
         if rotate:
             draw_rotated(canvas, mid - 6, y_lab, span["name"], font_s, ink)
         else:
