@@ -20,6 +20,34 @@ function byId(id) {
   return document.getElementById(id);
 }
 
+function showBuildInfo(info) {
+  const node = byId("build-info");
+  if (!node || !info) {
+    return;
+  }
+  const version = String(info.version || "");
+  const commit = String(info.commit || "");
+  const short = commit.length < 12 ? commit : commit.slice(0, 12);
+  let text = "qbar " + version + " (commit " + short + ")";
+  if (info.dirty) {
+    text += " dirty";
+  }
+  node.textContent = text;
+}
+
+function loadBuildInfo() {
+  return fetch("./dist/build-info.json").then(function (response) {
+    if (!response.ok) {
+      return null;
+    }
+    return response.json();
+  }).then(function (info) {
+    showBuildInfo(info);
+  }).catch(function () {
+    return null;
+  });
+}
+
 function setStatus(word) {
   const node = byId("status");
   node.textContent = word;
@@ -395,4 +423,6 @@ function bindFiles() {
 bindFiles();
 refreshForm();
 setStatus("loading");
-startThread();
+loadBuildInfo().then(function () {
+  startThread();
+});

@@ -3,3 +3,6 @@ __pycache__/
 demo/out/
 .DS_Store
 web/dist/
+node_modules/
+web/tests/test-results/
+web/tests/playwright-report/

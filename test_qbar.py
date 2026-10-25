@@ -12131,6 +12131,8 @@ class WebPageTests(unittest.TestCase):
         self.assertNotIn("pyodide-script", html)
         self.assertIn(self._PRIVACY, html)
         self.assertIn("209715200", html)
+        self.assertIn('id="build-info"', html)
+        self.assertIn("./dist/build-info.json", self._checkout("web/app.js"))
         self.assertNotIn("innerHTML", html)
         self.assertIn("Enter an integer", self._checkout("web/page_argv.mjs"))
         root = os.path.dirname(os.path.abspath(__file__))
@@ -12211,6 +12213,90 @@ class WebPageTests(unittest.TestCase):
             # download them. Exit 3 means those files are absent.
             if proc.returncode not in (0, 3):
                 self.fail(proc.stderr or proc.stdout)
+            info_path = os.path.join(tmp, "build-info.json")
+            self.assertTrue(os.path.isfile(info_path), proc.stderr or proc.stdout)
+
+    def test_build_info_writer(self):
+        import importlib.util
+        import json
+        root = os.path.dirname(os.path.abspath(__file__))
+        script = os.path.join(root, "tools", "build_web.py")
+        spec = importlib.util.spec_from_file_location("qbar_build_web", script)
+        if spec is None or spec.loader is None:
+            self.skipTest("cannot load tools/build_web.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        rev = subprocess.run(
+            ["git", "-C", root, "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+        )
+        status = subprocess.run(
+            ["git", "-C", root, "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+        )
+        if rev.returncode != 0 or status.returncode != 0:
+            self.skipTest("git rev-parse or git status failed")
+        version = None
+        for line in self._checkout("src/qbar/__init__.py").splitlines():
+            if line.startswith("__version__"):
+                version = line.split("=", 1)[1].strip().strip("\"'")
+        self.assertEqual(version, qbar.__version__)
+        commit = rev.stdout.strip()
+        dirty = bool(status.stdout.strip())
+        with tempfile.TemporaryDirectory() as tmp:
+            info = mod.write_build_info(root, tmp)
+            self.assertIsNotNone(info)
+            with open(os.path.join(tmp, "build-info.json"), encoding="utf-8") as handle:
+                payload = json.load(handle)
+        self.assertEqual(payload["version"], version)
+        self.assertEqual(payload["commit"], commit)
+        self.assertEqual(len(commit), 40)
+        self.assertEqual(payload["dirty"], dirty)
+        prefix = "qbar %s (commit %s)" % (version, commit[:12])
+        self.assertTrue(payload["display"].startswith(prefix))
+        if dirty:
+            self.assertTrue(payload["display"].endswith(" dirty"))
+        else:
+            self.assertEqual(payload["display"], prefix)
+        self.assertEqual(info["display"], payload["display"])
+
+    def test_pages_index_keeps_existing_files(self):
+        import importlib.util
+        root = os.path.dirname(os.path.abspath(__file__))
+        script = os.path.join(root, "tools", "write_pages_index.py")
+        spec = importlib.util.spec_from_file_location("qbar_write_pages_index", script)
+        if spec is None or spec.loader is None:
+            self.skipTest("cannot load tools/write_pages_index.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        with tempfile.TemporaryDirectory() as tmp:
+            for name in ("v0.9.0", "v0.10.0", "v0.2.0.dev0"):
+                os.makedirs(os.path.join(tmp, name))
+                with open(os.path.join(tmp, name, "keep.txt"), "w", encoding="utf-8") as handle:
+                    handle.write(name + "\n")
+            with open(os.path.join(tmp, "KEEP.txt"), "w", encoding="utf-8") as handle:
+                handle.write("root\n")
+            with open(os.path.join(tmp, "v0.8.0"), "w", encoding="utf-8") as handle:
+                handle.write("not a directory\n")
+            names = mod.write_index(tmp)
+            self.assertEqual(names, ["v0.9.0", "v0.10.0"])
+            with open(os.path.join(tmp, "index.html"), encoding="utf-8") as handle:
+                html = handle.read()
+            self.assertIn('href="./v0.10.0/"', html)
+            self.assertIn("Latest: <a href=\"./v0.10.0/\">v0.10.0</a>", html)
+            self.assertIn('href="./v0.9.0/"', html)
+            self.assertNotIn("v0.2.0.dev0", html)
+            self.assertNotIn("http://", html)
+            self.assertNotIn("https://", html)
+            for name in ("v0.9.0", "v0.10.0", "v0.2.0.dev0"):
+                with open(os.path.join(tmp, name, "keep.txt"), encoding="utf-8") as handle:
+                    self.assertEqual(handle.read(), name + "\n")
+            with open(os.path.join(tmp, "KEEP.txt"), encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "root\n")
+            with open(os.path.join(tmp, "v0.8.0"), encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "not a directory\n")
 
     def test_node_syntax_when_node_exists(self):
         import shutil

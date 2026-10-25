@@ -1,6 +1,6 @@
 # Web page
 
-A static page under `web/` runs this repository's qbar package in the browser. The command-line program is unchanged. `--palette` stays `science`, `--id-col` stays `analysis_IID`, and `--group-col` stays `Dong_Grp`. This step does not publish the page.
+A static page under `web/` runs this repository's qbar package in the browser. The command-line program is unchanged. `--palette` stays `science`, `--id-col` stays `analysis_IID`, and `--group-col` stays `Dong_Grp`. A push to `main` does not publish the page. Versioned hosting is under Hosting below.
 
 ## What the page does
 
@@ -22,11 +22,13 @@ Errors from qbar, including `SystemExit` text, are shown as text. A row-count mi
 
 The status line is one of: loading, ready, running, done, error.
 
+The footer reads `web/dist/build-info.json` and shows `qbar <version> (commit <12-char sha>)`. That file is fetched from this same server before the worker starts, so the read finishes before the status says ready. The version is `__version__` in `src/qbar/__init__.py`. The commit is the full SHA from `git rev-parse HEAD` at build time, and the page shows the first 12 characters. When `git status --porcelain` is not empty, the line adds ` dirty`.
+
 ## Privacy
 
 Your files stay in this browser. They are not uploaded. The page loads one pinned Pyodide build and the local qbar wheel while the status says loading. After the status says ready, the page does not make another network request. The run and the downloads stay in this browser.
 
-What that sentence covers: before ready, the page loads the pinned Pyodide files and the qbar wheel from this same server (`web/dist/`). Both are files the build wrote. After ready, the run reads only the files you chose and the in-browser filesystem. Downloads use local object URLs. The page does not load fonts, images, or analytics, and it has no link that fetches a page on its own. What a local browser check saw, and what it could not see, is in `docs/factpacks/F10.md`.
+What that sentence covers: before ready, the page loads the pinned Pyodide files, the qbar wheel, and `build-info.json` from this same server (`web/dist/`). Those are files the build wrote. After ready, the run reads only the files you chose and the in-browser filesystem. Downloads use local object URLs. The page does not load fonts, images, or analytics, and it has no link that fetches a page on its own. What a local browser check saw, and what it could not see, is in `docs/factpacks/F10.md`. `web/tests/` checks that a run does not request any host other than `127.0.0.1`.
 
 ## Build
 
@@ -36,7 +38,7 @@ From the repository root:
 python tools/build_web.py
 ```
 
-That runs `pip wheel --no-deps` and writes `web/dist/<wheel>` plus `web/dist/manifest.json`. The manifest names the wheel and its sha256. The page checks that sha256 before it installs the wheel. A mismatch is an error.
+That runs `pip wheel --no-deps` and writes `web/dist/<wheel>` plus `web/dist/manifest.json`. The manifest names the wheel and its sha256. The page checks that sha256 before it installs the wheel. A mismatch is an error. The same command writes `web/dist/build-info.json` with the version, the full commit SHA, a dirty flag, and the footer line.
 
 The same command downloads the pinned Pyodide 314.0.7 files into `web/dist/pyodide/` from the source URL in `web/pyodide-pins.json` (jsDelivr, checked 2026-10-24). It checks each file's sha256 and size against that pin file before the file keeps its final name. A download that does not match is not renamed into place. A file that is already there and does not match is left in place and the command stops. The package wheels are also checked against the sha256 values in the pinned `pyodide-lock.json`. `web/dist/` is listed in `.gitignore` and is not part of a commit.
 
@@ -99,4 +101,10 @@ K from and K to must both be integers when any Q file name includes a K. A blank
 
 ## Hosting
 
-Hosting is not done. There is no pages workflow and no published site. Serving the `web/` directory on your own machine is the way to use the page.
+Serving the `web/` directory on your own machine is the way to use the page before a tag exists. `python -m http.server --directory web 8000` stays the local server.
+
+`.github/workflows/pages.yml` runs only when a tag matching `v*.*.*` is pushed, or when someone starts that workflow by hand and types the tag. It checks out that tag, builds the page, and fails unless `build-info.json` `version` equals the tag with the leading `v` removed. It then runs the Playwright suite. The built page is published into a directory named after the tag on the `gh-pages` branch, for example `v0.3.0/`. Older version directories are kept. A root `index.html` on that branch lists those directories and links the latest. The workflow does not turn GitHub Pages on.
+
+After the first publish, the repository owner turns the site on: Settings, Pages, Deploy from a branch, branch `gh-pages`, folder `/` (root). The site is then `https://xuzhen-li.github.io/qbar/` for the list, and `https://xuzhen-li.github.io/qbar/v0.3.0/` for that tag. The page under `web/` has no external URL. Publishing waits until a tag is approved. The package version in this checkout is still `0.2.0.dev0`, so a tag `v0.3.0` fails the version check until a later change sets `__version__` to `0.3.0`.
+
+`.github/workflows/web.yml` builds the page and runs `web/tests/` on pull requests and on pushes to `main`. It does not publish.
