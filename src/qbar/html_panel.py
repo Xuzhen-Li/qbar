@@ -20,6 +20,11 @@ there is one K and 120 when there are more, the same rule as the PNG.
 object and draws the bars with ``panel_script``. The edit functions are
 separate from the page controls.
 
+``write_cluster_flow_html`` writes ``cluster_flow.html`` from the same
+rows as ``cluster_flow.tsv``. Weights use ``round_q``. The page draws
+one column of nodes per K and links whose thickness follows ``weight``.
+Node colours are the bar hex list. ``cluster_flow`` itself is unchanged.
+
 Q values are rounded with ``float("%.6f" % value)`` and then stored as
 JSON numbers. The file uses compact JSON. Non-ASCII characters are
 written as JSON ``\\u`` escapes. After ``json.dumps``, ``<``, ``>``, and
@@ -646,6 +651,424 @@ def write_panel_html(
     text = render_panel_html(payload)
     with open(path, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(text)
+
+
+def _flow_colours(hexes, k, n_cols):
+    """Bar colours for this K, padded when the list is short."""
+    stored = []
+    if isinstance(hexes, dict):
+        if k in hexes:
+            stored = list(hexes[k])
+        elif str(k) in hexes:
+            stored = list(hexes[str(k)])
+    colours = []
+    for index in range(n_cols):
+        if index < len(stored) and stored[index] is not None and str(stored[index]) != "":
+            colours.append(str(stored[index]))
+        else:
+            colours.append("#94a3b8")
+    return colours
+
+
+def _flow_column_counts(edges, hexes, aligned):
+    """Column count per K. An aligned matrix fixes the count for that K."""
+    counts = {}
+    locked = set()
+    if aligned is not None:
+        for key, value in dict(aligned).items():
+            matrix = np.asarray(value)
+            k = int(key)
+            if matrix.ndim == 2:
+                counts[k] = int(matrix.shape[1])
+            else:
+                counts[k] = 0
+            locked.add(k)
+    if isinstance(hexes, dict):
+        for key, value in hexes.items():
+            k = int(key)
+            if k in locked:
+                continue
+            counts[k] = max(counts.get(k, 0), len(list(value)))
+    for edge in edges:
+        for k_key, col_key in (("K_from", "col_from"), ("K_to", "col_to")):
+            k = int(edge[k_key])
+            if k in locked:
+                continue
+            label = str(edge[col_key])
+            n_cols = 0
+            if len(label) > 1 and label[0] == "C" and label[1:].isdigit():
+                n_cols = int(label[1:])
+            counts[k] = max(counts.get(k, 0), n_cols)
+    return counts
+
+
+def cluster_flow_payload(edges, hexes=None, *, aligned=None):
+    """Object embedded in ``cluster_flow.html``.
+
+    ``edges`` follows the TSV columns, in that order. ``weight`` is
+    ``round_q``. ``dest_masked_sum`` and any other extra key are left
+    out. ``columns`` is one entry per K that has at least one column.
+    ``hex`` is the bar colour list. ``names`` are ``C1``, ``C2``, ...
+    """
+    rows = []
+    for edge in edges:
+        rows.append({
+            "K_from": int(edge["K_from"]),
+            "col_from": str(edge["col_from"]),
+            "K_to": int(edge["K_to"]),
+            "col_to": str(edge["col_to"]),
+            "weight": round_q(edge["weight"]),
+            "weight_definition": str(edge["weight_definition"]),
+            "method": str(edge["method"]),
+            "low_confidence": str(edge.get("low_confidence", "NA")),
+        })
+    counts = _flow_column_counts(rows, hexes, aligned)
+    columns = []
+    for k in sorted(counts):
+        n_cols = counts[k]
+        if n_cols < 1:
+            continue
+        columns.append({
+            "k": int(k),
+            "names": ["C%d" % (index + 1) for index in range(n_cols)],
+            "hex": _flow_colours(hexes, k, n_cols),
+        })
+    max_n = 1
+    for column in columns:
+        max_n = max(max_n, len(column["names"]))
+    node_h = 40
+    gap = 10
+    stack = max_n * node_h + max(0, max_n - 1) * gap
+    top = 36
+    height = top + stack + 28
+    width = 64 + max(1, len(columns)) * 150 + 24
+    return {
+        "edges": rows,
+        "columns": columns,
+        "layout": {
+            "width": width,
+            "height": height,
+            "left": 64,
+            "top": top,
+            "node_w": 36,
+            "node_h": node_h,
+            "gap": gap,
+            "pitch": 150,
+            "link_scale": 22,
+            "link_min": 1.5,
+            "link_max": 28,
+            "link_pad": 3,
+            "title": "membership weight",
+        },
+    }
+
+
+def flow_script():
+    """Canvas script for the flow page. No line comment and no address."""
+    return r"""
+function flowNodeBox(data, k, name) {
+  var found = null;
+  var i;
+  for (i = 0; i < data.columns.length; i += 1) {
+    if (Number(data.columns[i].k) === Number(k)) {
+      found = {index: i, column: data.columns[i]};
+      break;
+    }
+  }
+  if (!found) {
+    return null;
+  }
+  var names = found.column.names;
+  var index = -1;
+  for (i = 0; i < names.length; i += 1) {
+    if (names[i] === name) {
+      index = i;
+      break;
+    }
+  }
+  if (index < 0) {
+    return null;
+  }
+  var layout = data.layout;
+  var n = names.length;
+  var stack = n * layout.node_h + (n - 1) * layout.gap;
+  var bottom = layout.top + stack;
+  var y = bottom - (index + 1) * layout.node_h - index * layout.gap;
+  var x = layout.left + found.index * layout.pitch;
+  return {
+    x: x,
+    y: y,
+    w: layout.node_w,
+    h: layout.node_h,
+    hex: found.column.hex[index],
+    cx: x + layout.node_w / 2,
+    cy: y + layout.node_h / 2,
+  };
+}
+
+function flowLinkWidth(layout, weight) {
+  var value = Number(weight);
+  if (!(value > 0)) {
+    return layout.link_min;
+  }
+  var px = value * layout.link_scale;
+  if (px < layout.link_min) {
+    px = layout.link_min;
+  }
+  if (px > layout.link_max) {
+    px = layout.link_max;
+  }
+  return px;
+}
+
+function flowCurvePoint(from, to, t) {
+  var cx = (from.cx + to.cx) / 2;
+  var u = 1 - t;
+  return {
+    x: u * u * u * from.cx + 3 * u * u * t * cx + 3 * u * t * t * cx + t * t * t * to.cx,
+    y: u * u * u * from.cy + 3 * u * u * t * from.cy + 3 * u * t * t * to.cy + t * t * t * to.cy,
+  };
+}
+
+function flowSegmentDistance(x0, y0, x1, y1, x, y) {
+  var dx = x1 - x0;
+  var dy = y1 - y0;
+  var len2 = dx * dx + dy * dy;
+  var t = 0;
+  if (len2 > 0) {
+    t = ((x - x0) * dx + (y - y0) * dy) / len2;
+    if (t < 0) {
+      t = 0;
+    }
+    if (t > 1) {
+      t = 1;
+    }
+  }
+  var px = x0 + t * dx;
+  var py = y0 + t * dy;
+  var ex = x - px;
+  var ey = y - py;
+  return Math.sqrt(ex * ex + ey * ey);
+}
+
+function flowCurveDistance(from, to, x, y) {
+  var best = 1e9;
+  var prev = {x: from.cx, y: from.cy};
+  var step;
+  for (step = 1; step <= 16; step += 1) {
+    var point = flowCurvePoint(from, to, step / 16);
+    var dist = flowSegmentDistance(prev.x, prev.y, point.x, point.y, x, y);
+    if (dist < best) {
+      best = dist;
+    }
+    prev = point;
+  }
+  return best;
+}
+
+function flowLinkIndexAt(data, x, y) {
+  var best = -1;
+  var bestDist = 1e9;
+  var i;
+  for (i = 0; i < data.edges.length; i += 1) {
+    var edge = data.edges[i];
+    var from = flowNodeBox(data, edge.K_from, edge.col_from);
+    var to = flowNodeBox(data, edge.K_to, edge.col_to);
+    if (!from || !to) {
+      continue;
+    }
+    var dist = flowCurveDistance(from, to, x, y);
+    var limit = flowLinkWidth(data.layout, edge.weight) / 2 + data.layout.link_pad;
+    if (dist <= limit && dist < bestDist) {
+      best = i;
+      bestDist = dist;
+    }
+  }
+  return best;
+}
+
+function formatWeight6(value) {
+  var number = Number(value);
+  if (number !== number || number === Infinity || number === -Infinity) {
+    return "NA";
+  }
+  var negative = number < 0;
+  var rounded = Math.round(Math.abs(number) * 1000000) / 1000000;
+  var text = rounded.toFixed(6);
+  if (negative && rounded !== 0) {
+    return "-" + text;
+  }
+  return text;
+}
+
+function flowTooltip(edge) {
+  var lines = [];
+  lines.push("K_from: " + String(edge.K_from));
+  lines.push("col_from: " + edge.col_from);
+  lines.push("K_to: " + String(edge.K_to));
+  lines.push("col_to: " + edge.col_to);
+  lines.push("weight: " + formatWeight6(edge.weight));
+  lines.push("weight_definition: " + edge.weight_definition);
+  lines.push("method: " + edge.method);
+  lines.push("low_confidence: " + edge.low_confidence);
+  return lines.join("\n");
+}
+
+function drawFlow(ctx, data) {
+  var layout = data.layout;
+  ctx.clearRect(0, 0, layout.width, layout.height);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, layout.width, layout.height);
+  ctx.fillStyle = "#1f2937";
+  ctx.font = "16px sans-serif";
+  ctx.fillText(layout.title, layout.left, 22);
+  var i;
+  for (i = 0; i < data.edges.length; i += 1) {
+    var edge = data.edges[i];
+    var from = flowNodeBox(data, edge.K_from, edge.col_from);
+    var to = flowNodeBox(data, edge.K_to, edge.col_to);
+    if (!from || !to) {
+      continue;
+    }
+    var cx = (from.cx + to.cx) / 2;
+    ctx.beginPath();
+    ctx.moveTo(from.cx, from.cy);
+    ctx.bezierCurveTo(cx, from.cy, cx, to.cy, to.cx, to.cy);
+    ctx.strokeStyle = from.hex;
+    ctx.lineWidth = flowLinkWidth(layout, edge.weight);
+    ctx.lineCap = "round";
+    ctx.stroke();
+  }
+  var c;
+  for (c = 0; c < data.columns.length; c += 1) {
+    var column = data.columns[c];
+    var n;
+    for (n = 0; n < column.names.length; n += 1) {
+      var box = flowNodeBox(data, column.k, column.names[n]);
+      if (!box) {
+        continue;
+      }
+      ctx.fillStyle = box.hex;
+      ctx.fillRect(box.x, box.y, box.w, box.h);
+      ctx.fillStyle = "#1f2937";
+      ctx.font = "13px sans-serif";
+      ctx.fillText(column.names[n], box.x + box.w + 6, box.y + box.h / 2 + 4);
+    }
+    if (column.names.length > 0) {
+      var head = flowNodeBox(data, column.k, column.names[0]);
+      ctx.fillStyle = "#1f2937";
+      ctx.font = "14px sans-serif";
+      ctx.fillText("K" + column.k, head.x, layout.top - 8);
+    }
+  }
+}
+
+function prepareFlowCanvas(canvas, data) {
+  var width = data.layout.width;
+  var height = data.layout.height;
+  var ratio = 1;
+  if (typeof window !== "undefined" && window.devicePixelRatio) {
+    ratio = Number(window.devicePixelRatio);
+    if (!(ratio > 0)) {
+      ratio = 1;
+    }
+  }
+  canvas.style.width = width + "px";
+  canvas.style.height = height + "px";
+  canvas.width = Math.max(1, Math.round(width * ratio));
+  canvas.height = Math.max(1, Math.round(height * ratio));
+  var ctx = canvas.getContext("2d");
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  return ctx;
+}
+
+function bindFlowHover(canvas, data, tip) {
+  function hide() {
+    tip.hidden = true;
+    tip.textContent = "";
+  }
+  canvas.addEventListener("mousemove", function (event) {
+    var rect = canvas.getBoundingClientRect();
+    var scaleX = rect.width > 0 ? data.layout.width / rect.width : 1;
+    var scaleY = rect.height > 0 ? data.layout.height / rect.height : 1;
+    var x = (event.clientX - rect.left) * scaleX;
+    var y = (event.clientY - rect.top) * scaleY;
+    var hit = flowLinkIndexAt(data, x, y);
+    if (hit < 0) {
+      hide();
+      return;
+    }
+    tip.hidden = false;
+    tip.textContent = flowTooltip(data.edges[hit]);
+    tip.style.left = (event.clientX + 12) + "px";
+    tip.style.top = (event.clientY + 12) + "px";
+  });
+  canvas.addEventListener("mouseleave", hide);
+}
+
+function bootFlow() {
+  if (typeof document === "undefined") {
+    return;
+  }
+  var dataNode = document.getElementById("qbar-flow-data");
+  var canvas = document.getElementById("qbar-canvas");
+  var tip = document.getElementById("qbar-tip");
+  if (!dataNode || !canvas || !tip) {
+    return;
+  }
+  var data = JSON.parse(dataNode.textContent);
+  var ctx = prepareFlowCanvas(canvas, data);
+  drawFlow(ctx, data);
+  bindFlowHover(canvas, data, tip);
+}
+
+bootFlow();
+""".strip() + "\n"
+
+
+def render_cluster_flow_html(payload):
+    """Return the flow document. The title inside the JSON is the axis title."""
+    return (
+        "<!DOCTYPE html>\n"
+        "<html lang=\"en\">\n"
+        "<head>\n"
+        "<meta charset=\"utf-8\">\n"
+        "<title>qbar cluster flow</title>\n"
+        "<style>\n"
+        + panel_style()
+        + "\n</style>\n"
+        "</head>\n"
+        "<body>\n"
+        "<canvas id=\"qbar-canvas\" width=\"1\" height=\"1\"></canvas>\n"
+        "<div id=\"qbar-tip\" hidden></div>\n"
+        "<script type=\"application/json\" id=\"qbar-flow-data\">\n"
+        + embed_json(payload)
+        + "\n</script>\n"
+        "<script id=\"qbar-flow-draw\">\n"
+        + flow_script()
+        + "</script>\n"
+        "</body>\n"
+        "</html>\n"
+    )
+
+
+def write_cluster_flow_html(path, edges, hexes=None, *, aligned=None, language="en"):
+    """Write ``cluster_flow.html`` next to the flow table.
+
+    ``edges`` are the rows ``cluster_flow`` returns. ``hexes`` is the
+    bar colour map, ``k -> list of hex``. ``aligned`` supplies every K
+    so a K with no edge still has a column. ``language`` is accepted
+    for the same call shape as the panel writer and is unused here.
+    """
+    del language
+    payload = cluster_flow_payload(edges, hexes, aligned=aligned)
+    folder = os.path.dirname(os.path.abspath(path))
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    text = render_cluster_flow_html(payload)
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(text)
+    return path
 
 
 def panel_functions():
