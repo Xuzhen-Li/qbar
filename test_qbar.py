@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
-"""Small checks for qbar. Run: python3 test_qbar.py"""
+"""Small checks for qbar.
+
+From a checkout: python3 -m unittest test_qbar.py
+That imports the repository's qbar.py launcher.
+
+Set QBAR_TEST_INSTALLED=1 to import the installed qbar package instead.
+The directory that contains this file is removed from sys.path first, so the
+root qbar.py launcher does not shadow the installed package. Run that with
+the interpreter that has qbar installed, from the checkout or from another
+directory:
+
+    QBAR_TEST_INSTALLED=1 python -m unittest test_qbar.py
+"""
 import os
 import subprocess
 import sys
@@ -9,7 +21,24 @@ import unittest
 import numpy as np
 from PIL import Image
 
+if os.environ.get("QBAR_TEST_INSTALLED") == "1":
+    _checkout = os.path.dirname(os.path.abspath(__file__))
+    sys.path[:] = [
+        entry for entry in sys.path
+        if os.path.abspath(entry or os.getcwd()) != _checkout
+    ]
+    del _checkout
+
 import qbar
+
+
+def _read_checkout(name):
+    """Read a file next to this test. Skip when the checkout file is absent."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
+    if not os.path.isfile(path):
+        raise unittest.SkipTest("checkout file is not next to the test: %s" % name)
+    with open(path, encoding="utf-8") as handle:
+        return handle.read()
 
 
 class SortTests(unittest.TestCase):
@@ -889,8 +918,8 @@ class CliTests(unittest.TestCase):
         help_s = _cli_flag(qbar.build_parser(), "--q").help or ""
         self.assertIn("空白分隔", help_s)
         self.assertIn(".q", help_s)
-        en = open("README.md", encoding="utf-8").read()
-        zh = open("README.zh.md", encoding="utf-8").read()
+        en = _read_checkout("README.md")
+        zh = _read_checkout("README.zh.md")
         self.assertIn("whitespace-separated numeric", en)
         self.assertIn("空白分隔的数字", zh)
 
@@ -977,10 +1006,8 @@ class CliTests(unittest.TestCase):
             self.assertIn("目录里没有 .Q 或 .q", str(ctx.exception.code))
         help_s = _cli_flag(qbar.build_parser(), "--q").help or ""
         self.assertIn("读取其中的 .Q 和 .q", help_s)
-        with open("README.md", encoding="utf-8") as f:
-            en = f.read()
-        with open("README.zh.md", encoding="utf-8") as f:
-            zh = f.read()
+        en = _read_checkout("README.md")
+        zh = _read_checkout("README.zh.md")
         self.assertIn("A directory passed to `--q` includes `.Q` and `.q` files.", en)
         self.assertIn("`--q` 传入目录时，会读取其中的 `.Q` 和 `.q` 文件。", zh)
 
@@ -1028,10 +1055,8 @@ class CliTests(unittest.TestCase):
             self.assertNotIn("多个字段", buf3.getvalue())
         help_s = _cli_flag(qbar.build_parser(), "--ids").help or ""
         self.assertIn("多出来的字段", help_s)
-        with open("README.md", encoding="utf-8") as f:
-            en = f.read()
-        with open("README.zh.md", encoding="utf-8") as f:
-            zh = f.read()
+        en = _read_checkout("README.md")
+        zh = _read_checkout("README.zh.md")
         self.assertIn("keeps the first token and writes a warning to stderr", en)
         self.assertIn("只保留第一个字段，并在 stderr 给出警告", zh)
 
@@ -1046,6 +1071,15 @@ def _cli_flag(parser, name):
 class DocstringTests(unittest.TestCase):
     def test_package_version(self):
         self.assertEqual(qbar.__version__, "0.2.0.dev0")
+
+    def test_imported_qbar_file(self):
+        path = os.path.abspath(qbar.__file__)
+        checkout = os.path.dirname(os.path.abspath(__file__))
+        if os.environ.get("QBAR_TEST_INSTALLED") == "1":
+            self.assertNotEqual(path, os.path.join(checkout, "qbar.py"))
+            self.assertTrue(path.endswith("__init__.py"))
+        else:
+            self.assertEqual(path, os.path.join(checkout, "qbar.py"))
 
     def test_module_docstring_names_align_methods(self):
         # Expectations come from argparse, not from the wording under test.
@@ -1127,7 +1161,7 @@ class DocstringTests(unittest.TestCase):
         for token in ("-1e-6", "1+1e-4", "0.05"):
             self.assertIn(token, doc)
         for path in ("README.md", "README.zh.md"):
-            text = open(path, encoding="utf-8").read()
+            text = _read_checkout(path)
             for token in ("-1e-6", "1e-4", "0.05"):
                 self.assertRegex(
                     text,
@@ -1144,7 +1178,7 @@ class DocstringTests(unittest.TestCase):
                     continue
                 flags.append(name)
         for path in ("README.md", "README.zh.md"):
-            text = open(path, encoding="utf-8").read()
+            text = _read_checkout(path)
             missing = [
                 name for name in flags
                 if re.search(r"(?<![\w-])" + re.escape(name) + r"(?![\w-])", text) is None
@@ -1162,8 +1196,8 @@ class DocstringTests(unittest.TestCase):
         color = _cli_flag(qbar.build_parser(), "--color").help or ""
         self.assertIn("不能含逗号", blocks)
         self.assertIn("不能含等号", color)
-        en = open("README.md", encoding="utf-8").read()
-        zh = open("README.zh.md", encoding="utf-8").read()
+        en = _read_checkout("README.md")
+        zh = _read_checkout("README.zh.md")
         self.assertIn("cannot contain a comma", en)
         self.assertIn("cannot contain `=`", en)
         self.assertIn("不能含逗号", zh)
@@ -1185,8 +1219,8 @@ class DocstringTests(unittest.TestCase):
         def paragraphs(text):
             return [p.strip() for p in text.split("\n\n") if p.strip()]
 
-        en = open("README.md", encoding="utf-8").read()
-        zh = open("README.zh.md", encoding="utf-8").read()
+        en = _read_checkout("README.md")
+        zh = _read_checkout("README.zh.md")
         en_ok = [
             p for p in paragraphs(en)
             if "--no-align" in p and "--anchor-group" in p and "every K" in p and "C1" in p
