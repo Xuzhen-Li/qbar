@@ -22,10 +22,12 @@ from .align import align_qs
 from .io import (
     check_shapes,
     collect_q,
+    k_of,
     load_groups,
     load_ids,
     load_q_set,
     parse_colors,
+    read_q,
 )
 from .logs import (
     check_logs_map,
@@ -34,6 +36,7 @@ from .logs import (
     write_cv_loglik_tsv,
 )
 from .messages import text as _msg
+from .modes import assemble_replicates, require_replicate_flags, write_replicate_outputs
 from .selectk import select_k_table, write_select_k_tsv, write_select_k_txt
 from .order import WITHIN, build_order, check_hclust_opts
 from .report import column_label, write_align_report, write_tables
@@ -293,6 +296,14 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     and ``select_k.pdf``. The flag requires ``args.logs``. When it is
     omitted, those files are not written. The barplot K list is the Q
     files and does not change because of this report.
+
+    When ``args.replicates`` is set, several Q files may share one K.
+    They are grouped into modes, and the major-mode mean is what the
+    existing alignment sees. ``args.mode_sim_cut`` is required in that
+    case and has no default. When every K has one file, no
+    ``replicates_`` file is written and the matrices passed onward are
+    the loaded ones. Without ``args.replicates``, two files at one K
+    still raise the duplicate-K error.
     """
     if args.provenance:
         started = datetime.datetime.now().astimezone().isoformat()
@@ -315,6 +326,9 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         raise SystemExit(_msg("select_k_requires", language))
     if logs_map and not logs:
         raise SystemExit(_msg("logs_map_requires", language))
+    replicates_on = bool(getattr(args, "replicates", False))
+    mode_sim_cut = getattr(args, "mode_sim_cut", None)
+    require_replicate_flags(replicates_on, mode_sim_cut, language)
     if logs:
         log_paths = collect_logs(logs, language=language)
         if logs_map:
@@ -323,9 +337,28 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
         for log_path in log_paths:
             log_rows.extend(parse_admixture_log(log_path, language=language))
     files = collect_q(args.q, format=args.q_format, language=language)
-    q_by_k, src = load_q_set(files, format=args.q_format, language=language)
+    loaded = None
+    if replicates_on:
+        loaded = []
+        for path in files:
+            matrix = read_q(path, format=args.q_format, language=language)
+            k_value = k_of(path, matrix, format=args.q_format, language=language)
+            loaded.append((path, matrix, k_value))
+    else:
+        q_by_k, src = load_q_set(files, format=args.q_format, language=language)
     iids = load_ids(args.fam, args.ids, ind=args.ind, language=language)
-    check_shapes(q_by_k, len(iids), language=language)
+    if replicates_on:
+        for _path, matrix, k_value in loaded:
+            check_shapes({k_value: matrix}, len(iids), language=language)
+        q_by_k, src_paths, replicate_reports = assemble_replicates(
+            loaded, args.align_method, mode_sim_cut, seed=0,
+            jaccard_set=args.jaccard_set, jaccard_cut=args.jaccard_cut,
+            language=language,
+        )
+    else:
+        check_shapes(q_by_k, len(iids), language=language)
+        src_paths = {k_value: [src[k_value]] for k_value in src}
+        replicate_reports = {}
     groups = load_groups(args.groups, iids, args.id_col, args.group_col, args.rest_name, language=language)
     within_group = parse_within(args.within_group, language=language)
     unknown = sorted(set(within_group) - set(groups))
@@ -400,10 +433,12 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
                 plateau_fraction=plateau_fraction,
             )
             write_select_k_plot(os.path.join(args.outdir, "select_k.png"), select_table)
+    replicate_paths = write_replicate_outputs(args.outdir, replicate_reports)
     with open(os.path.join(args.outdir, "args.txt"), "w") as f:
         f.write(" ".join(sys.argv if argv is None else ["qbar"] + list(argv)) + "\n")
         for k in ks:
-            f.write("K%d\t%s\n" % (k, src[k]))
+            for path in src_paths[k]:
+                f.write("K%d\t%s\n" % (k, path))
     run_json = None
     if args.provenance:
         extra_paths = None
@@ -449,6 +484,7 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
             paths.append(os.path.join(args.outdir, "select_k.txt"))
             paths.append(os.path.join(args.outdir, "select_k.png"))
             paths.append(os.path.join(args.outdir, "select_k.pdf"))
+    paths.extend(replicate_paths)
     paths.append(os.path.join(args.outdir, "args.txt"))
     if run_json is not None:
         paths.append(run_json)

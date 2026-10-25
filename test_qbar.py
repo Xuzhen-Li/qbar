@@ -1191,13 +1191,18 @@ class DocstringTests(unittest.TestCase):
         ``docs/factpacks/F5.md``.
         ``--select-k`` and ``--plateau-fraction`` are documented in
         ``docs/cli.md`` and ``docs/factpacks/F6.md``.
+        ``--replicates`` and ``--mode-sim-cut`` are documented in
+        ``docs/cli.md`` and ``docs/factpacks/S1.md``.
         """
         import re
         # --select-k and --plateau-fraction are documented in docs/cli.md
         # and docs/factpacks/F6.md.
+        # --replicates and --mode-sim-cut are documented in docs/cli.md
+        # and docs/factpacks/S1.md.
         later = {
             "--provenance", "--q-format", "--ind", "--logs", "--logs-map",
             "--select-k", "--plateau-fraction",
+            "--replicates", "--mode-sim-cut",
         }
         flags = []
         for action in qbar.build_parser()._actions:
@@ -2653,6 +2658,525 @@ class SelectKTests(unittest.TestCase):
         )
         help_s = parser.format_help()
         self.assertTrue(all(ord(ch) < 128 for ch in help_s))
+
+
+def _write_q_rows(path, rows):
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
+        for row in rows:
+            handle.write(" ".join("%.6f" % float(value) for value in row) + "\n")
+
+
+def _sha256(path):
+    import hashlib
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        digest.update(handle.read())
+    return digest.hexdigest()
+
+
+def _k2_pair_by_enumeration(left, right):
+    """Pearson on columns, then both permutations. Invented matrices only.
+
+    This does not call the mode finder. The score is the mean of the two
+    matched Pearson values, the same reduction as a K=2 assignment.
+    """
+    from qbar.align import col_pearson
+    sim = np.zeros((2, 2), dtype=float)
+    for old in range(2):
+        for new in range(2):
+            sim[old, new] = col_pearson(left[:, old], right[:, new])
+    scored = []
+    for perm in ([0, 1], [1, 0]):
+        total = float(np.mean([sim[0, perm[0]], sim[1, perm[1]]]))
+        scored.append((total, list(perm)))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return scored[0][0], scored[0][1], scored[1][0]
+
+
+class ReplicateModeTests(unittest.TestCase):
+    # Matrices below are invented. They are not a real cohort.
+
+    def _block(self):
+        return np.array([
+            [1.0, 0.0],
+            [1.0, 0.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [0.0, 1.0],
+            [0.0, 1.0],
+        ], dtype=float)
+
+    def _other(self):
+        return np.array([
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+        ], dtype=float)
+
+    def test_three_invented_matrices_split_into_modes_2_and_1(self):
+        from qbar.modes import modes_for_k
+        block = self._block()
+        swapped = block[:, ::-1].copy()
+        other = self._other()
+        path_a = "a.2.Q"
+        path_b = "b.2.Q"
+        path_c = "c.2.Q"
+        sim_ab, perm_ab, second_ab = _k2_pair_by_enumeration(block, swapped)
+        sim_ac, _perm_ac, _second_ac = _k2_pair_by_enumeration(block, other)
+        sim_bc, _perm_bc, _second_bc = _k2_pair_by_enumeration(swapped, other)
+        self.assertGreater(sim_ab, second_ab)
+        self.assertEqual(perm_ab, [1, 0])
+        self.assertGreater(sim_ab, sim_ac)
+        self.assertGreater(sim_ab, sim_bc)
+        cut = (max(sim_ac, sim_bc) + sim_ab) / 2.0
+        self.assertGreaterEqual(cut, 0.0)
+        self.assertLessEqual(cut, 1.0)
+        # Pass C first so the sort, not the input order, has to pick A.
+        result = modes_for_k(
+            [(path_c, other), (path_a, block), (path_b, swapped)],
+            "greedy", cut, seed=0,
+        )
+        self.assertEqual(result["pair_similarity"][path_a][path_b], sim_ab)
+        self.assertEqual(result["pair_similarity"][path_a][path_c], sim_ac)
+        self.assertEqual(result["pair_similarity"][path_b][path_c], sim_bc)
+        self.assertEqual(result["pair_perm"][path_a][path_b], perm_ab)
+        self.assertEqual(result["reference"], path_a)
+        self.assertEqual(result["n_modes"], 2)
+        self.assertEqual([mode["size"] for mode in result["modes"]], [2, 1])
+        self.assertEqual(result["modes"][0]["members"], [path_a, path_b])
+        self.assertEqual(result["modes"][1]["members"], [path_c])
+        self.assertEqual(result["major_mode_id"], 1)
+        np.testing.assert_array_equal(result["major_mean_q"], block)
+        np.testing.assert_array_equal(result["modes"][1]["mean_q"], other)
+        by_path = {row["path"]: row for row in result["rows"]}
+        self.assertIsNone(by_path[path_a]["sim_to_k_ref"])
+        self.assertIsNone(by_path[path_a]["sim_to_mode_ref"])
+        self.assertEqual(by_path[path_b]["sim_to_k_ref"], sim_ab)
+        self.assertEqual(by_path[path_b]["perm"], [1, 0])
+        self.assertTrue(by_path[path_a]["is_mode_rep"])
+        self.assertFalse(by_path[path_b]["is_mode_rep"])
+        self.assertTrue(by_path[path_c]["is_mode_rep"])
+        self.assertIsNone(by_path[path_c]["sim_to_mode_ref"])
+
+    def test_identical_replicates_have_pair_similarity_one(self):
+        from qbar.modes import modes_for_k
+        # Invented. These two columns have Pearson exactly 1 with themselves.
+        exact = np.array([
+            [1.0, 0.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [0.0, 1.0],
+        ], dtype=float)
+        path_a = "a.2.Q"
+        path_b = "b.2.Q"
+        for method in ("greedy", "hungarian", "pong", "jaccard"):
+            result = modes_for_k(
+                [(path_a, exact), (path_b, exact.copy())], method, 0.5,
+            )
+            self.assertEqual(result["pair_similarity"][path_a][path_b], 1.0, method)
+            self.assertEqual(result["n_modes"], 1)
+            self.assertEqual(result["pair_perm"][path_a][path_b], [0, 1])
+
+    def test_same_size_modes_rank_by_mean_similarity_before_path(self):
+        # Invented. The lower-similarity pair has the smaller path, so path
+        # order alone would name it mode 1. Higher mean similarity wins.
+        from qbar.modes import modes_for_k
+        high = np.array([
+            [1.0, 0.0], [1.0, 0.0], [1.0, 0.0],
+            [0.0, 1.0], [0.0, 1.0], [0.0, 1.0],
+        ], dtype=float)
+        low_a = np.array([
+            [0.2, 0.8], [0.9, 0.1], [0.1, 0.9],
+            [0.8, 0.2], [0.3, 0.7], [0.7, 0.3],
+        ], dtype=float)
+        low_b = np.array([
+            [0.25, 0.75], [0.85, 0.15], [0.15, 0.85],
+            [0.75, 0.25], [0.35, 0.65], [0.65, 0.35],
+        ], dtype=float)
+        mats = {
+            "a.2.Q": low_a,
+            "b.2.Q": low_b,
+            "c.2.Q": high,
+            "d.2.Q": high.copy(),
+        }
+        names = sorted(mats)
+        within = {}
+        cross = []
+        for left, right in (("a.2.Q", "b.2.Q"), ("c.2.Q", "d.2.Q")):
+            sim, _perm, _second = _k2_pair_by_enumeration(mats[left], mats[right])
+            within[(left, right)] = sim
+        for left_i, left in enumerate(names):
+            for right in names[left_i + 1:]:
+                if {left, right} in ({"a.2.Q", "b.2.Q"}, {"c.2.Q", "d.2.Q"}):
+                    continue
+                sim, _perm, _second = _k2_pair_by_enumeration(mats[left], mats[right])
+                cross.append(sim)
+        self.assertGreater(within[("c.2.Q", "d.2.Q")], within[("a.2.Q", "b.2.Q")])
+        self.assertGreater(min(within.values()), max(cross))
+        cut = (max(cross) + min(within.values())) / 2.0
+        result = modes_for_k(list(mats.items()), "greedy", cut)
+        self.assertEqual([mode["size"] for mode in result["modes"]], [2, 2])
+        self.assertEqual(result["modes"][0]["members"], ["c.2.Q", "d.2.Q"])
+        self.assertEqual(result["modes"][1]["members"], ["a.2.Q", "b.2.Q"])
+        self.assertGreater(result["modes"][0]["mean_sim"], result["modes"][1]["mean_sim"])
+
+    def test_cut_zero_links_permutations_and_a_high_cut_makes_singletons(self):
+        from qbar.modes import REPLICATE_COLUMNS, SUMMARY_COLUMNS, modes_for_k, write_replicate_outputs
+        # Invented column permutations. Each hand-enumerated pair similarity is 1,
+        # so a cut of 0 links all three into one mode.
+        exact = np.array([
+            [1.0, 0.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [0.0, 1.0],
+        ], dtype=float)
+        swapped = exact[:, ::-1].copy()
+        path_a = "a.2.Q"
+        path_b = "b.2.Q"
+        path_c = "c.2.Q"
+        copies = [(path_c, exact.copy()), (path_a, exact), (path_b, swapped)]
+        for left, right in (
+            (exact, swapped),
+            (exact, exact),
+            (swapped, exact),
+        ):
+            sim, _perm, _second = _k2_pair_by_enumeration(left, right)
+            self.assertEqual(sim, 1.0)
+        linked = modes_for_k(copies, "greedy", 0.0)
+        self.assertEqual(linked["n_modes"], 1)
+        self.assertEqual(linked["major_mode_size"], 3)
+        self.assertEqual(linked["major_mode_mean_sim"], 1.0)
+        self.assertEqual(linked["reference"], path_a)
+        np.testing.assert_array_equal(linked["major_mean_q"], exact)
+        # Different invented patterns. Cut 1 is above every pair similarity.
+        odd = [
+            ("c.2.Q", np.array([
+                [1.0, 0.0], [0.8, 0.2], [0.2, 0.8],
+                [0.0, 1.0], [0.6, 0.4], [0.3, 0.7],
+            ])),
+            ("a.2.Q", np.array([
+                [0.0, 1.0], [0.4, 0.6], [1.0, 0.0],
+                [0.7, 0.3], [0.1, 0.9], [0.9, 0.1],
+            ])),
+            ("b.2.Q", np.array([
+                [0.2, 0.8], [0.2, 0.8], [0.9, 0.1],
+                [0.5, 0.5], [0.0, 1.0], [1.0, 0.0],
+            ])),
+        ]
+        sims = []
+        for i in range(3):
+            for j in range(i + 1, 3):
+                sim, _perm, _second = _k2_pair_by_enumeration(odd[i][1], odd[j][1])
+                sims.append(sim)
+        self.assertTrue(all(sim < 1.0 for sim in sims))
+        alone = modes_for_k(odd, "greedy", 1.0)
+        self.assertEqual(alone["n_modes"], 3)
+        self.assertEqual([mode["size"] for mode in alone["modes"]], [1, 1, 1])
+        self.assertIsNone(alone["major_mode_mean_sim"])
+        self.assertEqual(alone["modes"][0]["members"], ["a.2.Q"])
+        self.assertEqual(alone["modes"][1]["members"], ["b.2.Q"])
+        self.assertEqual(alone["modes"][2]["members"], ["c.2.Q"])
+        by_path = {row["path"]: row["mode_id"] for row in alone["rows"]}
+        self.assertEqual(by_path, {"a.2.Q": 1, "b.2.Q": 2, "c.2.Q": 3})
+        with tempfile.TemporaryDirectory() as td:
+            written = write_replicate_outputs(td, {2: alone})
+            self.assertIn(os.path.join(td, "replicates_summary.tsv"), written)
+            with open(os.path.join(td, "replicates_summary.tsv"), encoding="utf-8") as handle:
+                lines = handle.read().splitlines()
+            self.assertEqual(lines[0].split("\t"), list(SUMMARY_COLUMNS))
+            self.assertEqual(lines[1].split("\t"), ["2", "3", "3", "1", "1", "NA"])
+            with open(os.path.join(td, "replicates_K2.tsv"), encoding="utf-8") as handle:
+                body = handle.read().splitlines()
+            self.assertEqual(body[0].split("\t"), list(REPLICATE_COLUMNS))
+            self.assertIn("NA", body[1])
+
+    def test_zero_sum_mean_row_raises(self):
+        from qbar.modes import modes_for_k
+        # Invented. The first row is zeros in both replicates, so the mean is zeros.
+        zero = np.array([
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+        ], dtype=float)
+        with self.assertRaises(SystemExit) as caught:
+            modes_for_k([("a.2.Q", zero), ("b.2.Q", zero.copy())], "greedy", 0.5)
+        self.assertEqual(
+            caught.exception.code,
+            "Mode 1 at K=2 has a row whose mean sums to 0",
+        )
+        with self.assertRaises(SystemExit) as caught_zh:
+            modes_for_k(
+                [("a.2.Q", zero), ("b.2.Q", zero.copy())],
+                "greedy", 0.5, language="zh",
+            )
+        self.assertEqual(
+            caught_zh.exception.code,
+            "K=2 的模式 1 有一行均值和为 0",
+        )
+
+    def test_duplicate_k_without_flag_keeps_the_old_message(self):
+        with tempfile.TemporaryDirectory() as td:
+            path_a = os.path.join(td, "a.2.Q")
+            path_b = os.path.join(td, "b.2.Q")
+            ids = os.path.join(td, "ids.txt")
+            _write_q_rows(path_a, [[1.0, 0.0], [0.0, 1.0]])
+            _write_q_rows(path_b, [[1.0, 0.0], [0.0, 1.0]])
+            with open(ids, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("s1\ns2\n")
+            out = os.path.join(td, "out")
+            with self.assertRaises(SystemExit) as caught:
+                qbar.main(["--q", path_a, path_b, "--ids", ids, "--outdir", out])
+            self.assertEqual(
+                caught.exception.code,
+                "K=2 has two Q files: %s and %s" % (path_a, path_b),
+            )
+            self.assertFalse(os.path.isdir(out))
+
+    def test_replicate_flags_are_required_together(self):
+        with tempfile.TemporaryDirectory() as td:
+            q_path, ids_path = _tiny_q(td)
+            out = os.path.join(td, "out")
+            with self.assertRaises(SystemExit) as caught:
+                qbar.main(["--q", q_path, "--ids", ids_path, "--outdir", out, "--replicates"])
+            self.assertEqual(
+                caught.exception.code,
+                "--replicates requires --mode-sim-cut. No default cut is shipped because none has been calibrated.",
+            )
+            with self.assertRaises(SystemExit) as caught_zh:
+                qbar.main([
+                    "--q", q_path, "--ids", ids_path, "--outdir", out,
+                    "--replicates", "--language", "zh",
+                ])
+            self.assertEqual(
+                caught_zh.exception.code,
+                "--replicates 需要 --mode-sim-cut。尚未校准，所以不提供默认阈值。",
+            )
+            with self.assertRaises(SystemExit) as caught_cut:
+                qbar.main([
+                    "--q", q_path, "--ids", ids_path, "--outdir", out,
+                    "--mode-sim-cut", "0.4",
+                ])
+            self.assertEqual(caught_cut.exception.code, "--mode-sim-cut requires --replicates")
+            with self.assertRaises(SystemExit) as caught_cut_zh:
+                qbar.main([
+                    "--q", q_path, "--ids", ids_path, "--outdir", out,
+                    "--mode-sim-cut", "0.4", "--language", "zh",
+                ])
+            self.assertEqual(caught_cut_zh.exception.code, "--mode-sim-cut 需要 --replicates")
+            with self.assertRaises(SystemExit) as caught_hi:
+                qbar.main([
+                    "--q", q_path, "--ids", ids_path, "--outdir", out,
+                    "--replicates", "--mode-sim-cut", "1.5",
+                ])
+            self.assertEqual(
+                caught_hi.exception.code,
+                "--mode-sim-cut must be between 0 and 1, got 1.5",
+            )
+            with self.assertRaises(SystemExit) as caught_lo:
+                qbar.main([
+                    "--q", q_path, "--ids", ids_path, "--outdir", out,
+                    "--replicates", "--mode-sim-cut", "-0.1",
+                ])
+            self.assertIn("-0.1", str(caught_lo.exception.code))
+
+    def test_parser_help_and_default_columns(self):
+        parser = qbar.build_parser()
+        self.assertEqual(_cli_flag(parser, "--id-col").default, "analysis_IID")
+        self.assertEqual(_cli_flag(parser, "--group-col").default, "Dong_Grp")
+        self.assertEqual(
+            _cli_flag(parser, "--replicates").help,
+            "Accept several Q files at one K, group them into modes, and align the major-mode mean across K. Off by default.",
+        )
+        self.assertEqual(
+            _cli_flag(parser, "--mode-sim-cut").help,
+            "Similarity at or above which two replicates are linked into one mode. Required with --replicates. Not calibrated.",
+        )
+        args = parser.parse_args(["--q", "x.Q", "--outdir", "o"])
+        self.assertFalse(args.replicates)
+        self.assertIsNone(args.mode_sim_cut)
+        self.assertEqual(args.id_col, "analysis_IID")
+        self.assertEqual(args.group_col, "Dong_Grp")
+        zh = qbar.build_parser(language="zh")
+        self.assertEqual(
+            _cli_flag(zh, "--replicates").help,
+            "同一个 K 接受多份 Q，分成模式，用主模式的均值做跨 K 对齐。默认关闭。",
+        )
+        self.assertEqual(
+            _cli_flag(zh, "--mode-sim-cut").help,
+            "两份重复的相似度达到或超过这个值就归入同一模式。使用 --replicates 时必填。未校准。",
+        )
+        from qbar.messages import text
+        for key in (
+            "help_replicates", "help_mode_sim_cut", "replicates_requires_cut",
+            "mode_sim_cut_requires", "mode_sim_cut_range", "mode_mean_zero_row",
+            "replicate_needs_scipy", "replicate_method", "replicate_jaccard_set",
+            "replicate_shape", "replicate_empty",
+        ):
+            english = text(key, "en", mode=1, k=2, cut=0.2, methods="greedy", method="nope",
+                           choices="dominant", kind="nope", path="p")
+            self.assertTrue(all(ord(ch) < 128 for ch in english), english)
+
+    def test_default_group_columns_still_read(self):
+        # Invented Q. The groups header uses the historical default names.
+        with tempfile.TemporaryDirectory() as td:
+            q_path = os.path.join(td, "t.2.Q")
+            ids_path = os.path.join(td, "ids.txt")
+            groups = os.path.join(td, "groups.tsv")
+            _write_q_rows(q_path, [[1.0, 0.0], [0.0, 1.0]])
+            with open(ids_path, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("s1\ns2\n")
+            with open(groups, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("analysis_IID\tDong_Grp\ns1\tA\ns2\tB\n")
+            out = os.path.join(td, "out")
+            qbar.main([
+                "--q", q_path, "--ids", ids_path, "--groups", groups,
+                "--outdir", out, "--replicates", "--mode-sim-cut", "0.5",
+            ])
+            with open(os.path.join(out, "order.tsv"), encoding="utf-8") as handle:
+                text = handle.read()
+            self.assertIn("s1\tA", text)
+            self.assertIn("s2\tB", text)
+            self.assertFalse(os.path.exists(os.path.join(out, "replicates_summary.tsv")))
+
+    def test_one_file_per_k_matches_the_run_without_the_flag(self):
+        # Invented Q. hashlib locks the existing outputs. PDF time is frozen
+        # so the check is the bytes, not the clock.
+        import time
+        from PIL import PdfImagePlugin
+        from unittest.mock import patch
+        fixed = time.struct_time((2020, 1, 2, 3, 4, 5, 3, 2, 0))
+        with tempfile.TemporaryDirectory() as td:
+            k2 = os.path.join(td, "sim.2.Q")
+            k3 = os.path.join(td, "sim.3.Q")
+            ids = os.path.join(td, "ids.txt")
+            _write_q_rows(k2, [[1.0, 0.0], [0.0, 1.0]])
+            _write_q_rows(k3, [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+            with open(ids, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("s1\ns2\n")
+            plain = os.path.join(td, "plain")
+            flagged = os.path.join(td, "flagged")
+            with patch.object(PdfImagePlugin.time, "gmtime", return_value=fixed):
+                qbar.main(["--q", k2, k3, "--ids", ids, "--outdir", plain])
+                qbar.main([
+                    "--q", k2, k3, "--ids", ids, "--outdir", flagged,
+                    "--replicates", "--mode-sim-cut", "0.5",
+                ])
+            names = [
+                "order.tsv", "blocks.tsv", "align.tsv",
+                "perm_K2.tsv", "perm_K3.tsv",
+                "bar_K2.png", "bar_K2.pdf", "bar_K3.png", "bar_K3.pdf",
+                "panel.png", "panel.pdf",
+            ]
+            for name in names:
+                self.assertEqual(
+                    _sha256(os.path.join(plain, name)),
+                    _sha256(os.path.join(flagged, name)),
+                    name,
+                )
+            flagged_names = set(os.listdir(flagged))
+            self.assertFalse(any(name.startswith("replicates_") for name in flagged_names))
+            self.assertFalse(any(name.startswith("mode_mean_") for name in flagged_names))
+
+    def test_cli_writes_minor_modes_and_aligns_the_major_mean(self):
+        # Invented matrices. The major-mode mean equals the block, so a run
+        # of that one file matches the replicate run on the existing outputs.
+        import time
+        from PIL import PdfImagePlugin
+        from qbar.modes import REPLICATE_COLUMNS, SUMMARY_COLUMNS
+        from unittest.mock import patch
+        fixed = time.struct_time((2020, 1, 2, 3, 4, 5, 3, 2, 0))
+        block = self._block()
+        swapped = block[:, ::-1]
+        other = self._other()
+        sim_ab, _perm, _second = _k2_pair_by_enumeration(block, swapped)
+        sim_ac, _perm_ac, _second_ac = _k2_pair_by_enumeration(block, other)
+        sim_bc, _perm_bc, _second_bc = _k2_pair_by_enumeration(swapped, other)
+        cut = (max(sim_ac, sim_bc) + sim_ab) / 2.0
+        with tempfile.TemporaryDirectory() as td:
+            path_a = os.path.join(td, "a.2.Q")
+            path_b = os.path.join(td, "b.2.Q")
+            path_c = os.path.join(td, "c.2.Q")
+            path_k3 = os.path.join(td, "sim.3.Q")
+            ids = os.path.join(td, "ids.txt")
+            _write_q_rows(path_a, block)
+            _write_q_rows(path_b, swapped)
+            _write_q_rows(path_c, other)
+            _write_q_rows(path_k3, np.column_stack([block, np.zeros(6)]))
+            with open(ids, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("s1\ns2\ns3\ns4\ns5\ns6\n")
+            rep = os.path.join(td, "rep")
+            solo = os.path.join(td, "solo")
+            with patch.object(PdfImagePlugin.time, "gmtime", return_value=fixed):
+                qbar.main([
+                    "--q", path_c, path_a, path_b, path_k3, "--ids", ids,
+                    "--outdir", rep, "--replicates", "--mode-sim-cut", str(cut),
+                ])
+                qbar.main(["--q", path_a, path_k3, "--ids", ids, "--outdir", solo])
+            names = [
+                "order.tsv", "blocks.tsv", "align.tsv",
+                "perm_K2.tsv", "perm_K3.tsv",
+                "bar_K2.png", "bar_K2.pdf", "bar_K3.png", "bar_K3.pdf",
+                "panel.png", "panel.pdf",
+            ]
+            for name in names:
+                self.assertEqual(
+                    _sha256(os.path.join(rep, name)),
+                    _sha256(os.path.join(solo, name)),
+                    name,
+                )
+            with open(os.path.join(rep, "replicates_K2.tsv"), encoding="utf-8") as handle:
+                lines = handle.read().splitlines()
+            self.assertEqual(lines[0].split("\t"), list(REPLICATE_COLUMNS))
+            rows = [dict(zip(REPLICATE_COLUMNS, line.split("\t"))) for line in lines[1:]]
+            self.assertEqual([row["replicate_file"] for row in rows], [path_a, path_b, path_c])
+            by_file = {row["replicate_file"]: row for row in rows}
+            self.assertEqual(by_file[path_a]["mode_id"], "1")
+            self.assertEqual(by_file[path_b]["mode_id"], "1")
+            self.assertEqual(by_file[path_c]["mode_id"], "2")
+            self.assertEqual(by_file[path_a]["is_mode_rep"], "yes")
+            self.assertEqual(by_file[path_b]["is_mode_rep"], "no")
+            self.assertEqual(by_file[path_c]["is_mode_rep"], "yes")
+            self.assertEqual(by_file[path_a]["sim_to_k_ref"], "NA")
+            self.assertEqual(by_file[path_a]["sim_to_mode_ref"], "NA")
+            self.assertEqual(by_file[path_b]["sim_to_k_ref"], "1.000000")
+            self.assertEqual(by_file[path_b]["perm"], "2,1")
+            self.assertEqual(by_file[path_c]["sim_to_mode_ref"], "NA")
+            self.assertNotEqual(by_file[path_c]["sim_to_k_ref"], "NA")
+            self.assertNotIn("1.000000", by_file[path_a]["sim_to_k_ref"])
+            with open(os.path.join(rep, "replicates_summary.tsv"), encoding="utf-8") as handle:
+                summary = handle.read().splitlines()
+            self.assertEqual(summary[0].split("\t"), list(SUMMARY_COLUMNS))
+            self.assertEqual(summary[1].split("\t"), ["2", "3", "2", "1", "2", "1.000000"])
+            self.assertFalse(os.path.exists(os.path.join(rep, "replicates_K3.tsv")))
+            major = np.loadtxt(os.path.join(rep, "mode_mean_K2_mode1.Q"))
+            minor = np.loadtxt(os.path.join(rep, "mode_mean_K2_mode2.Q"))
+            np.testing.assert_array_equal(major, block)
+            np.testing.assert_array_equal(minor, other)
+            self.assertTrue(os.path.isfile(os.path.join(rep, "mode_mean_K2_mode2.Q")))
+
+    def test_provenance_lists_every_replicate_file(self):
+        import json
+        with tempfile.TemporaryDirectory() as td:
+            path_a = os.path.join(td, "a.2.Q")
+            path_b = os.path.join(td, "b.2.Q")
+            ids = os.path.join(td, "ids.txt")
+            _write_q_rows(path_a, [[1.0, 0.0], [0.0, 1.0]])
+            _write_q_rows(path_b, [[0.0, 1.0], [1.0, 0.0]])
+            with open(ids, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("s1\ns2\n")
+            out = os.path.join(td, "out")
+            qbar.main([
+                "--q", path_a, path_b, "--ids", ids, "--outdir", out,
+                "--replicates", "--mode-sim-cut", "0.5", "--provenance",
+            ])
+            with open(os.path.join(out, "run.json"), encoding="utf-8") as handle:
+                payload = json.load(handle)
+            got = [item["path"] for item in payload["inputs"]]
+            self.assertIn(path_a, got)
+            self.assertIn(path_b, got)
 
 
 if __name__ == "__main__":

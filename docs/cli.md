@@ -274,3 +274,15 @@ Also write select_k.tsv, select_k.txt, and plots from the CV and log-likelihood 
 Plateau cut for --select-k. 0.05 is an arbitrary qbar default, not a published constant.
 
 - Default: 0.05
+
+### `--replicates`
+
+Accept several Q files at one K, group them into modes, and align the major-mode mean across K. Off by default.
+
+- Default: false
+
+### `--mode-sim-cut`
+
+Similarity at or above which two replicates are linked into one mode. Required with --replicates. Not calibrated.
+
+- Default: not set

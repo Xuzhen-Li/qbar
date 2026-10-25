@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Plot ADMIXTURE Q files: sort people, align columns across K, write a bar.
 
-One command. No R, no CLUMPP. Same-K replicate merging is not done here
-(that is CLUMPP: Jakobsson & Rosenberg 2007 Bioinformatics 23:1801,
-DOI 10.1093/bioinformatics/btm233).
+One command. No R, no CLUMPP. Same-K replicates are grouped into modes
+only when --replicates is set, using qbar's own connected components.
+That is not the CLUMPP alignment of Jakobsson & Rosenberg 2007
+Bioinformatics 23:1801, DOI 10.1093/bioinformatics/btm233.
 
 Cross-K column matching runs from K to K+1. The default --align-method
 is greedy: each old column takes the unused new column with the highest
@@ -194,6 +195,9 @@ def build_parser(language="en"):
     p.add_argument("--select-k", action="store_true", help=say("help_select_k"))
     p.add_argument("--plateau-fraction", type=float, default=0.05,
                    help=say("help_plateau_fraction"))
+    p.add_argument("--replicates", action="store_true", help=say("help_replicates"))
+    p.add_argument("--mode-sim-cut", type=float, default=None,
+                   help=say("help_mode_sim_cut"))
     return p
 
 

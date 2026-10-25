@@ -10,6 +10,7 @@ The package version is 0.2.0.dev0. No git tag exists.
 
 ### Added
 
+- `--replicates` groups several Q files at one K into modes and aligns the major-mode mean across K. It is off by default. A second file at one K still exits with the duplicate-K error unless `--replicates` is set. `--mode-sim-cut` is required with that flag and is not calibrated. No default cut is shipped.
 - `--select-k` writes optional `select_k.tsv`, `select_k.txt`, `select_k.png`, and `select_k.pdf` from the CV and log-likelihood table. `--plateau-fraction` defaults to 0.05. The default run is unchanged: it does not write select_k files.
 - `--logs` and `--logs-map` read optional ADMIXTURE stdout into `cv_loglik.tsv` and a CV error plot (`cv_loglik.png`, `cv_loglik.pdf`). The default run is unchanged: it does not read logs and does not write those files.
 - `--q-format` selects `admixture` (the default), `meanq`, or `qopt`. `--ind` reads sample IDs from column 1 of an EIGENSTRAT `.ind` file and is off by default. The default remains `.Q`. Other outputs are unchanged.
