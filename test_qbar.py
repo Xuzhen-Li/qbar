@@ -1225,6 +1225,8 @@ class DocstringTests(unittest.TestCase):
         documented in ``docs/cli.md`` and ``docs/factpacks/S6.md``.
         ``--export`` is documented in ``docs/cli.md`` and
         ``docs/factpacks/S12.md``.
+        ``--polygon`` and ``--polygon-k`` are documented in ``docs/cli.md``
+        and ``docs/factpacks/F4.md``.
         """
         import re
         # --select-k and --plateau-fraction are documented in docs/cli.md
@@ -1257,6 +1259,8 @@ class DocstringTests(unittest.TestCase):
         # --sites, --basemap-image, and --basemap-bbox are documented in
         # docs/cli.md and docs/factpacks/S6.md.
         # --export is documented in docs/cli.md and docs/factpacks/S12.md.
+        # --polygon and --polygon-k are documented in docs/cli.md and
+        # docs/factpacks/F4.md.
         later = {
             "--provenance", "--q-format", "--ind", "--logs", "--logs-map",
             "--select-k", "--plateau-fraction",
@@ -1278,6 +1282,7 @@ class DocstringTests(unittest.TestCase):
             "--config",
             "--sites", "--basemap-image", "--basemap-bbox",
             "--export",
+            "--polygon", "--polygon-k",
         }
         flags = []
         for action in qbar.build_parser()._actions:
@@ -11015,6 +11020,759 @@ class ExportTests(unittest.TestCase):
             self.assertEqual(payload["id_col"], "analysis_IID")
             self.assertEqual(payload["group_col"], "Dong_Grp")
             self.assertEqual(payload["palette"], "science")
+
+
+class PolygonTests(unittest.TestCase):
+    def _ids(self, folder, names):
+        path = os.path.join(folder, "ids.txt")
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write("".join("%s\n" % name for name in names))
+        return path
+
+    def _groups(self, folder, names, labels):
+        path = os.path.join(folder, "groups.tsv")
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write("analysis_IID\tDong_Grp\n")
+            for name, label in zip(names, labels):
+                handle.write("%s\t%s\n" % (name, label))
+        return path
+
+    def _q(self, path, rows):
+        np.savetxt(path, rows, fmt="%.6f")
+        return path
+
+    def _png_bytes(self, image):
+        import io
+        buf = io.BytesIO()
+        image.save(buf, format="PNG")
+        return buf.getvalue()
+
+    def _independent_xy(self, q):
+        """Weighted mean of the vertices. This does not call qbar.polygon."""
+        matrix = np.asarray(q, dtype=np.float64)
+        single = matrix.ndim == 1
+        if single:
+            matrix = matrix.reshape(1, -1)
+        count = int(matrix.shape[1])
+        theta = (np.pi / 2.0) + (2.0 * np.pi * np.arange(count, dtype=np.float64) / float(count))
+        xy = np.column_stack((matrix @ np.cos(theta), matrix @ np.sin(theta)))
+        return xy[0] if single else xy
+
+    def _bar_rows(self, outdir):
+        ids = []
+        groups = []
+        with open(os.path.join(outdir, "order.tsv"), encoding="utf-8") as handle:
+            for line in handle.read().splitlines()[1:]:
+                _rank, iid, group = line.split("\t")
+                ids.append(iid)
+                groups.append(group)
+        return ids, groups
+
+    def test_parser_defaults_and_help(self):
+        parser = qbar.build_parser()
+        self.assertEqual(_cli_flag(parser, "--id-col").default, "analysis_IID")
+        self.assertEqual(_cli_flag(parser, "--group-col").default, "Dong_Grp")
+        self.assertEqual(_cli_flag(parser, "--palette").default, "science")
+        self.assertEqual(_cli_flag(parser, "--polygon").default, "none")
+        self.assertIsNone(_cli_flag(parser, "--polygon-k").default)
+        self.assertEqual(list(_cli_flag(parser, "--polygon").choices), ["none", "simplex"])
+        for name in ("--polygon", "--polygon-k"):
+            help_s = _cli_flag(parser, name).help or ""
+            self.assertTrue(all(ord(ch) < 128 for ch in help_s), help_s)
+            self.assertNotIn("\u2013", help_s)
+            self.assertNotIn("\u2014", help_s)
+        self.assertIn("polygon_K", _cli_flag(parser, "--polygon").help or "")
+        zh = _cli_flag(qbar.build_parser(language="zh"), "--polygon").help or ""
+        self.assertTrue(any(ord(ch) > 127 for ch in zh))
+        self.assertIn("polygon_K", zh)
+        from qbar.config import FILE_DESTS
+        self.assertNotIn("polygon", FILE_DESTS)
+        self.assertNotIn("polygon_k", FILE_DESTS)
+
+    def test_hand_values(self):
+        from qbar.polygon import polygon_xy
+        pair = polygon_xy(np.array([
+            [0.5, 0.0, 0.5, 0.0],
+            [0.0, 0.5, 0.0, 0.5],
+        ], dtype=float))
+        self.assertLess(np.max(np.abs(pair)), 1e-12)
+        self.assertFalse(np.allclose(
+            np.array([0.5, 0.0, 0.5, 0.0]),
+            np.array([0.0, 0.5, 0.0, 0.5]),
+        ))
+        k3 = polygon_xy(np.array([[0.7, 0.2, 0.1]], dtype=float))[0]
+        self.assertLess(abs(k3[0] - (-np.sqrt(3.0) / 20.0)), 1e-12)
+        self.assertLess(abs(k3[1] - 0.55), 1e-12)
+        pure = polygon_xy(np.array([[1.0, 0.0, 0.0]], dtype=float))[0]
+        self.assertLess(abs(pure[0]), 1e-12)
+        self.assertLess(abs(pure[1] - 1.0), 1e-12)
+        raw = np.array([[0.5, 0.2, 0.1]], dtype=float)
+        got = polygon_xy(raw)[0]
+        self.assertLess(np.max(np.abs(got - self._independent_xy(raw))), 1e-12)
+        renorm = raw / raw.sum()
+        self.assertGreater(abs(got[1] - float(self._independent_xy(renorm[0])[1])), 1e-3)
+
+    def test_k3_inversion_and_k4_not_unique(self):
+        from qbar.polygon import polygon_xy
+        rng = np.random.default_rng(20261022)
+        raw = rng.random((8, 3))
+        rows = raw / raw.sum(axis=1, keepdims=True)
+        rows = np.vstack((rows, np.eye(3)))
+        theta = (np.pi / 2.0) + (2.0 * np.pi * np.arange(3, dtype=np.float64) / 3.0)
+        system = np.vstack((np.cos(theta), np.sin(theta), np.ones(3, dtype=np.float64)))
+        for row in rows:
+            xy = self._independent_xy(row)
+            solved = np.linalg.solve(system, np.array([xy[0], xy[1], 1.0]))
+            self.assertLess(np.max(np.abs(solved - row)), 1e-8)
+            got = polygon_xy(row.reshape(1, 3))[0]
+            self.assertLess(np.max(np.abs(got - xy)), 1e-12)
+        theta4 = (np.pi / 2.0) + (2.0 * np.pi * np.arange(4, dtype=np.float64) / 4.0)
+        wide = np.vstack((np.cos(theta4), np.sin(theta4), np.ones(4, dtype=np.float64)))
+        self.assertEqual(wide.shape, (3, 4))
+        rank = int(np.linalg.matrix_rank(wide, tol=1e-8))
+        self.assertLess(rank, wide.shape[1])
+        self.assertEqual(rank, 3)
+        difference = np.array([0.5, -0.5, 0.5, -0.5], dtype=np.float64)
+        self.assertLess(np.max(np.abs(wide @ difference)), 1e-12)
+        shared = polygon_xy(np.array([
+            [0.5, 0.0, 0.5, 0.0],
+            [0.0, 0.5, 0.0, 0.5],
+        ], dtype=float))
+        self.assertLess(np.max(np.abs(shared[0] - shared[1])), 1e-12)
+
+    def test_c1_at_top_and_counter_clockwise(self):
+        from qbar.polygon import simplex, vertices
+        basis = vertices(3)
+        self.assertLess(abs(basis[0, 0]), 1e-12)
+        self.assertLess(abs(basis[0, 1] - 1.0), 1e-12)
+        self.assertLess(basis[1, 0], 0.0)
+        for index in range(3):
+            x0, y0 = basis[index]
+            x1, y1 = basis[(index + 1) % 3]
+            self.assertGreater(x0 * y1 - y0 * x1, 0.0)
+        angles = np.arctan2(basis[:, 1], basis[:, 0])
+        step = (angles[1] - angles[0]) % (2.0 * np.pi)
+        self.assertLess(abs(step - (2.0 * np.pi / 3.0)), 1e-12)
+        _image, geom = simplex(
+            np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], dtype=float),
+            ["a", "b", "c"],
+            ["A", "B", "C"],
+            ["#aa0000", "#00aa00", "#0000aa"],
+            ["C1", "C2", "C3"],
+        )
+        self.assertLess(geom["vertices"][1]["math_x"], 0.0)
+        self.assertLess(geom["vertices"][0]["y"], geom["vertices"][1]["y"])
+        self.assertLess(geom["vertices"][0]["y"], geom["vertices"][2]["y"])
+        center_x = geom["plot"]["x"] + geom["plot"]["width"] / 2.0
+        center_y = geom["plot"]["y"] + geom["plot"]["height"] / 2.0
+        for vertex in geom["vertices"]:
+            self.assertAlmostEqual(vertex["x"], center_x + vertex["math_x"] * geom["radius_px"])
+            self.assertAlmostEqual(vertex["y"], center_y - vertex["math_y"] * geom["radius_px"])
+        self.assertEqual(geom["plot"]["width"], 1200)
+        self.assertEqual(geom["plot"]["height"], 1200)
+        self.assertGreater(geom["width"], 1200)
+        self.assertEqual(geom["scale"], 2)
+        self.assertTrue(geom["opaque"])
+        self.assertEqual(_image.mode, "RGB")
+
+    def test_k1_refused(self):
+        from qbar.messages import text
+        with tempfile.TemporaryDirectory() as tmp:
+            qpath = self._q(os.path.join(tmp, "t.1.Q"), [[1.0]])
+            ids = self._ids(tmp, ["a"])
+            out = os.path.join(tmp, "out")
+            with self.assertRaises(SystemExit) as ctx:
+                qbar.main(["--q", qpath, "--ids", ids, "--polygon", "simplex", "--outdir", out])
+            self.assertEqual(ctx.exception.code, text("polygon_k1", "en"))
+            self.assertFalse(os.path.exists(out))
+            out_zh = os.path.join(tmp, "outzh")
+            with self.assertRaises(SystemExit) as ctx_zh:
+                qbar.main([
+                    "--q", qpath, "--ids", ids, "--polygon", "simplex",
+                    "--language", "zh", "--outdir", out_zh,
+                ])
+            self.assertEqual(ctx_zh.exception.code, text("polygon_k1", "zh"))
+            self.assertNotEqual(text("polygon_k1", "en"), text("polygon_k1", "zh"))
+            self.assertFalse(os.path.exists(out_zh))
+
+    def test_polygon_k_not_in_run(self):
+        from qbar.messages import text
+        with tempfile.TemporaryDirectory() as tmp:
+            q2 = self._q(os.path.join(tmp, "t.2.Q"), [[0.25, 0.75], [0.80, 0.20]])
+            q3 = self._q(os.path.join(tmp, "t.3.Q"), [[0.20, 0.30, 0.50], [0.50, 0.20, 0.30]])
+            ids = self._ids(tmp, ["a", "b"])
+            out = os.path.join(tmp, "out")
+            base = ["--q", q2, q3, "--ids", ids, "--polygon-k", "4"]
+            with self.assertRaises(SystemExit) as ctx:
+                qbar.main(base + ["--polygon", "simplex", "--outdir", out])
+            self.assertEqual(
+                ctx.exception.code,
+                text("polygon_missing_k", "en", k=4, available="2, 3"),
+            )
+            self.assertFalse(os.path.exists(out))
+            out_none = os.path.join(tmp, "none")
+            with self.assertRaises(SystemExit) as ctx_none:
+                qbar.main(base + ["--polygon", "none", "--outdir", out_none])
+            self.assertEqual(
+                ctx_none.exception.code,
+                text("polygon_missing_k", "en", k=4, available="2, 3"),
+            )
+            self.assertFalse(os.path.exists(out_none))
+
+    def test_k2_segment_and_corner_text(self):
+        from qbar.polygon import CORNER_TEXT, polygon_xy, simplex
+        rows = np.array([[0.3, 0.7], [1.0, 0.0], [0.0, 1.0], [0.5, 0.5]], dtype=float)
+        xy = polygon_xy(rows)
+        for row, source in zip(xy, rows):
+            self.assertLess(abs(row[0]), 1e-12)
+            self.assertLess(np.max(np.abs(row - self._independent_xy(source))), 1e-12)
+            self.assertGreaterEqual(row[1], -1.0 - 1e-9)
+            self.assertLessEqual(row[1], 1.0 + 1e-9)
+        _image, geom = simplex(rows, ["a", "b", "c", "d"], ["A"] * 4, ["#112233", "#445566"])
+        self.assertEqual(geom["outline_kind"], "segment")
+        self.assertEqual(geom["corner_text"], "")
+        self.assertFalse(geom["many_to_one"])
+        self.assertGreater(geom["vertices"][0]["math_y"], 0.0)
+        self.assertLess(geom["vertices"][1]["math_y"], 0.0)
+        self.assertLess(geom["vertices"][0]["y"], geom["vertices"][1]["y"])
+        for point in geom["points"]:
+            self.assertLess(abs(point["math_x"]), 1e-12)
+        _image3, geom3 = simplex(
+            np.array([[0.7, 0.2, 0.1]], dtype=float),
+            ["a"], ["A"], ["#111111", "#222222", "#333333"],
+        )
+        self.assertEqual(geom3["corner_text"], "")
+        self.assertFalse(geom3["many_to_one"])
+        self.assertEqual(geom3["outline_kind"], "polygon")
+        _image4, geom4 = simplex(
+            np.array([[0.5, 0.0, 0.5, 0.0], [0.0, 0.5, 0.0, 0.5]], dtype=float),
+            ["a", "b"], ["A", "B"], ["#111111", "#222222", "#333333", "#444444"],
+        )
+        self.assertEqual(geom4["corner_text"], CORNER_TEXT)
+        self.assertEqual(geom4["corner_text"], "K>3: different Q can share one point")
+        self.assertTrue(geom4["many_to_one"])
+        self.assertLess(abs(geom4["points"][0]["math_x"]), 1e-12)
+        self.assertLess(abs(geom4["points"][0]["math_y"]), 1e-12)
+        self.assertLess(abs(geom4["points"][1]["math_x"]), 1e-12)
+        self.assertLess(abs(geom4["points"][1]["math_y"]), 1e-12)
+
+    def test_group_colours_draw_order_and_radius(self):
+        from qbar.plot_static import TAB10_PALETTE
+        from qbar.polygon import (
+            CYCLE_NOTE, GROUP_COLOURS, POINT_R, POINT_R_LARGE, UNGROUPED_COLOUR, simplex,
+        )
+        self.assertEqual(tuple(GROUP_COLOURS), tuple(TAB10_PALETTE))
+        q = np.array([
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.5, 0.5, 0.0],
+        ], dtype=float)
+        _image, geom = simplex(
+            q, ["b1", "a1", "a2", "b2"], ["B", "A", "A", "B"],
+            ["#111111", "#222222", "#333333"],
+        )
+        self.assertEqual(geom["draw_order"], [0, 3, 1, 2])
+        self.assertEqual(geom["points"][0]["colour"], GROUP_COLOURS[0])
+        self.assertEqual(geom["points"][3]["colour"], GROUP_COLOURS[0])
+        self.assertEqual(geom["points"][1]["colour"], GROUP_COLOURS[1])
+        self.assertEqual(geom["group_note"], "")
+        self.assertEqual(geom["point_radius"], POINT_R)
+        tiled = np.tile(np.array([[0.2, 0.5, 0.3]], dtype=float), (11, 1))
+        labels = ["g%02d" % index for index in range(11)]
+        _image, wide = simplex(
+            tiled, ["s%02d" % index for index in range(11)], labels,
+            ["#111111", "#222222", "#333333"],
+        )
+        self.assertEqual(wide["group_note"], CYCLE_NOTE)
+        self.assertEqual(wide["points"][0]["colour"], GROUP_COLOURS[0])
+        self.assertEqual(wide["points"][10]["colour"], GROUP_COLOURS[0])
+        self.assertEqual(wide["points"][1]["colour"], GROUP_COLOURS[1])
+        _image, plain = simplex(
+            np.array([[0.2, 0.8], [0.6, 0.4]], dtype=float),
+            ["a", "b"], ["NA", "other"], ["#aa0000", "#00aa00"],
+            has_groups=False,
+        )
+        self.assertEqual([point["colour"] for point in plain["points"]], [UNGROUPED_COLOUR, UNGROUPED_COLOUR])
+        self.assertEqual(
+            plain["group_legend"],
+            [{"group": "samples", "colour": UNGROUPED_COLOUR, "marker": "circle"}],
+        )
+        self.assertTrue(plain["ungrouped"])
+        self.assertEqual(plain["vertices"][0]["colour"], "#aa0000")
+        self.assertEqual(plain["draw_order"], [0, 1])
+        big_n = 5001
+        big_q = np.full((big_n, 2), 0.5, dtype=float)
+        _image, big = simplex(
+            big_q,
+            ["s%05d" % index for index in range(big_n)],
+            ["g%02d" % (index % 20) for index in range(big_n)],
+            ["#111111", "#222222"],
+        )
+        self.assertEqual(big["point_radius"], POINT_R_LARGE)
+        self.assertEqual(big["points"][0]["radius"], 2.0)
+        edge = np.full((5000, 2), 0.5, dtype=float)
+        _image, edge_geom = simplex(
+            edge,
+            ["s%05d" % index for index in range(5000)],
+            ["A"] * 5000,
+            ["#111111", "#222222"],
+        )
+        self.assertEqual(edge_geom["point_radius"], 3.0)
+
+    def test_twelve_groups_cycle_marker_and_bytes(self):
+        from qbar.polygon import (
+            CYCLE_NOTE, GROUP_COLOURS, MARKERS, SHAPE_NOTE, _note_lines, plan_simplex, simplex,
+        )
+        colours = ["#111111", "#222222", "#333333"]
+        n = 12
+        q = np.tile(np.array([[0.2, 0.5, 0.3]], dtype=float), (n, 1))
+        labels = ["g%02d" % index for index in range(n)]
+        ids = ["s%02d" % index for index in range(n)]
+        image, geom = simplex(q, ids, labels, colours)
+        again, _again = simplex(q, ids, labels, colours)
+        self.assertEqual(image.tobytes(), again.tobytes())
+        self.assertEqual(
+            [item["marker"] for item in geom["group_legend"]],
+            ["circle"] * 10 + ["square"] * 2,
+        )
+        for index, item in enumerate(geom["group_legend"]):
+            self.assertEqual(item["marker"], MARKERS[(index // 10) % 4])
+            self.assertEqual(item["colour"], GROUP_COLOURS[index % 10])
+            self.assertIn("marker", item)
+            self.assertEqual(geom["points"][index]["marker"], item["marker"])
+            self.assertEqual(geom["points"][index]["colour"], item["colour"])
+        self.assertEqual(geom["group_note"], CYCLE_NOTE)
+        self.assertEqual(geom["group_note"], "Colours repeat after 10 groups; marker shape changes.")
+        self.assertEqual(geom["shape_note"], "")
+        self.assertEqual(
+            _note_lines(geom["group_note"]),
+            ["Colours repeat after 10 groups;", "marker shape changes."],
+        )
+        ten = plan_simplex(
+            np.tile(q[:1], (10, 1)),
+            ["s%02d" % index for index in range(10)],
+            ["g%02d" % index for index in range(10)],
+            colours,
+        )
+        self.assertEqual([item["marker"] for item in ten["group_legend"]], ["circle"] * 10)
+        self.assertEqual(ten["group_note"], "")
+        self.assertEqual(ten["shape_note"], "")
+        forty = plan_simplex(
+            np.tile(np.array([[1.0, 0.0]], dtype=float), (40, 1)),
+            ["s%02d" % index for index in range(40)],
+            ["g%02d" % index for index in range(40)],
+            ["#111111", "#222222"],
+        )
+        self.assertEqual(forty["group_legend"][0]["marker"], "circle")
+        self.assertEqual(forty["group_legend"][10]["marker"], "square")
+        self.assertEqual(forty["group_legend"][20]["marker"], "triangle")
+        self.assertEqual(forty["group_legend"][30]["marker"], "diamond")
+        self.assertEqual(forty["group_note"], CYCLE_NOTE)
+        self.assertEqual(forty["shape_note"], "")
+        wide = plan_simplex(
+            np.tile(np.array([[1.0, 0.0]], dtype=float), (41, 1)),
+            ["s%02d" % index for index in range(41)],
+            ["g%02d" % index for index in range(41)],
+            ["#111111", "#222222"],
+        )
+        self.assertEqual(wide["shape_note"], SHAPE_NOTE)
+        self.assertEqual(wide["shape_note"], "Shapes repeat after 40 groups.")
+        self.assertEqual(wide["group_legend"][40]["marker"], "circle")
+        self.assertEqual(wide["points"][40]["marker"], "circle")
+
+    def test_marker_extents_match_the_circle(self):
+        import math
+        from qbar.polygon import _marker_points
+        radius = 3.0
+        diameter = 2.0 * radius
+        for marker in ("square", "diamond"):
+            pts = _marker_points(10.0, 20.0, radius, marker)
+            xs = [point[0] for point in pts]
+            ys = [point[1] for point in pts]
+            self.assertAlmostEqual(max(xs) - min(xs), diameter, places=9)
+            self.assertAlmostEqual(max(ys) - min(ys), diameter, places=9)
+            self.assertAlmostEqual((max(xs) + min(xs)) / 2.0, 10.0, places=9)
+            self.assertAlmostEqual((max(ys) + min(ys)) / 2.0, 20.0, places=9)
+        pts = _marker_points(0.0, 0.0, radius, "triangle")
+        xs = [point[0] for point in pts]
+        ys = [point[1] for point in pts]
+        self.assertAlmostEqual(max(xs) - min(xs), diameter, places=9)
+        self.assertAlmostEqual(max(ys) - min(ys), radius * math.sqrt(3.0), places=9)
+        self.assertAlmostEqual((max(xs) + min(xs)) / 2.0, 0.0, places=9)
+        self.assertAlmostEqual((max(ys) + min(ys)) / 2.0, 0.0, places=9)
+        top = min(pts, key=lambda point: point[1])
+        self.assertAlmostEqual(top[0], 0.0, places=9)
+        self.assertAlmostEqual(top[1], min(ys), places=9)
+
+    def test_long_labels_stay_inside_and_short_labels_stay(self):
+        import contextlib
+        import io
+        from qbar.messages import text
+        from qbar.polygon import simplex
+        long_name = "A" * 60
+        zh = text("polygon_label_truncated", "zh", names="C2")
+        self.assertIn("C2", zh)
+        self.assertIn("图例", zh)
+        for k in (4, 6):
+            q = np.full((2, k), 1.0 / k, dtype=float)
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                image, geom = simplex(
+                    q, ["s0", "s1"], ["A", "B"],
+                    ["#112233"] * k, [long_name] * k,
+                )
+            note = err.getvalue()
+            self.assertEqual(note.count("\n"), 1)
+            self.assertIn("bar legend", note)
+            self.assertIn("C2", geom["truncated_vertices"])
+            self.assertIn("C2", note)
+            for name in geom["truncated_vertices"]:
+                self.assertIn(name, note)
+            gutter = geom["plot"]["x"] + geom["plot"]["width"]
+            pixels = image.load()
+            width, height = image.size
+            for y in range(height):
+                self.assertEqual(pixels[0, y], (255, 255, 255))
+            for vertex in geom["vertices"]:
+                if vertex["truncated"]:
+                    self.assertTrue(vertex["label"].endswith("..."))
+                    self.assertLess(len(vertex["label"]), 60)
+                    self.assertEqual(vertex["label_full"], long_name)
+                else:
+                    self.assertEqual(vertex["label"], long_name)
+                if vertex["label_anchor"] != "lm":
+                    continue
+                y_mid = int(round(vertex["y"] + vertex["label_dy"]))
+                y0 = max(0, y_mid - 16)
+                y1 = min(height, y_mid + 16)
+                for y in range(y0, y1):
+                    for x in range(int(gutter), width):
+                        self.assertEqual(pixels[x, y], (255, 255, 255))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            _image, geom = simplex(
+                np.full((1, 4), 0.25, dtype=float),
+                ["s0"], ["A"], ["#112233"] * 4, ["C1", "C2", "C3", "C4"],
+            )
+        self.assertEqual(err.getvalue(), "")
+        self.assertEqual(geom["truncated_vertices"], [])
+        self.assertEqual(
+            [vertex["label"] for vertex in geom["vertices"]],
+            ["C1", "C2", "C3", "C4"],
+        )
+        self.assertTrue(all(not vertex["truncated"] for vertex in geom["vertices"]))
+
+    def test_tsv_bar_order_raw_q_and_selected_k(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ids = self._ids(tmp, ["a", "b"])
+            groups = self._groups(tmp, ["a", "b"], ["A", "A"])
+            q3 = self._q(os.path.join(tmp, "t.3.Q"), [[0.5, 0.2, 0.1], [0.7, 0.2, 0.1]])
+            out = os.path.join(tmp, "out")
+            result = qbar.api.run(qbar.build_parser().parse_args([
+                "--q", q3, "--ids", ids, "--groups", groups,
+                "--polygon", "simplex", "--within", "input", "--outdir", out,
+            ]), [
+                "--q", q3, "--ids", ids, "--groups", groups,
+                "--polygon", "simplex", "--within", "input", "--outdir", out,
+            ])
+            with open(os.path.join(out, "polygon_K3.tsv"), encoding="utf-8") as handle:
+                body = handle.read()
+            self.assertTrue(body.endswith("\n"))
+            lines = body.splitlines()
+            self.assertEqual(lines[0], "iid\tgroup\tx\ty\tq1\tq2\tq3")
+            self.assertEqual(len(lines), 3)
+            bar_ids, bar_groups = self._bar_rows(out)
+            plotted = result.aligned[3][result.order]
+            expect = self._independent_xy(plotted)
+            for index, line in enumerate(lines[1:]):
+                fields = line.split("\t")
+                self.assertEqual(fields[0], bar_ids[index])
+                self.assertEqual(fields[1], bar_groups[index])
+                self.assertEqual(fields[2], "%.6f" % expect[index, 0])
+                self.assertEqual(fields[3], "%.6f" % expect[index, 1])
+                for column in range(3):
+                    self.assertEqual(fields[4 + column], "%.6f" % plotted[index, column])
+            self.assertEqual(lines[1].split("\t")[4:7], ["0.500000", "0.200000", "0.100000"])
+            self.assertNotEqual(lines[1].split("\t")[3], "0.437500")
+            self.assertTrue(os.path.isfile(os.path.join(out, "polygon_K3.png")))
+            q2 = self._q(os.path.join(tmp, "t.2.Q"), [[0.2, 0.8], [0.6, 0.4]])
+            largest = os.path.join(tmp, "largest")
+            qbar.main([
+                "--q", q2, q3, "--ids", ids, "--groups", groups,
+                "--polygon", "simplex", "--outdir", largest,
+            ])
+            self.assertTrue(os.path.isfile(os.path.join(largest, "polygon_K3.png")))
+            self.assertTrue(os.path.isfile(os.path.join(largest, "polygon_K3.tsv")))
+            self.assertFalse(os.path.isfile(os.path.join(largest, "polygon_K2.png")))
+            chosen = os.path.join(tmp, "chosen")
+            qbar.main([
+                "--q", q2, q3, "--ids", ids, "--groups", groups,
+                "--polygon", "simplex", "--polygon-k", "2", "--outdir", chosen,
+            ])
+            self.assertTrue(os.path.isfile(os.path.join(chosen, "polygon_K2.png")))
+            self.assertFalse(os.path.isfile(os.path.join(chosen, "polygon_K3.png")))
+
+    def test_colours_match_bar_after_permutation(self):
+        from qbar.api import column_owners, legend_lines
+        from qbar.plot_static import TAB10_PALETTE
+        from qbar.polygon import simplex
+        with tempfile.TemporaryDirectory() as tmp:
+            ids = self._ids(tmp, ["a", "b", "c"])
+            groups = self._groups(tmp, ["a", "b", "c"], ["A", "A", "B"])
+            q2 = self._q(os.path.join(tmp, "t.2.Q"), [[0.80, 0.20], [0.70, 0.30], [0.20, 0.80]])
+            q3_rows = [[0.10, 0.70, 0.20], [0.15, 0.65, 0.20], [0.70, 0.10, 0.20]]
+            q3 = self._q(os.path.join(tmp, "t.3.Q"), q3_rows)
+            argv = [
+                "--q", q2, q3, "--ids", ids, "--groups", groups,
+                "--palette", "tab10", "--polygon", "simplex", "--polygon-k", "3",
+                "--outdir", os.path.join(tmp, "out"),
+            ]
+            result = qbar.api.run(qbar.build_parser().parse_args(argv), argv)
+            self.assertNotEqual(list(result.permutations[3]), [0, 1, 2])
+            self.assertEqual(list(result.colours[3]), list(TAB10_PALETTE[:3]))
+            self.assertFalse(np.allclose(result.aligned[3], np.asarray(q3_rows, dtype=float)))
+            with open(os.path.join(tmp, "out", "perm_K3.tsv"), encoding="utf-8") as handle:
+                hexes = [line.split("\t")[2] for line in handle.read().splitlines()[1:]]
+            self.assertEqual(hexes, list(result.colours[3]))
+            bar_ids, bar_groups = self._bar_rows(os.path.join(tmp, "out"))
+            plotted = result.aligned[3][result.order]
+            owners = column_owners(result.aligned[3], ["a", "b", "c"], ["A", "A", "B"], {})
+            legend = legend_lines(result.aligned[3], ["A", "A", "B"], owners, result.colours[3])
+            image, geom = simplex(plotted, bar_ids, bar_groups, result.colours[3], legend, k=3)
+            self.assertEqual(geom["colours"], list(result.colours[3]))
+            with open(os.path.join(tmp, "out", "polygon_K3.tsv"), encoding="utf-8") as handle:
+                lines = handle.read().splitlines()
+            expect = self._independent_xy(plotted)
+            for index, line in enumerate(lines[1:]):
+                fields = line.split("\t")
+                for column in range(3):
+                    self.assertEqual(fields[4 + column], "%.6f" % plotted[index, column])
+                self.assertEqual(fields[2], "%.6f" % expect[index, 0])
+                self.assertEqual(fields[3], "%.6f" % expect[index, 1])
+            with open(os.path.join(tmp, "out", "polygon_K3.png"), "rb") as handle:
+                self.assertEqual(handle.read(), self._png_bytes(image))
+            painted = [
+                "--q", q2, q3, "--ids", ids, "--groups", groups,
+                "--palette", "tab10", "--color", "C1=#112233",
+                "--polygon", "simplex", "--polygon-k", "3",
+                "--outdir", os.path.join(tmp, "painted"),
+            ]
+            painted_result = qbar.api.run(qbar.build_parser().parse_args(painted), painted)
+            self.assertEqual(painted_result.colours[3][0], "#112233")
+            bar_ids, bar_groups = self._bar_rows(os.path.join(tmp, "painted"))
+            owners = column_owners(
+                painted_result.aligned[3], ["a", "b", "c"], ["A", "A", "B"], {},
+            )
+            legend = legend_lines(
+                painted_result.aligned[3], ["A", "A", "B"], owners, painted_result.colours[3],
+            )
+            _image, geom = simplex(
+                painted_result.aligned[3][painted_result.order],
+                bar_ids, bar_groups, painted_result.colours[3], legend, k=3,
+            )
+            self.assertEqual(geom["vertices"][0]["colour"], "#112233")
+            self.assertEqual(geom["colours"], list(painted_result.colours[3]))
+
+    def test_state_names_and_colours(self):
+        import json
+        from qbar.api import column_owners, legend_lines
+        from qbar.polygon import simplex
+        with tempfile.TemporaryDirectory() as tmp:
+            ids = self._ids(tmp, ["a", "b"])
+            groups = self._groups(tmp, ["a", "b"], ["A", "B"])
+            q2 = self._q(os.path.join(tmp, "t.2.Q"), [[0.8, 0.2], [0.25, 0.75]])
+            editor = os.path.join(tmp, "editor")
+            qbar.main(["--q", q2, "--ids", ids, "--groups", groups, "--editor", "--outdir", editor])
+            with open(os.path.join(editor, "state.json"), encoding="utf-8") as handle:
+                state = json.load(handle)
+            state["clusters"]["2"][0]["colour"] = "#112233"
+            state["clusters"]["2"][1]["colour"] = "#445566"
+            state["clusters"]["2"][0]["name"] = "Alpha"
+            state["clusters"]["2"][1]["name"] = "Beta"
+            path = os.path.join(tmp, "state.json")
+            with open(path, "w", encoding="utf-8", newline="\n") as handle:
+                json.dump(state, handle)
+                handle.write("\n")
+            argv = [
+                "--q", q2, "--ids", ids, "--groups", groups,
+                "--state", path, "--polygon", "simplex",
+                "--outdir", os.path.join(tmp, "replay"),
+            ]
+            result = qbar.api.run(qbar.build_parser().parse_args(argv), argv)
+            self.assertEqual(list(result.colours[2]), ["#112233", "#445566"])
+            bar_ids, bar_groups = self._bar_rows(os.path.join(tmp, "replay"))
+            owners = column_owners(result.aligned[2], ["a", "b"], ["A", "B"], {})
+            legend = legend_lines(
+                result.aligned[2], ["A", "B"], owners, result.colours[2], ["Alpha", "Beta"],
+            )
+            image, geom = simplex(
+                result.aligned[2][result.order],
+                bar_ids, bar_groups, result.colours[2], legend, k=2,
+            )
+            self.assertTrue(geom["legend"][0].startswith("Alpha"))
+            self.assertTrue(geom["legend"][1].startswith("Beta"))
+            self.assertEqual(geom["colours"], ["#112233", "#445566"])
+            with open(os.path.join(tmp, "replay", "polygon_K2.png"), "rb") as handle:
+                self.assertEqual(handle.read(), self._png_bytes(image))
+
+    def test_core_mask_keeps_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ids = self._ids(tmp, ["a", "b"])
+            groups = self._groups(tmp, ["a", "b"], ["A", "A"])
+            q2 = self._q(os.path.join(tmp, "t.2.Q"), [[0.90, 0.10], [0.60, 0.40]])
+            q3 = self._q(os.path.join(tmp, "t.3.Q"), [[0.85, 0.10, 0.05], [0.55, 0.25, 0.20]])
+            out = os.path.join(tmp, "out")
+            argv = [
+                "--q", q2, q3, "--ids", ids, "--groups", groups,
+                "--align-mode", "core", "--align-groups", "A", "--qmax", "0.75",
+                "--polygon", "simplex", "--polygon-k", "3", "--outdir", out,
+            ]
+            result = qbar.api.run(qbar.build_parser().parse_args(argv), argv)
+            with open(os.path.join(out, "polygon_K3.tsv"), encoding="utf-8") as handle:
+                lines = handle.read().splitlines()
+            self.assertEqual(len(lines), 3)
+            plotted = result.aligned[3][result.order]
+            for index, line in enumerate(lines[1:]):
+                fields = line.split("\t")
+                self.assertEqual(fields[4], "%.6f" % plotted[index, 0])
+                self.assertEqual(fields[5], "%.6f" % plotted[index, 1])
+                self.assertEqual(fields[6], "%.6f" % plotted[index, 2])
+
+    def test_default_writes_no_polygon_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            qpath = self._q(os.path.join(tmp, "t.2.Q"), [[0.25, 0.75], [0.40, 0.60]])
+            ids = self._ids(tmp, ["a", "b"])
+            plain = os.path.join(tmp, "plain")
+            qbar.main(["--q", qpath, "--ids", ids, "--outdir", plain])
+            self.assertFalse(any(name.startswith("polygon_") for name in os.listdir(plain)))
+            explicit = os.path.join(tmp, "explicit")
+            qbar.main([
+                "--q", qpath, "--ids", ids, "--polygon", "none", "--outdir", explicit,
+            ])
+            self.assertFalse(any(name.startswith("polygon_") for name in os.listdir(explicit)))
+
+    def test_deterministic_bytes(self):
+        from qbar.polygon import simplex
+        q = np.array([[0.75, 0.25], [0.25, 0.75], [0.0, 1.0]], dtype=float)
+        first, _geom = simplex(q, ["a", "b", "c"], ["A", "A", "B"], ["#112233", "#445566"])
+        second, _geom2 = simplex(q, ["a", "b", "c"], ["A", "A", "B"], ["#112233", "#445566"])
+        self.assertEqual(self._png_bytes(first), self._png_bytes(second))
+        with tempfile.TemporaryDirectory() as tmp:
+            ids = self._ids(tmp, ["a", "b", "c"])
+            groups = self._groups(tmp, ["a", "b", "c"], ["A", "A", "B"])
+            qpath = self._q(os.path.join(tmp, "t.2.Q"), q)
+            left = os.path.join(tmp, "left")
+            right = os.path.join(tmp, "right")
+            argv_left = [
+                "--q", qpath, "--ids", ids, "--groups", groups,
+                "--polygon", "simplex", "--outdir", left,
+            ]
+            argv_right = [
+                "--q", qpath, "--ids", ids, "--groups", groups,
+                "--polygon", "simplex", "--outdir", right,
+            ]
+            qbar.main(argv_left)
+            qbar.main(argv_right)
+            for name in ("polygon_K2.png", "polygon_K2.tsv"):
+                with open(os.path.join(left, name), "rb") as handle:
+                    left_bytes = handle.read()
+                with open(os.path.join(right, name), "rb") as handle:
+                    right_bytes = handle.read()
+                self.assertEqual(left_bytes, right_bytes)
+
+    def test_vector_writes_no_polygon_pdf(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            qpath = self._q(os.path.join(tmp, "t.2.Q"), [[0.25, 0.75], [0.40, 0.60]])
+            ids = self._ids(tmp, ["a", "b"])
+            out = os.path.join(tmp, "out")
+            qbar.main([
+                "--q", qpath, "--ids", ids, "--polygon", "simplex",
+                "--vector", "both", "--outdir", out,
+            ])
+            self.assertTrue(os.path.isfile(os.path.join(out, "polygon_K2.png")))
+            self.assertFalse(os.path.isfile(os.path.join(out, "polygon_K2.pdf")))
+            self.assertFalse(os.path.isfile(os.path.join(out, "polygon_K2.svg")))
+            self.assertTrue(os.path.isfile(os.path.join(out, "bar_K2.svg")))
+
+    def test_tab_in_iid_is_refused(self):
+        from qbar.messages import text
+        from qbar.polygon import simplex
+        with self.assertRaises(SystemExit) as ctx:
+            simplex(
+                np.array([[0.4, 0.6]], dtype=float),
+                ["bad\tid"], ["A"], ["#111111", "#222222"],
+            )
+        self.assertEqual(ctx.exception.code, text("polygon_field", "en", kind="iid", row=1))
+        self.assertIn("iid", text("polygon_field", "zh", kind="iid", row=1))
+
+    def test_config_keys_are_accepted(self):
+        from qbar.config import validate_config
+        parser = qbar.build_parser()
+        coerced = validate_config({"polygon": "simplex", "polygon_k": 4}, parser)
+        self.assertEqual(coerced["polygon"], "simplex")
+        self.assertEqual(coerced["polygon_k"], 4)
+        with self.assertRaises(SystemExit) as ctx:
+            validate_config({"polygon": "pie"}, parser)
+        self.assertIn("polygon", ctx.exception.code)
+
+    @unittest.skipUnless(_yaml_mod is not None, "PyYAML is not installed")
+    def test_config_key_polygon(self):
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            q2 = self._q(os.path.join(tmp, "t.2.Q"), [[0.25, 0.75], [0.40, 0.60]])
+            q3 = self._q(os.path.join(tmp, "t.3.Q"), [[0.2, 0.3, 0.5], [0.5, 0.2, 0.3]])
+            ids = self._ids(tmp, ["a", "b"])
+            cfg = os.path.join(tmp, "run.yaml")
+            with open(cfg, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("polygon: simplex\npolygon_k: 2\n")
+            out = os.path.join(tmp, "out")
+            qbar.main(["--config", cfg, "--q", q2, q3, "--ids", ids, "--outdir", out])
+            self.assertTrue(os.path.isfile(os.path.join(out, "polygon_K2.png")))
+            self.assertFalse(os.path.isfile(os.path.join(out, "polygon_K3.png")))
+            with open(os.path.join(out, "config_resolved.json"), encoding="utf-8") as handle:
+                payload = json.load(handle)
+            self.assertEqual(payload["polygon"], "simplex")
+            self.assertEqual(payload["polygon_k"], 2)
+            self.assertEqual(payload["sources"]["polygon"], "config")
+            self.assertEqual(payload["sources"]["polygon_k"], "config")
+            self.assertEqual(payload["id_col"], "analysis_IID")
+            self.assertEqual(payload["group_col"], "Dong_Grp")
+            self.assertEqual(payload["palette"], "science")
+
+    def test_polygon_import_does_not_load_pil(self):
+        src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src")
+        with open(os.path.join(src, "qbar", "polygon.py"), encoding="utf-8") as handle:
+            for line in handle:
+                self.assertFalse(line.startswith("import PIL"))
+                self.assertFalse(line.startswith("from PIL"))
+                self.assertNotIn("mock-up", line)
+                self.assertNotIn("mockup", line.lower())
+        if os.environ.get("QBAR_TEST_INSTALLED") == "1":
+            code = (
+                "import qbar.polygon\n"
+                "import sys\n"
+                "raise SystemExit(0 if 'PIL' not in sys.modules else 1)\n"
+            )
+        else:
+            code = (
+                "import sys\n"
+                "sys.path.insert(0, %r)\n"
+                "import qbar.polygon\n"
+                "raise SystemExit(0 if 'PIL' not in sys.modules else 1)\n"
+            ) % src
+        env = os.environ.copy()
+        env.pop("PYTHONPATH", None)
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env["PYTHONHASHSEED"] = "0"
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=tempfile.mkdtemp(),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
 
 
 def _export_bytes(root):

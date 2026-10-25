@@ -1383,6 +1383,62 @@ _CATALOG = {
         "en": "Export order must list each row once, got %(got)s entries for %(rows)s rows.",
         "zh": "导出行序必须每个行号出现一次，收到 %(got)s 项，行数是 %(rows)s。",
     },
+    "help_polygon": {
+        "en": "none writes no polygon file (default). simplex writes polygon_K<k>.png and polygon_K<k>.tsv for one aligned K. Each point is the Q-weighted mean of the vertices. C1 is at the top and later vertices go counter-clockwise. Rows match the bar, in bar order, and are not rescaled. K=1 is refused. When K is above 3 the figure says that different Q can share one point. --vector does not write a polygon PDF or SVG.",
+        "zh": "none 不写多边形文件（默认）。simplex 为一个对齐后的 K 写 polygon_K<k>.png 和 polygon_K<k>.tsv。每个点是顶点坐标的 Q 加权平均。C1 在上方，之后的顶点逆时针排列。行与条形图相同，按条形图顺序，不重新归一。K=1 会拒绝。K 大于 3 时，图上写明不同的 Q 可以落在同一个点。--vector 不为多边形写 PDF 或 SVG。",
+    },
+    "help_polygon_k": {
+        "en": "K used by --polygon simplex. The default is the largest K in the run. A value that is not in the run is an error, and the message names the K values that are.",
+        "zh": "simplex 使用的 K。默认是这次运行里最大的 K。不在运行里的 K 会报错，并列出可用的 K。",
+    },
+    "polygon_choice": {
+        "en": "--polygon must be none or simplex, got %(value)s.",
+        "zh": "--polygon 只能是 none 或 simplex，收到 %(value)s。",
+    },
+    "polygon_k1": {
+        "en": "--polygon refuses K=1. A single vertex is not a polygon.",
+        "zh": "--polygon 拒绝 K=1。一个顶点不能做多边形比较。",
+    },
+    "polygon_missing_k": {
+        "en": "--polygon-k %(k)s is not in this run. Available K: %(available)s.",
+        "zh": "--polygon-k %(k)s 不在这次运行里。可用的 K：%(available)s。",
+    },
+    "polygon_columns": {
+        "en": "Polygon plot needs at least 2 columns, got %(k)s.",
+        "zh": "多边形图至少需要 2 列，收到 %(k)s。",
+    },
+    "polygon_shape": {
+        "en": "Polygon plot needs a 2-d Q matrix, got %(ndim)s dimensions.",
+        "zh": "多边形图需要二维 Q，收到 %(ndim)s 维。",
+    },
+    "polygon_rows": {
+        "en": "Polygon plot needs one id per row, got %(ids)s ids and %(rows)s rows.",
+        "zh": "多边形图需要每行一个 id，收到 %(ids)s 个 id 和 %(rows)s 行。",
+    },
+    "polygon_groups": {
+        "en": "Polygon plot needs one group per row, got %(groups)s groups and %(rows)s rows.",
+        "zh": "多边形图需要每行一个组，收到 %(groups)s 个组和 %(rows)s 行。",
+    },
+    "polygon_colours": {
+        "en": "Polygon plot needs %(k)s colours, got %(got)s.",
+        "zh": "多边形图需要 %(k)s 个颜色，收到 %(got)s 个。",
+    },
+    "polygon_legend": {
+        "en": "Polygon plot needs %(k)s legend names, got %(got)s.",
+        "zh": "多边形图需要 %(k)s 个图例名，收到 %(got)s 个。",
+    },
+    "polygon_k_mismatch": {
+        "en": "Polygon plot K %(k)s does not match %(cols)s columns.",
+        "zh": "多边形图的 K %(k)s 和列数 %(cols)s 不一致。",
+    },
+    "polygon_field": {
+        "en": "Polygon TSV refused %(kind)s at plotted row %(row)s because it contains a tab or a newline.",
+        "zh": "多边形表拒绝第 %(row)s 行的 %(kind)s，因为它含有制表符或换行。",
+    },
+    "polygon_label_truncated": {
+        "en": "Note: vertex labels were truncated for %(names)s. The full name is in the bar legend.",
+        "zh": "提示：顶点 %(names)s 的标签已截断。完整名称在条形图图例中。",
+    },
 }
 
 
