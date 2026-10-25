@@ -53,6 +53,7 @@ Each file under [factpacks/](factpacks/) records one change: the flags, the file
 | [S10](factpacks/S10.md) | Provenance | `--provenance` |
 | [S12](factpacks/S12.md) | Exports for other tools | `--export` |
 | [F1](factpacks/F1.md) | Hierarchical clustering across samples or groups | `--order-mode`, `--group-order`, `--dendrogram`, `--hclust-max-bytes` |
+| [F2](factpacks/F2.md) | Index of F2a to F2e | `--align-method` values in F2a to F2d, and `--align-compare` |
 | [F2a](factpacks/F2a.md) | clumpp-full | `--align-method` value `clumpp-full` |
 | [F2b](factpacks/F2b.md) | clumpp-greedy | `--align-method` value `clumpp-greedy` |
 | [F2c](factpacks/F2c.md) | clumpp-largek | `--align-method` value `clumpp-largek` |

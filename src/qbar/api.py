@@ -553,7 +553,7 @@ def run(args: argparse.Namespace, argv: list[str] | None = None) -> RunResult:
     The label has no directory. Otherwise the run label is empty.
     ``args.editor`` defaults to off. When set, the run also writes
     ``editor.html`` and ``state.json``. The page reuses the panel drawing
-    code.     ``args.state`` replays a state file after alignment: sample order,
+    code. ``args.state`` replays a state file after alignment: sample order,
     group order, per-K column swaps, names, and colours. It is an error
     together with ``--order-file``, ``--color``, or ``--color-file``
     when those flags were passed on the command line. The same three keys
