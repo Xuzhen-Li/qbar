@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
-The package version is 0.2.0.dev0. No git tag exists.
+## 0.3.0 - 2026-10-26
 
 ### Added
 
@@ -46,7 +46,7 @@ The package version is 0.2.0.dev0. No git tag exists.
 - `docs/cli.md` is generated from the argument parser by `tools/gen_cli_docs.py`.
 - `docs/choosing-alignment-method.md` describes the four alignment methods. Speed and agreement are not filled in.
 - `CONTRIBUTING.md`, the Contributor Covenant 2.1 code of conduct, a bug-report template, and a pull-request template.
-- `CITATION.cff` and `.zenodo.json` describe version 0.2.0.dev0. No release date is set, because there is no release.
+- `CITATION.cff` version is 0.3.0 and date-released is 2026-10-26; `.zenodo.json` has no version field.
 - `README.md` and `README.zh.md` link to `docs/choosing-alignment-method.md` from the alignment-method section.
 - GitHub Actions also runs on Python 3.15, on the same two operating systems.
 - GitHub Actions installs the package and runs the tests on ubuntu-latest and macos-latest for Python 3.9 and 3.14. The workflow does not compare PNG or PDF bytes (58369c4).
@@ -61,6 +61,7 @@ The package version is 0.2.0.dev0. No git tag exists.
 
 ### Changed
 
+- The package version is 0.3.0, and `CITATION.cff` `date-released` is 2026-10-26.
 - Pong alignment scores each raw column pair once and each merged column once. The bar image counts cumulative bounds on a finite non-decreasing row and still uses searchsorted on any other row. Floats and pixels match the previous bodies. A constant column still has Pearson correlation 0.
 - The default bar colours are now the Science palette (`--palette science`). `--palette classic` restores the previous 20 colours. `--palette` also accepts `tab10`, `set1`, `dark2`, and `paired`. `--color-lock on` keeps each aligned column's colour from the lowest K unless `--color` sets that column. The default is `off`. `--greyscale-preview` writes `panel_grey.png` and is off by default.
 - The scipy dependency in `pyproject.toml` and `requirements.txt` is now `scipy>=1.9.0`, because clumppling-ilp uses `scipy.optimize.milp`.
