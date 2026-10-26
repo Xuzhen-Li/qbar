@@ -1,0 +1,133 @@
+name: pages
+
+# Publish one tag directory on the gh-pages branch.
+# This workflow does not enable GitHub Pages. The repository owner does
+# that in Settings after the first publish.
+
+"on":
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish, for example v0.3.0"
+        required: true
+        type: string
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      PUBLISH_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - name: Check out the tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.PUBLISH_TAG }}
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/tests/package-lock.json
+
+      - name: Install qbar
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install .
+
+      - name: Build the web page
+        run: python tools/build_web.py
+
+      - name: Check the version against the tag
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          tag = os.environ["PUBLISH_TAG"]
+          if "/" in tag or "\\" in tag or ".." in tag:
+              sys.exit("refusing tag %s" % tag)
+          if not tag.startswith("v") or tag.count(".") < 2:
+              sys.exit("tag must look like vX.Y.Z, got %s" % tag)
+          want = tag[1:]
+          info = json.load(open("web/dist/build-info.json", encoding="utf-8"))
+          got = info.get("version")
+          if got != want:
+              sys.exit(
+                  "build-info version %s does not equal %s (tag %s without the leading v)"
+                  % (got, want, tag)
+              )
+          if info.get("dirty"):
+              sys.exit("refusing a dirty tree")
+          print("version", got)
+          print("commit", info.get("commit"))
+          PY
+
+      - name: Install the Playwright package
+        working-directory: web/tests
+        run: npm ci
+
+      - name: Install Chromium
+        working-directory: web/tests
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the Playwright suite
+        working-directory: web/tests
+        env:
+          PYTHONHASHSEED: "0"
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: npx playwright test
+
+      - name: Stage the site files
+        run: |
+          site="${RUNNER_TEMP}/qbar-site"
+          mkdir -p "${site}/dist"
+          cp web/index.html web/app.js web/worker.js web/page_argv.mjs web/style.css "${site}/"
+          cp -a web/dist/. "${site}/dist/"
+          test -f "${site}/dist/build-info.json"
+          test -f "${site}/dist/manifest.json"
+          test ! -d "${site}/tests"
+          echo "QBAR_SITE=${site}" >> "${GITHUB_ENV}"
+
+      - name: Publish this tag directory
+        uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.1.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ${{ env.QBAR_SITE }}
+          publish_branch: gh-pages
+          destination_dir: ${{ env.PUBLISH_TAG }}
+          keep_files: true
+          user_name: qbar-pages
+          user_email: qbar-pages@users.noreply.github.com
+          full_commit_message: "Publish ${{ env.PUBLISH_TAG }}"
+
+      - name: Refresh the version list
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          dest="${RUNNER_TEMP}/gh-pages-index"
+          cp tools/write_pages_index.py "${RUNNER_TEMP}/write_pages_index.py"
+          git -c "http.extraheader=AUTHORIZATION: bearer ${GITHUB_TOKEN}" \
+            clone --branch gh-pages --single-branch \
+            "https://github.com/${GITHUB_REPOSITORY}.git" "${dest}"
+          python3 "${RUNNER_TEMP}/write_pages_index.py" "${dest}"
+          git -C "${dest}" add index.html
+          if git -C "${dest}" diff --cached --quiet; then
+            echo "index.html unchanged"
+          else
+            git -C "${dest}" -c user.name=qbar-pages -c user.email=qbar-pages@users.noreply.github.com \
+              commit -m "List published versions"
+            git -C "${dest}" -c "http.extraheader=AUTHORIZATION: bearer ${GITHUB_TOKEN}" \
+              push origin gh-pages
+          fi

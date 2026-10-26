@@ -14,7 +14,7 @@ installs this wheel with dependencies turned off.
 It does not use the network. It needs a build backend that is already
 installed. Pyodide files are not downloaded. Each file that is already in
 OUTDIR/pyodide is checked against web/pyodide-pins.json. A missing file makes
-this command exit 3 after the wheel manifest is written. A file that is
+this command exit 3 after the wheel manifest and build-info.json are written. A file that is
 present and does not match is left in place and the command exits 1.
 
 A normal run downloads any missing pinned file from the source URL in
@@ -24,10 +24,15 @@ does not match the pin is not given that final name. A file that is already
 present and does not match is left in place. A later run that finds every
 pinned file already matching downloads nothing.
 
-The script writes OUTDIR/manifest.json. A later run replaces that manifest
-and a wheel file of the same name. It does not delete other files. If more
-than one qbar_plot wheel is already in OUTDIR, the script stops and names
-them.
+The script writes OUTDIR/manifest.json and OUTDIR/build-info.json. A later
+run replaces that manifest, that build-info file, and a wheel file of the
+same name. It does not delete other files. If more than one qbar_plot wheel
+is already in OUTDIR, the script stops and names them.
+
+build-info.json records the version from src/qbar/__init__.py, the full
+SHA from ``git rev-parse HEAD``, and dirty true when ``git status
+--porcelain`` is not empty. The display line is ``qbar <version> (commit
+<12-char sha>)``, with `` dirty`` added when dirty is true.
 """
 from __future__ import annotations
 
@@ -226,6 +231,72 @@ def install_pyodide(root, outdir, offline):
     return 0
 
 
+def read_version(root):
+    path = os.path.join(root, "src", "qbar", "__init__.py")
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            if line.startswith("__version__"):
+                parts = line.split("=", 1)
+                if len(parts) == 2:
+                    return parts[1].strip().strip("\"'")
+    print("src/qbar/__init__.py has no __version__", file=sys.stderr)
+    return None
+
+
+def git_commit_and_dirty(root):
+    """Return (full SHA or unknown, dirty)."""
+    rev = subprocess.run(
+        ["git", "-C", root, "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    status = subprocess.run(
+        ["git", "-C", root, "status", "--porcelain"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if rev.returncode != 0 or status.returncode != 0:
+        return "unknown", True
+    commit = rev.stdout.strip()
+    if len(commit) != 40 or any(ch not in "0123456789abcdef" for ch in commit):
+        return "unknown", True
+    return commit, bool(status.stdout.strip())
+
+
+def display_line(version, commit, dirty):
+    short = commit if len(commit) < 12 else commit[:12]
+    text = "qbar %s (commit %s)" % (version, short)
+    if dirty:
+        text += " dirty"
+    return text
+
+
+def write_build_info(root, outdir):
+    """Write OUTDIR/build-info.json. Return the object, or None on failure."""
+    version = read_version(root)
+    if not version:
+        return None
+    commit, dirty = git_commit_and_dirty(root)
+    payload = {
+        "version": version,
+        "commit": commit,
+        "dirty": dirty,
+        "display": display_line(version, commit, dirty),
+    }
+    os.makedirs(outdir, exist_ok=True)
+    path = os.path.join(outdir, "build-info.json")
+    text = json.dumps(payload, indent=2) + "\n"
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(text)
+    shown = path
+    if shown.startswith(root + os.sep):
+        shown = os.path.relpath(shown, root)
+    print(shown)
+    return payload
+
+
 def build_wheel(root, outdir, offline):
     os.makedirs(outdir, exist_ok=True)
     before = set(os.listdir(outdir))
@@ -291,6 +362,8 @@ def main(argv):
     wheel_code = build_wheel(root, outdir, offline)
     if wheel_code != 0:
         return wheel_code
+    if write_build_info(root, outdir) is None:
+        return 1
     return install_pyodide(root, outdir, offline)
 
 

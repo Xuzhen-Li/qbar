@@ -31,7 +31,7 @@ The installed command is `qbar`. `python3 qbar.py` still runs the program from a
 
 - [Command line](cli.md) is generated from the argument parser.
 - [Choosing an alignment method](choosing-alignment-method.md) describes the alignment methods.
-- [Web page](web.md) describes the static page.
+- [Web page](web.md) describes the static page and versioned GitHub Pages hosting.
 - [Tutorial](tutorial.md) walks through the bundled demo, one step at a time.
 
 ## Fact packs

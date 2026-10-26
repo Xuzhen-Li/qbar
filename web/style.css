@@ -75,6 +75,12 @@ img {
   border: 1px solid #e4e7eb;
 }
 
+footer {
+  margin-top: 36px;
+  color: #52606d;
+  font-size: 14px;
+}
+
 pre, #error, #notes {
   white-space: pre-wrap;
   word-break: break-word;
