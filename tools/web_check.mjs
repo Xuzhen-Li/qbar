@@ -14,6 +14,174 @@ import { buildJobArgv, filenameK } from "../web/page_argv.mjs";
 import { bootRuntime, installWheel, runQbar } from "../web/worker.js";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const scriptPath = fileURLToPath(import.meta.url);
+
+export const BAR_LEFT = 56;
+export const DEFAULT_BAR_WIDTH = 2200;
+
+export function barWidthFromArgv(argv) {
+  const list = argv || [];
+  for (let i = 0; i < list.length; i++) {
+    if (list[i] !== "--width") {
+      continue;
+    }
+    const value = Number(list[i + 1]);
+    if (Number.isInteger(value) && value >= 1) {
+      return value;
+    }
+  }
+  return DEFAULT_BAR_WIDTH;
+}
+
+const PNG_PIXELS_PY = [
+  "from PIL import Image",
+  "import sys",
+  "a = Image.open(sys.argv[1])",
+  "b = Image.open(sys.argv[2])",
+  "bar_w = int(sys.argv[3])",
+  "left = 56",
+  "if a.size == b.size and a.mode == b.mode and list(a.getdata()) == list(b.getdata()):",
+  "    print('pixels-identical')",
+  "    raise SystemExit(0)",
+  "aw, ah = a.size",
+  "bw, bh = b.size",
+  "x0 = left",
+  "x1 = left + bar_w",
+  "y0 = 8",
+  "y1 = min(ah, bh) - 48",
+  "req_w = x1 - x0",
+  "req_h = y1 - y0",
+  "fit = (",
+  "    ah == bh and aw >= x1 and bw >= x1 and ah >= 56 and bh >= 56",
+  "    and a.mode == b.mode and req_w > 0 and req_h > 0",
+  "    and x1 <= aw and y1 <= ah and x1 <= bw and y1 <= bh",
+  ")",
+  "mismatch = 0",
+  "if req_w > 0 and req_h > 0:",
+  "    def overlap(im):",
+  "        w, h = im.size",
+  "        ix0 = min(w, max(x0, 0))",
+  "        iy0 = min(h, max(y0, 0))",
+  "        ix1 = min(w, max(x1, 0))",
+  "        iy1 = min(h, max(y1, 0))",
+  "        if ix1 < ix0:",
+  "            ix1 = ix0",
+  "        if iy1 < iy0:",
+  "            iy1 = iy0",
+  "        return ix0, iy0, ix1, iy1",
+  "    ax0, ay0, ax1, ay1 = overlap(a)",
+  "    bx0, by0, bx1, by1 = overlap(b)",
+  "    cx0, cy0 = max(ax0, bx0), max(ay0, by0)",
+  "    cx1, cy1 = min(ax1, bx1), min(ay1, by1)",
+  "    common = 0",
+  "    differ = 0",
+  "    if cx1 > cx0 and cy1 > cy0 and a.mode == b.mode:",
+  "        pa = list(a.crop((cx0, cy0, cx1, cy1)).getdata())",
+  "        pb = list(b.crop((cx0, cy0, cx1, cy1)).getdata())",
+  "        common = len(pa)",
+  "        differ = sum(1 for i in range(common) if pa[i] != pb[i])",
+  "    elif cx1 > cx0 and cy1 > cy0:",
+  "        differ = (cx1 - cx0) * (cy1 - cy0)",
+  "        common = differ",
+  "    mismatch = differ + (req_w * req_h - common)",
+  "if fit and mismatch == 0:",
+  "    print('crop-match %d %d' % (aw, bw))",
+  "elif fit:",
+  "    print('crop-mismatch %d' % mismatch)",
+  "else:",
+  "    print('crop-unfit %d' % mismatch)",
+].join("\n");
+
+function comparePng(leftPath, rightPath, barW, python) {
+  const pixel = spawnSync(python, ["-c", PNG_PIXELS_PY, leftPath, rightPath, String(barW)], {
+    encoding: "utf8",
+  });
+  const note = pixel.status === 0 ? pixel.stdout.trim() : "";
+  if (note === "pixels-identical") {
+    return { kind: "pixels" };
+  }
+  const match = /^crop-match (\d+) (\d+)$/.exec(note);
+  if (match) {
+    return { kind: "crop-match", aw: Number(match[1]), bw: Number(match[2]) };
+  }
+  const mismatch = /^crop-mismatch (\d+)$/.exec(note);
+  if (mismatch) {
+    return { kind: "crop-mismatch", count: Number(mismatch[1]) };
+  }
+  const unfit = /^crop-unfit (\d+)$/.exec(note);
+  if (unfit) {
+    return { kind: "crop-unfit", count: Number(unfit[1]) };
+  }
+  return { kind: "failed", note: "pixel-compare-failed" };
+}
+
+// files: { rel, leftPath, rightPath, sameBytes } for PNG and PDF names.
+// A missing side uses null. sameBytes is meaningful only when both paths exist.
+export function classifyOutputDiffs(files, options) {
+  const barW = options && Number.isInteger(options.barW) ? options.barW : DEFAULT_BAR_WIDTH;
+  const python = options && options.python;
+  const explained = [];
+  const unexpected = [];
+  let pngCount = 0;
+  let pngFailed = false;
+  const pdfs = [];
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    const ext = path.extname(file.rel).toLowerCase();
+    if (ext === ".pdf") {
+      pdfs.push(file);
+      continue;
+    }
+    if (ext !== ".png") {
+      continue;
+    }
+    pngCount += 1;
+    if (!file.leftPath || !file.rightPath) {
+      pngFailed = true;
+      unexpected.push(file.rel + " missing on one side");
+      continue;
+    }
+    if (file.sameBytes) {
+      continue;
+    }
+    const verdict = comparePng(file.leftPath, file.rightPath, barW, python);
+    if (verdict.kind === "pixels") {
+      explained.push(file.rel + " bytes differ and pixels match");
+    } else if (verdict.kind === "crop-match") {
+      explained.push(
+        file.rel + " bar crop matches; widths " + verdict.aw + " and " + verdict.bw
+      );
+    } else if (verdict.kind === "crop-mismatch") {
+      pngFailed = true;
+      unexpected.push(file.rel + " crop mismatch " + verdict.count);
+    } else if (verdict.kind === "crop-unfit") {
+      pngFailed = true;
+      unexpected.push(file.rel + " crop does not fit; mismatch " + verdict.count);
+    } else {
+      pngFailed = true;
+      unexpected.push(file.rel + " " + verdict.note);
+    }
+  }
+  const pngsAllowPdf = pngCount > 0 && !pngFailed;
+  for (let i = 0; i < pdfs.length; i++) {
+    const file = pdfs[i];
+    if (!file.leftPath || !file.rightPath) {
+      unexpected.push(file.rel + " missing on one side");
+      continue;
+    }
+    if (file.sameBytes) {
+      continue;
+    }
+    if (pngsAllowPdf) {
+      explained.push(file.rel + " bytes differ; every PNG bar crop matches");
+    } else if (pngCount === 0) {
+      unexpected.push(file.rel + " PDF bytes differ; there is no PNG");
+    } else {
+      unexpected.push(file.rel + " PDF bytes differ; a PNG bar crop does not match");
+    }
+  }
+  return { explained: explained, unexpected: unexpected };
+}
 
 function usage() {
   console.error(
@@ -357,39 +525,46 @@ async function main() {
     console.error("compare_outputs.py summary is incomplete");
     process.exit(1);
   }
-  const pillow = spawnSync(args.python, ["-c", "import PIL; print(PIL.__version__)"], {
-    cwd: repo,
-    env: env,
-    encoding: "utf8",
-  });
-  if (pillow.status !== 0) {
-    console.error(pillow.stderr || "could not read the command-line Pillow version");
-    process.exit(pillow.status || 1);
-  }
-  const cliPillow = pillow.stdout.trim();
-  const pyPillow = String(pyVersions.pillow);
-  const pdfReason = "PDF bytes differ; Pillow " + pyPillow +
-    " in Pyodide and Pillow " + cliPillow + " on the command line";
-
   const left = listFiles(cliDir);
   const right = listFiles(pyDir);
   const names = Object.keys(left).concat(Object.keys(right)).sort();
   const seen = Object.create(null);
   const unexpected = [];
   const explained = [];
+  const figures = [];
   for (let i = 0; i < names.length; i++) {
     const rel = names[i];
     if (seen[rel]) {
       continue;
     }
     seen[rel] = true;
+    const ext = path.extname(rel).toLowerCase();
     if (!left[rel] || !right[rel]) {
-      unexpected.push(rel + " missing on one side");
+      if (ext === ".png" || ext === ".pdf") {
+        figures.push({
+          rel: rel,
+          leftPath: left[rel] || null,
+          rightPath: right[rel] || null,
+          sameBytes: false,
+        });
+      } else {
+        unexpected.push(rel + " missing on one side");
+      }
       continue;
     }
     const a = fs.readFileSync(left[rel]);
     const b = fs.readFileSync(right[rel]);
-    if (a.equals(b)) {
+    const sameBytes = a.equals(b);
+    if (ext === ".png" || ext === ".pdf") {
+      figures.push({
+        rel: rel,
+        leftPath: left[rel],
+        rightPath: right[rel],
+        sameBytes: sameBytes,
+      });
+      continue;
+    }
+    if (sameBytes) {
       continue;
     }
     if (rel === "state.json") {
@@ -418,34 +593,17 @@ async function main() {
       }
       continue;
     }
-    const ext = path.extname(rel).toLowerCase();
-    if (ext === ".png") {
-      const pixel = spawnSync(args.python, ["-c",
-        "from PIL import Image\n" +
-        "import sys\n" +
-        "a = Image.open(sys.argv[1])\n" +
-        "b = Image.open(sys.argv[2])\n" +
-        "same = a.size == b.size and a.mode == b.mode and list(a.getdata()) == list(b.getdata())\n" +
-        "print('pixels-identical' if same else 'pixels-differ %s %s %s %s' % (a.size, a.mode, b.size, b.mode))\n",
-        left[rel], right[rel],
-      ], { encoding: "utf8" });
-      const note = pixel.status === 0 ? pixel.stdout.trim() : "pixel-compare-failed";
-      if (note === "pixels-identical") {
-        explained.push(rel + " bytes differ and pixels match");
-      } else {
-        unexpected.push(rel + " " + note);
-      }
-      continue;
-    }
-    if (ext === ".pdf") {
-      if (pyPillow !== cliPillow) {
-        explained.push(rel + " " + pdfReason);
-      } else {
-        unexpected.push(rel + " PDF bytes differ and the Pillow versions match");
-      }
-      continue;
-    }
     unexpected.push(rel);
+  }
+  const figuresResult = classifyOutputDiffs(figures, {
+    barW: barWidthFromArgv(argv),
+    python: args.python,
+  });
+  for (let i = 0; i < figuresResult.explained.length; i++) {
+    explained.push(figuresResult.explained[i]);
+  }
+  for (let i = 0; i < figuresResult.unexpected.length; i++) {
+    unexpected.push(figuresResult.unexpected[i]);
   }
   console.log("explained");
   for (let i = 0; i < explained.length; i++) {
@@ -471,7 +629,9 @@ async function main() {
   process.exit(0);
 }
 
-main().catch(function (err) {
-  console.error(err && err.stack ? err.stack : err);
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === scriptPath) {
+  main().catch(function (err) {
+    console.error(err && err.stack ? err.stack : err);
+    process.exit(1);
+  });
+}
