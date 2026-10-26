@@ -40,7 +40,7 @@ python -c "import qbar; print(qbar.__version__)"
 ```
 
 ```text
-0.2.0.dev0
+0.3.0
 ```
 
 ## (b) The default run
@@ -549,7 +549,7 @@ The editor page has `<title>qbar editor</title>`. What the page can change is in
 ```text
   "schema": "qbar-state",
   "schema_version": 1,
-  "qbar_version": "0.2.0.dev0",
+  "qbar_version": "0.3.0",
 ```
 
 The `plot` object records the options this command did not pass, including palette `science`, width `2200`, bar height `0`, qmax `0.75`, and an empty title:

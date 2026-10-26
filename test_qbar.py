@@ -1081,7 +1081,7 @@ def _cli_flag(parser, name):
 
 class DocstringTests(unittest.TestCase):
     def test_package_version(self):
-        self.assertEqual(qbar.__version__, "0.2.0.dev0")
+        self.assertEqual(qbar.__version__, "0.3.0")
 
     def test_imported_qbar_file(self):
         path = os.path.abspath(qbar.__file__)

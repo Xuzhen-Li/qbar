@@ -1,4 +1,4 @@
-__version__ = "0.2.0.dev0"
+__version__ = "0.3.0"
 
 # Re-export the implementation so `import qbar` exposes the same names as
 # before, except the drawing helpers, which load on first use.
