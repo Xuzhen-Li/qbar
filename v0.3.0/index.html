@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>qbar</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>qbar</h1>
+    <p id="status" role="status" data-state="loading">loading</p>
+    <p id="detail">Three steps. The program runs in this browser.</p>
+  </header>
+  <p id="privacy">Your files stay in this browser. They are not uploaded. The page loads one pinned Pyodide build and the local qbar wheel while the status says loading. After the status says ready, the page does not make another network request. The run and the downloads stay in this browser.</p>
+
+  <section>
+    <h2>1. Load files</h2>
+    <div id="q-drop">
+      <label for="q-files">Q files</label>
+      <input id="q-files" type="file" multiple>
+      <p>You can also drop Q files on this box.</p>
+      <button id="q-clear" type="button">Clear Q files</button>
+    </div>
+    <fieldset>
+      <legend>Sample file</legend>
+      <label><input type="radio" name="sample-kind" value="fam" checked> fam (column 2)</label>
+      <label><input type="radio" name="sample-kind" value="ids"> ids (one id per line)</label>
+      <label for="sample-file">File</label>
+      <input id="sample-file" type="file">
+    </fieldset>
+    <label for="groups-file">Groups file, optional</label>
+    <input id="groups-file" type="file">
+    <label for="id-col">ID column</label>
+    <input id="id-col" type="text" value="analysis_IID">
+    <label for="group-col">Group column</label>
+    <input id="group-col" type="text" value="Dong_Grp">
+    <p>Blank column names use those defaults. They are the command-line defaults.</p>
+    <p id="limit">The limit is 200 MB, which is 209715200 bytes, for all selected files together. A larger total is refused and names that size.</p>
+    <ul id="file-list"></ul>
+  </section>
+
+  <section>
+    <h2>2. Choose</h2>
+    <label for="k-min">K from</label>
+    <input id="k-min" type="number" min="1" step="1" disabled>
+    <label for="k-max">K to</label>
+    <input id="k-max" type="number" min="1" step="1" disabled>
+    <p id="k-note">K is taken from the file names after you choose Q files. K from and K to must both be integers. A blank value, or a value that is not an integer, is an error and the run does not start.</p>
+    <label for="method">Align method</label>
+    <select id="method" disabled>
+      <option value="greedy" selected>greedy</option>
+    </select>
+    <p>The default is greedy. After the status says ready, the list is the methods in this qbar package.</p>
+  </section>
+
+  <section>
+    <h2>3. Run and view</h2>
+    <label for="vector">Vector files</label>
+    <select id="vector">
+      <option value="off" selected>off</option>
+      <option value="pdf">pdf</option>
+      <option value="svg">svg</option>
+      <option value="both">both</option>
+    </select>
+    <p>off is the default. pdf, svg, and both match --vector. PNG is written when a run finishes. PDF and SVG need a font file this browser run does not have, so those choices show the program's own message. PNG uses the built-in font.</p>
+    <p><button id="run" type="button" disabled>Run</button></p>
+    <p id="error"></p>
+    <p id="notes"></p>
+    <div id="figures"></div>
+    <h3>Downloads</h3>
+    <p>Each file is downloaded on its own. A zip is not offered.</p>
+    <ul id="downloads"></ul>
+    <h3>Equivalent command</h3>
+    <pre id="command"></pre>
+  </section>
+
+  <footer>
+    <p id="build-info"></p>
+  </footer>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
