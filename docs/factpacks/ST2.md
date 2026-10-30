@@ -26,9 +26,9 @@ python3 qbar.py --q sim.2.Q sim.3.Q sim.4.Q sim.5.Q sim.6.Q --ids ids.txt --outd
 
 ## Null rows
 
-Permute the row order of the whole K+1 matrix with `numpy.random.default_rng(seed).permutation`. Each row stays a composition. Rerun the matcher for that one K step, not the whole chain. The previous matrix is the one already aligned on the full data, so the anchor is already applied. The mask and align mode are the same rules as that step of `align_qs`. T is 1 if aligned column c receives the same raw index as the observed match, and 0 otherwise. The observed T is 1.
+Permute the row order of the whole K+1 matrix with `numpy.random.default_rng(seed).permutation`. Each row stays a composition. Rerun the matcher for that one K step, not the whole chain. The previous matrix is the one already aligned on the full data, so the anchor is already applied. The mask and align mode are the same rules as that step of `align_qs`. T is the unrounded score the matcher returns for that aligned old column: Pearson of the paired columns for greedy and hungarian, `pong_sim` of the two columns for pong, `pong_sim` of the old column and the sum of the two child columns for a pong split parent, Jaccard of the member sets, and column G' of the assigned pair for clumpp-full, clumpp-greedy, clumpp-largek, and clumppling-ilp.
 
-This tests the match index under exchangeability of individuals between the two matrices. It does not test label switching across independent ADMIXTURE runs. A small p means the observed index is unusual under that shuffle. It does not mean the index is the true ancestry label.
+This tests the match index under exchangeability of individuals between the two matrices. It does not test label switching across independent ADMIXTURE runs. A small p means that score is in the upper tail of the shuffled scores. It does not mean the index is the true ancestry label.
 
 An empty mask after a shuffle sets T* to 0 and does not stop the run. Any other error stops the run. Each K step draws its own sequence from `--perm-seed`. Every aligned column at that step is scored from the same sequence.
 
@@ -40,7 +40,7 @@ The similarity is Pearson for greedy, hungarian, clumpp-full, clumpp-greedy, clu
 
 This breaks the constraint that a row sums to 1, because one column moves and the others do not. It tests whether that column's values, as a vector, line up with the old column above a random reassignment of those values. It does not re-solve the full assignment. It does not test a demographic model. It does not test that a different column would have scored higher.
 
-The leftover column has no matched old column, so `p` and `n_extreme` are `NA` under this null. The null name is still `column`. Under null `rows` the leftover column has a numeric p.
+The leftover column has no matched old column, so `p` and `n_extreme` are `NA` under this null. The null name is still `column`. Under null `rows` the leftover p is `NA`.
 
 ## Zero column
 

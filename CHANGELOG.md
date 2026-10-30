@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Changed
+
+- `--perm-null rows` now uses the align method's unrounded match score. The leftover p is NA. `--perm-null column` and the default `--perm 0` are unchanged.
+
 ## 0.3.0 - 2026-10-26
 
 ### Added

@@ -12,13 +12,17 @@ of the whole K+1 matrix with ``numpy.random.default_rng(seed)``. Each
 row stays a composition. Rerun the matcher for this one K step, not the
 whole chain, with the same mask and align-mode rules. ``q_prev`` is the
 already aligned previous matrix, so the anchor is already applied and
-this function does not call ``anchor_perm``. T is 1 when aligned column
-c receives the same raw index as the observed match, and 0 otherwise.
-The observed T is 1. This tests the match index under exchangeability of
-individuals between the two matrices. It does not test label switching
-across independent ADMIXTURE runs. A small p means the observed index is
-unusual under that shuffle. It does not mean the index is the true
-ancestry label.
+this function does not call ``anchor_perm``. T is the unrounded score
+``match_next`` returns for that aligned old column. Greedy and
+hungarian use Pearson of the paired columns, and a constant column has
+Pearson 0. Pong uses ``pong_sim`` of the two columns, and a split
+parent uses ``pong_sim`` of the old column and the sum of the two child
+columns. Jaccard uses the member sets, and an empty union is 0.
+clumpp-full, clumpp-greedy, clumpp-largek, and clumppling-ilp use
+column G' of the assigned pair. The raw index is not T. The leftover
+slot has no score, so its ``p`` and ``n_extreme`` are ``NA``. A small
+p means that score is in the upper tail of the shuffled scores. It
+does not mean the index is the true ancestry label.
 
 ``column``. Permute the entries of the matched new column across
 individuals. Other columns stay put. Do not re-solve the assignment.
@@ -33,7 +37,8 @@ that a different column would have scored higher.
 
 ``column`` is the 0-based aligned index. A leftover column has no
 matched old column, so under null ``column`` its ``p`` and
-``n_extreme`` are ``NA``.
+``n_extreme`` are ``NA``. Under null ``rows`` the leftover slot also
+has no score, so its ``p`` and ``n_extreme`` are ``NA``.
 
 An all-zero matched new column, or an all-zero paired old column, sets
 ``zero_column`` and the p value is still computed when T is defined.
@@ -102,10 +107,23 @@ def _alignment_mask(q_prev, q_new, groups, align_mode, align_groups, qmax, row_m
 
 
 def _matched_perm(q_prev, q_new, mask, method, jaccard_set, jaccard_cut, language):
+    perm, _scores = _matched_assignment(
+        q_prev, q_new, mask, method, jaccard_set, jaccard_cut, language,
+    )
+    return perm
+
+
+def _matched_assignment(q_prev, q_new, mask, method, jaccard_set, jaccard_cut, language):
+    """Raw-column order and the unrounded scores ``match_next`` returns.
+
+    The last score is ``None``. That slot is the leftover column.
+    """
     result = match_next(
         q_prev, q_new, mask, method, jaccard_set, jaccard_cut, language=language,
     )
-    return [int(item) for item in result[0]]
+    perm = [int(item) for item in result[0]]
+    scores = [None if item is None else float(item) for item in result[1]]
+    return perm, scores
 
 
 def _pair_similarity(q_prev, q_new, old_c, new_j, mask, method, jaccard_set, jaccard_cut):
@@ -242,14 +260,23 @@ def _pack(n_perm, n_extreme, null, zero_column):
 def _rows_counts(ctx):
     """One generator, ``n_perm`` row shuffles, counts for every aligned column.
 
-    ``rng.permutation(n)`` is the only draw in each replicate. An empty
-    mask sets T* to 0 and does not stop the run.
+    T is the unrounded score ``match_next`` stores for that old column on
+    this replicate's assignment. The leftover score is missing, so that
+    count stays ``NA``. ``rng.permutation(n)`` is the only draw in each
+    replicate. An empty mask sets T* to 0 and does not call the matcher.
+    Any other matcher error stops the run.
     """
-    _mask, observed, zeros = _observed(ctx)
-    counts = [0] * len(observed)
-    rng = np.random.default_rng(ctx["seed"])
-    n = int(ctx["q_new"].shape[0])
     q_new = ctx["q_new"]
+    mask = _mask_of(ctx, q_new)
+    _observed_perm, scores = _matched_assignment(
+        ctx["q_prev"], q_new, mask, ctx["method"],
+        ctx["jaccard_set"], ctx["jaccard_cut"], ctx["language"],
+    )
+    zeros = _zero_flags(ctx["q_prev"], q_new, _observed_perm)
+    # None is the leftover slot. T is undefined there, so the formula is not applied.
+    counts = ["NA" if score is None else 0 for score in scores]
+    rng = np.random.default_rng(ctx["seed"])
+    n = int(q_new.shape[0])
     language = ctx["language"]
     for _replicate in range(ctx["n_perm"]):
         # Shuffle rows of the K+1 matrix. q_prev stays in its aligned order.
@@ -257,15 +284,25 @@ def _rows_counts(ctx):
         q_star = q_new[order]
         try:
             mask_star = _mask_of(ctx, q_star)
-            got = _perm_of(ctx, q_star, mask_star)
         except SystemExit as exc:
             if not _is_empty_mask(_exit_text(exc), language):
                 raise
+            # Do not call the matcher. T* is 0, including when T is negative.
+            for index, score in enumerate(scores):
+                if score is None:
+                    continue
+                if 0.0 >= score:
+                    counts[index] += 1
             continue
-        for index, raw in enumerate(observed):
-            # Observed T is 1. T* is 1 only when the raw index returns.
-            t_star = 1 if int(got[index]) == int(raw) else 0
-            if t_star >= 1:
+        _perm_star, star_scores = _matched_assignment(
+            ctx["q_prev"], q_star, mask_star, ctx["method"],
+            ctx["jaccard_set"], ctx["jaccard_cut"], ctx["language"],
+        )
+        for index, score in enumerate(scores):
+            if score is None:
+                continue
+            # The raw index is not the statistic. Use this replicate's score.
+            if star_scores[index] >= score:
                 counts[index] += 1
     return counts, zeros
 

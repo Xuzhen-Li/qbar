@@ -432,12 +432,12 @@ qbar \
 
 ```text
 K_to	aligned_column	raw_column	n_boot	n_same	support	seed	method	n_empty_mask	n_perm	n_extreme	p	null	zero_column
-3	C1	3	NA	NA	NA	NA	greedy	NA	100	43	0.435644	rows	no
-3	C2	1	NA	NA	NA	NA	greedy	NA	100	30	0.306931	rows	no
-3	C3	2	NA	NA	NA	NA	greedy	NA	100	34	0.346535	rows	no
+3	C1	3	NA	NA	NA	NA	greedy	NA	100	0	0.009901	rows	no
+3	C2	1	NA	NA	NA	NA	greedy	NA	100	0	0.009901	rows	no
+3	C3	2	NA	NA	NA	NA	greedy	NA	100	NA	NA	rows	no
 ```
 
-Under the rows null, the statistic is 1 when a shuffled rerun gives an aligned column the same raw index, and 0 otherwise. A shuffle that breaks the link between the two runs can still choose that raw column. On these K=2 and K=3 files, 43, 30, and 34 of the 100 shuffles did so, and the p values are 0.435644, 0.306931, and 0.346535. With three columns that chance was large in this run, and those p values are not small. The same flags on `demo/2448/ref2448_pruned.11.Q` and `demo/2448/ref2448_pruned.12.Q` give twelve p values, in column order: 0.108911, 0.079208, 0.079208, 0.099010, 0.069307, 0.128713, 0.128713, 0.108911, 0.099010, 0.089109, 0.089109, and 0.108911. A large p under rows does not mean the match is wrong. The match strength is the Pearson values in `align.tsv` and the `support` column from `--bootstrap`. This rows run writes Pearson `0.995 0.748`. The K=11 to K=12 rows run writes Pearson `1.000 1.000 1.000 1.000 0.991 1.000 1.000 0.996 0.999 0.848 1.000`.
+Under the rows null, T is the unrounded Pearson the greedy matcher returns for that column. A small p means that score is in the upper tail of the shuffled scores. On these K=2 and K=3 files, n_extreme is 0, 0, and NA, and the p values are 0.009901, 0.009901, and NA. The same flags on `demo/2448/ref2448_pruned.11.Q` and `demo/2448/ref2448_pruned.12.Q` give twelve p values, in column order: 0.009901, 0.009901, 0.009901, 0.009901, 0.009901, 0.009901, 0.009901, 0.009901, 0.009901, 0.009901, 0.009901, and NA. A large p under rows does not mean the match is wrong. The match strength is the Pearson values in `align.tsv` and the `support` column from `--bootstrap`. This rows run writes Pearson `0.995 0.748`. The K=11 to K=12 rows run writes Pearson `1.000 1.000 1.000 1.000 0.991 1.000 1.000 0.996 0.999 0.848 1.000`.
 
 The command below is that K=11 to K=12 rows run. If you skip it, the K=3 table above is the only rows example on this page. The table has twelve data rows. The first two are copied here.
 
@@ -461,8 +461,8 @@ K_to	n_mask	pearson
 
 ```text
 K_to	aligned_column	raw_column	n_boot	n_same	support	seed	method	n_empty_mask	n_perm	n_extreme	p	null	zero_column
-12	C1	10	NA	NA	NA	NA	greedy	NA	100	10	0.108911	rows	no
-12	C2	9	NA	NA	NA	NA	greedy	NA	100	7	0.079208	rows	no
+12	C1	10	NA	NA	NA	NA	greedy	NA	100	0	0.009901	rows	no
+12	C2	9	NA	NA	NA	NA	greedy	NA	100	0	0.009901	rows	no
 ```
 
 `--perm-null column` permutes one new column's entries across individuals and recomputes that column's similarity to its matched old column, which breaks the constraint that a row sums to 1. If you skip it, the page only shows the rows null.
