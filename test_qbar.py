@@ -4463,22 +4463,30 @@ def _oracle_rows_p(q_prev, q_new, column, n_perm, seed):
     """Rows-null p from an independent greedy loop. Does not call permutation_p.
 
     Each draw is ``default_rng(seed).permutation(n)`` on the K+1 matrix.
-    T is 1. T* is 1 when aligned column ``column`` keeps the observed raw index.
+    T is the unrounded Pearson of the greedy assignment at ``column``.
+    The leftover column has no score. ``n_perm`` of 0 does not draw.
+    Both return ``NA`` and do not apply the p formula.
     """
+    q_prev = np.asarray(q_prev, dtype=float)
+    q_new = np.asarray(q_new, dtype=float)
     mask = np.ones(int(q_prev.shape[0]), dtype=bool)
     observed = _brute_greedy_perm(q_prev, q_new, mask)
     raw = int(observed[column])
+    if int(column) >= int(q_prev.shape[1]) or int(n_perm) <= 0:
+        return raw, "NA", "NA"
+    t_obs = _independent_pearson(q_prev[mask, column], q_new[mask, raw])
     rng = np.random.default_rng(seed)
     n_extreme = 0
     n = int(q_new.shape[0])
-    q_new = np.asarray(q_new, dtype=float)
-    for _draw in range(n_perm):
+    for _draw in range(int(n_perm)):
         order = rng.permutation(n)
-        got = _brute_greedy_perm(q_prev, q_new[order], mask)
-        t_star = 1 if int(got[column]) == raw else 0
-        if t_star >= 1:
+        q_star = q_new[order]
+        got = _brute_greedy_perm(q_prev, q_star, mask)
+        paired = int(got[column])
+        t_star = _independent_pearson(q_prev[mask, column], q_star[mask, paired])
+        if t_star >= t_obs:
             n_extreme += 1
-    return raw, n_extreme, (1 + n_extreme) / float(n_perm + 1)
+    return raw, n_extreme, (1 + n_extreme) / float(int(n_perm) + 1)
 
 
 def _oracle_column_p(q_prev, q_new, column, n_perm, seed):
@@ -4572,11 +4580,12 @@ class PermutationPTests(unittest.TestCase):
                 self.assertEqual(got["null"], null)
                 self.assertEqual(got["n_perm"], n_perm)
                 self.assertFalse(got["zero_column"])
-                if null == "column" and column >= q_prev.shape[1]:
+                if column >= q_prev.shape[1]:
                     self.assertEqual(p_value, "NA")
                     self.assertEqual(got["p"], "NA")
                     self.assertEqual(got["n_extreme"], "NA")
                     continue
+                self.assertNotEqual(p_value, "NA")
                 self.assertEqual(got["n_extreme"], n_extreme)
                 self.assertEqual(got["p"], p_value)
                 self.assertEqual(got["p"], (1 + n_extreme) / float(n_perm + 1))
@@ -4611,10 +4620,23 @@ class PermutationPTests(unittest.TestCase):
         self.assertEqual(got["p"], "NA")
         self.assertEqual(got["null"], "NA")
         self.assertTrue(got["zero_column"])
+        _raw, extreme, p_value = _oracle_rows_p(q_prev, q_new, 0, 0, -1)
+        self.assertEqual(extreme, "NA")
+        self.assertEqual(p_value, "NA")
+        self.assertEqual(got["p"], p_value)
         named = permutation_p(q_prev, q_new, "greedy", 1, 0, -3, "rows")
         self.assertEqual(named["p"], "NA")
+        self.assertEqual(named["n_extreme"], "NA")
         self.assertEqual(named["null"], "rows")
         self.assertFalse(named["zero_column"])
+        leftover = q_new.shape[1] - 1
+        _raw, extreme, p_value = _oracle_rows_p(q_prev, q_new, leftover, 4, 0)
+        self.assertEqual(extreme, "NA")
+        self.assertEqual(p_value, "NA")
+        left = permutation_p(q_prev, q_new, "greedy", leftover, 4, 0, "rows")
+        self.assertEqual(left["p"], "NA")
+        self.assertEqual(left["n_extreme"], "NA")
+        self.assertEqual(left["null"], "rows")
 
     def test_seed_is_repeatable(self):
         from qbar.permtest import permutation_p
@@ -4746,8 +4768,12 @@ class PermutationPTests(unittest.TestCase):
                 self.assertEqual(row[7], "greedy")
                 self.assertEqual(row[8], "NA")
                 self.assertEqual(row[9], str(n_perm))
-                self.assertEqual(row[10], str(n_extreme))
-                self.assertEqual(row[11], "%.6f" % p_value)
+                if p_value == "NA":
+                    self.assertEqual(row[10], "NA")
+                    self.assertEqual(row[11], "NA")
+                else:
+                    self.assertEqual(row[10], str(n_extreme))
+                    self.assertEqual(row[11], "%.6f" % p_value)
                 self.assertEqual(row[12], "rows")
                 self.assertEqual(row[13], "no")
             again = os.path.join(tmp, "again")
@@ -4885,13 +4911,268 @@ class PermutationPTests(unittest.TestCase):
                     _raw, n_extreme, p_value = _oracle_rows_p(
                         aligned[k_to - 1], qs[k_to], column, n_perm, seed,
                     )
-                    expected.append((str(k_to), str(n_extreme), "%.6f" % p_value))
+                    if p_value == "NA":
+                        expected.append((str(k_to), "NA", "NA"))
+                    else:
+                        expected.append((str(k_to), str(n_extreme), "%.6f" % p_value))
             self.assertEqual(len(body), len(expected))
             for row, (k_to, n_extreme, p_value) in zip(body, expected):
                 self.assertEqual(row[0], k_to)
                 self.assertEqual(row[10], n_extreme)
                 self.assertEqual(row[11], p_value)
                 self.assertEqual(row[12], "rows")
+
+    def test_rows_pong_split_parent_uses_merged_pong_sim(self):
+        from qbar.permtest import permutation_columns, permutation_p
+        q_prev, q_new, mask = AlignTests()._split_case()
+        # Seed 1 first separates merged and pairwise counts at this length.
+        n_perm = 89
+        seed = 1
+        parent = 1
+        other = 0
+
+        def pong(left, right):
+            left = np.asarray(left, dtype=float)
+            right = np.asarray(right, dtype=float)
+            keep = (left + right) > 0
+            n_keep = int(np.count_nonzero(keep))
+            if n_keep == 0:
+                return 0.0
+            diff = left[keep] - right[keep]
+            return float(1.0 - np.sqrt(np.dot(diff, diff) / (2.0 * n_keep)))
+
+        def scores_at(q_now):
+            perm, sims, split = qbar.match_next_pong(q_prev, q_now, mask)
+            kept, rest = int(split["pair"][0]), int(split["pair"][1])
+            parent_index = int(split["parent"])
+
+            def slot(column):
+                # The split parent on this replicate uses the merged column.
+                # A column that is not the parent uses the two-column score.
+                if int(column) == parent_index:
+                    return pong(
+                        q_prev[mask, column],
+                        q_now[mask, kept] + q_now[mask, rest],
+                    )
+                return pong(q_prev[mask, column], q_now[mask, int(perm[column])])
+
+            def kept_child(column):
+                if int(column) == parent_index:
+                    return pong(q_prev[mask, column], q_now[mask, kept])
+                return pong(q_prev[mask, column], q_now[mask, int(perm[column])])
+
+            return {
+                "parent_slot": slot(parent),
+                "parent_kept": kept_child(parent),
+                "other": slot(other),
+                "stored_parent": float(sims[parent]),
+                "stored_other": float(sims[other]),
+                "parent_index": parent_index,
+                "kept": kept,
+            }
+
+        observed = scores_at(q_new)
+        self.assertEqual(observed["parent_index"], parent)
+        self.assertEqual(observed["parent_slot"], observed["stored_parent"])
+        self.assertEqual(observed["other"], observed["stored_other"])
+        self.assertNotEqual(observed["parent_slot"], observed["parent_kept"])
+        rng = np.random.default_rng(seed)
+        n_merged = n_pairwise = n_other = 0
+        n_rows = int(q_new.shape[0])
+        for _draw in range(n_perm):
+            drawn = scores_at(q_new[rng.permutation(n_rows)])
+            self.assertEqual(drawn["parent_slot"], drawn["stored_parent"])
+            self.assertEqual(drawn["other"], drawn["stored_other"])
+            if drawn["parent_slot"] >= observed["parent_slot"]:
+                n_merged += 1
+            if drawn["parent_kept"] >= observed["parent_kept"]:
+                n_pairwise += 1
+            if drawn["other"] >= observed["other"]:
+                n_other += 1
+        self.assertNotEqual(n_merged, n_pairwise)
+        got = permutation_p(q_prev, q_new, "pong", parent, n_perm, seed, "rows")
+        self.assertEqual(got["null"], "rows")
+        self.assertEqual(got["n_extreme"], n_merged)
+        self.assertNotEqual(got["n_extreme"], n_pairwise)
+        self.assertEqual(got["p"], (1 + n_merged) / float(n_perm + 1))
+        columns = permutation_columns(q_prev, q_new, "pong", n_perm, seed, "rows")
+        self.assertEqual(columns[parent]["n_extreme"], n_merged)
+        self.assertEqual(columns[other]["n_extreme"], n_other)
+        self.assertEqual(columns[other]["p"], (1 + n_other) / float(n_perm + 1))
+        self.assertEqual(columns[-1]["p"], "NA")
+        self.assertEqual(columns[-1]["n_extreme"], "NA")
+        self.assertEqual(columns[-1]["null"], "rows")
+        # Column null keeps pairwise pong_sim of the kept child.
+        base = np.asarray(q_new[:, observed["kept"]], dtype=float).reshape(-1).copy()
+        t_pair = pong(q_prev[mask, parent], base)
+        self.assertEqual(t_pair, observed["parent_kept"])
+        col_rng = np.random.default_rng(seed)
+        n_column = n_merged_threshold = 0
+        for _draw in range(n_perm):
+            shuffled = base[col_rng.permutation(n_rows)]
+            value = pong(q_prev[mask, parent], shuffled)
+            if value >= t_pair:
+                n_column += 1
+            if value >= observed["parent_slot"]:
+                n_merged_threshold += 1
+        self.assertNotEqual(n_column, n_merged_threshold)
+        column_got = permutation_p(
+            q_prev, q_new, "pong", parent, n_perm, seed, "column",
+        )
+        self.assertEqual(column_got["null"], "column")
+        self.assertEqual(column_got["n_extreme"], n_column)
+        self.assertEqual(column_got["p"], (1 + n_column) / float(n_perm + 1))
+
+    def test_rows_clumpp_full_uses_column_gprime(self):
+        import itertools
+        from qbar.permtest import permutation_columns, permutation_p
+        # One draw from default_rng(7). The matrix-G' optimum is unique, and
+        # the column-G' tail count is not the Pearson tail count.
+        q_prev = np.array([
+            [0.625095466604667, 0.8972138009695755],
+            [0.7756856902451935, 0.22520718999059186],
+            [0.30016628491122543, 0.8735534453962619],
+            [0.005265304565574724, 0.8212284183827663],
+            [0.7970694287520462, 0.4679349528437208],
+        ], dtype=float)
+        q_new = np.array([
+            [0.3030324268193135, 0.2784256121007733, 0.2548695876541246],
+            [0.4450763058826466, 0.5045482589579533, 0.5534973520744925],
+            [0.9955002834343927, 0.7926619192137531, 0.6221792294411627],
+            [0.9889601476818849, 0.21530869823559895, 0.16021203385784455],
+            [0.6125396042730308, 0.04394200796138337, 0.03568027877359614],
+        ], dtype=float)
+        column = 0
+        n_perm = 30
+        seed = 1
+
+        def matrix_g(left, right):
+            diff = np.asarray(left, dtype=float) - np.asarray(right, dtype=float)
+            sum_sq = float(np.sum(diff * diff))
+            return float(1.0 - np.sqrt(sum_sq) / np.sqrt(2.0 * float(diff.shape[0])))
+
+        def column_g(left, right):
+            diff = np.asarray(left, dtype=float) - np.asarray(right, dtype=float)
+            sum_sq = float(np.dot(diff, diff))
+            return float(1.0 - np.sqrt(sum_sq) / np.sqrt(2.0 * float(diff.shape[0])))
+
+        def best_perm(matrix):
+            qhat = np.concatenate(
+                [q_prev, np.zeros((q_prev.shape[0], 1), dtype=float)], axis=1,
+            )
+            best_g = None
+            best = None
+            n_best = 0
+            for perm in itertools.permutations(range(matrix.shape[1])):
+                value = matrix_g(qhat, matrix[:, list(perm)])
+                if best_g is None or value > best_g:
+                    best_g = value
+                    best = perm
+                    n_best = 1
+                elif value == best_g:
+                    n_best += 1
+            return list(best), n_best
+
+        observed, n_best = best_perm(q_new)
+        self.assertEqual(n_best, 1)
+        self.assertEqual(observed, [1, 0, 2])
+        t_g = column_g(q_prev[:, column], q_new[:, observed[column]])
+        t_pearson = _independent_pearson(q_prev[:, column], q_new[:, observed[column]])
+        self.assertNotEqual(t_g, t_pearson)
+        rng = np.random.default_rng(seed)
+        n_g = n_pearson = 0
+        n_rows = int(q_new.shape[0])
+        for _draw in range(n_perm):
+            star = q_new[rng.permutation(n_rows)]
+            perm, _n_tied = best_perm(star)
+            if column_g(q_prev[:, column], star[:, perm[column]]) >= t_g:
+                n_g += 1
+            if _independent_pearson(q_prev[:, column], star[:, perm[column]]) >= t_pearson:
+                n_pearson += 1
+        self.assertNotEqual(n_g, n_pearson)
+        got = permutation_p(
+            q_prev, q_new, "clumpp-full", column, n_perm, seed, "rows",
+        )
+        self.assertEqual(got["null"], "rows")
+        self.assertEqual(got["n_extreme"], n_g)
+        self.assertNotEqual(got["n_extreme"], n_pearson)
+        self.assertEqual(got["p"], (1 + n_g) / float(n_perm + 1))
+        columns = permutation_columns(
+            q_prev, q_new, "clumpp-full", n_perm, seed, "rows",
+        )
+        self.assertEqual(columns[column]["n_extreme"], n_g)
+        self.assertEqual(columns[1]["null"], "rows")
+        self.assertNotEqual(columns[1]["p"], "NA")
+        self.assertEqual(columns[-1]["p"], "NA")
+        self.assertEqual(columns[-1]["n_extreme"], "NA")
+
+    def test_empty_replicate_counts_zero_and_other_errors_stop(self):
+        from unittest import mock
+        from qbar import permtest
+        from qbar.messages import text as msg
+        q_prev = np.array([[1.0], [0.0], [1.0], [0.0]], dtype=float)
+        q_new = np.array([
+            [0.0, 0.0],
+            [1.0, 1.0],
+            [0.0, 0.0],
+            [1.0, 1.0],
+        ], dtype=float)
+        observed = _independent_pearson(q_prev[:, 0], q_new[:, 0])
+        self.assertLess(observed, 0.0)
+        real_mask = permtest._mask_of
+        calls = {"mask": 0, "assign": 0}
+        real_assign = permtest._matched_assignment
+
+        def mask_once(ctx, matrix):
+            calls["mask"] += 1
+            if calls["mask"] == 1:
+                return real_mask(ctx, matrix)
+            raise SystemExit(msg("align_empty", "en"))
+
+        def count_assign(*args, **kwargs):
+            calls["assign"] += 1
+            return real_assign(*args, **kwargs)
+
+        with mock.patch.object(permtest, "_mask_of", side_effect=mask_once), \
+                mock.patch.object(permtest, "_matched_assignment", side_effect=count_assign):
+            got = permtest.permutation_p(q_prev, q_new, "greedy", 0, 1, 0, "rows")
+        self.assertEqual(calls["assign"], 1)
+        self.assertEqual(got["n_extreme"], 1)
+        self.assertEqual(got["p"], 1.0)
+        self.assertEqual(got["null"], "rows")
+        self.assertFalse(got["zero_column"])
+
+        def fail_on_replicate(*args, **kwargs):
+            calls["assign"] += 1
+            if calls["assign"] == 1:
+                return real_assign(*args, **kwargs)
+            raise SystemExit("matcher failed")
+
+        calls["assign"] = 0
+        with mock.patch.object(permtest, "_matched_assignment", side_effect=fail_on_replicate):
+            with self.assertRaises(SystemExit) as ctx:
+                permtest.permutation_p(q_prev, q_new, "greedy", 0, 1, 0, "rows")
+        self.assertEqual(str(ctx.exception), "matcher failed")
+
+        groups = ["A", "A", "A", "A"]
+        with self.assertRaises(SystemExit) as ctx_all:
+            permtest.permutation_p(
+                q_prev, q_new, "greedy", 0, 2, 0, "rows",
+                groups=groups, align_mode="all", align_groups=["Z"],
+            )
+        self.assertEqual(str(ctx_all.exception), msg("align_empty", "en"))
+        with self.assertRaises(SystemExit) as ctx_core:
+            permtest.permutation_p(
+                q_prev, q_new, "greedy", 0, 2, 0, "rows",
+                groups=groups, align_mode="core", align_groups=["Z"], qmax=0.75,
+            )
+        self.assertEqual(str(ctx_core.exception), msg("align_empty_check", "en"))
+        with self.assertRaises(SystemExit) as ctx_row:
+            permtest.permutation_p(
+                q_prev, q_new, "greedy", 0, 2, 0, "rows",
+                mask=np.zeros(q_prev.shape[0], dtype=bool),
+            )
+        self.assertEqual(str(ctx_row.exception), msg("align_empty", "en"))
 
 
 def _six_decimals(matrix):
